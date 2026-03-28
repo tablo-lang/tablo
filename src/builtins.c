@@ -20429,15 +20429,17 @@ void builtin_sqlite_exec(VM* vm) {
     }
     syncx_mutex_unlock(&db_handle->mutex);
 
-    if (sqlite_err) {
-        g_sqlx_api.free_mem(sqlite_err);
-    }
-
     Value ok;
     value_init_bool(&ok, rc == SQLX_OK);
     if (rc != SQLX_OK) {
         result_tuple_set(vm, slot, ok, rc == -1 ? ERR_INVALID_ARGUMENT : ERR_IO, err_msg ? err_msg : "SQLite exec failed");
+        if (sqlite_err) {
+            g_sqlx_api.free_mem(sqlite_err);
+        }
         return;
+    }
+    if (sqlite_err) {
+        g_sqlx_api.free_mem(sqlite_err);
     }
     result_tuple_set(vm, slot, ok, 0, NULL);
 }

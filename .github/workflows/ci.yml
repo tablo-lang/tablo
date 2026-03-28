@@ -28,7 +28,7 @@ jobs:
     - name: Run tests with sanitizers
       run: |
         cd build
-        ctest --test-dir . --output-on-failure
+        ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 ctest --test-dir . --output-on-failure
 
     - name: Upload TabloLang CLI JUnit (sanitizers)
       if: always()

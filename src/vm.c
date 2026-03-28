@@ -3884,37 +3884,25 @@ void vm_set_output_callback(VM* vm, VmOutputCallback callback, void* user_data) 
     vm->output_callback_user_data = user_data;
 }
 
+static void vm_stack_reserve(VM* vm, int additional);
+
 static void push(VM* vm, Value val) {
     if (vm->stack.count >= vm->config.max_stack_size) {
         vm_runtime_error(vm, "Stack overflow");
         return;
     }
-    vm->stack.count++;
-    if (vm->stack.count > vm->stack.capacity) {
-        vm->stack.capacity = vm->stack.count * 2;
-        vm->stack.values = (Value*)safe_realloc(vm->stack.values, vm->stack.capacity * sizeof(Value));
-    }
-    vm->stack.values[vm->stack.count - 1] = val;
+    vm_stack_reserve(vm, 1);
+    if (vm->error_occurred) return;
+    vm->stack.values[vm->stack.count++] = val;
 }
 
 static void push_nil_count(VM* vm, int count) {
     if (!vm || count <= 0) return;
 
-    if (vm->stack.count + count > vm->config.max_stack_size) {
-        vm_runtime_error(vm, "Stack overflow");
-        return;
-    }
-
     int base = vm->stack.count;
     int new_count = base + count;
-    if (new_count > vm->stack.capacity) {
-        int new_capacity = vm->stack.capacity > 0 ? vm->stack.capacity : 16;
-        while (new_capacity < new_count) {
-            new_capacity *= 2;
-        }
-        vm->stack.capacity = new_capacity;
-        vm->stack.values = (Value*)safe_realloc(vm->stack.values, vm->stack.capacity * sizeof(Value));
-    }
+    vm_stack_reserve(vm, count);
+    if (vm->error_occurred) return;
 
     Value nil;
     value_init_nil(&nil);
@@ -4004,8 +3992,58 @@ static void vm_stack_reserve(VM* vm, int additional) {
     while (new_capacity < needed) {
         new_capacity *= 2;
     }
+    Value* new_values = (Value*)safe_realloc(vm->stack.values, new_capacity * sizeof(Value));
+    vm->stack.values = new_values;
     vm->stack.capacity = new_capacity;
-    vm->stack.values = (Value*)safe_realloc(vm->stack.values, vm->stack.capacity * sizeof(Value));
+}
+
+static void vm_frame_reserve(VM* vm, int additional) {
+    if (!vm || additional <= 0) return;
+
+    int needed = vm->frame_count + additional;
+    if (needed <= vm->frame_capacity) return;
+
+    int new_capacity = vm->frame_capacity > 0 ? vm->frame_capacity : 16;
+    while (new_capacity < needed) {
+        new_capacity *= 2;
+    }
+
+    CallFrame* new_frames = (CallFrame*)safe_realloc(vm->frames, (size_t)new_capacity * sizeof(CallFrame));
+    vm->frames = new_frames;
+    vm->frame_capacity = new_capacity;
+}
+
+static void call_frame_defer_reserve(CallFrame* frame, int additional) {
+    if (!frame || additional <= 0) return;
+
+    int needed = frame->defer_count + additional;
+    if (needed <= frame->defer_capacity) return;
+
+    int new_capacity = frame->defer_capacity > 0 ? frame->defer_capacity : 4;
+    while (new_capacity < needed) {
+        new_capacity *= 2;
+    }
+
+    DeferredCall* new_defers = (DeferredCall*)safe_realloc(frame->defers, (size_t)new_capacity * sizeof(DeferredCall));
+    frame->defers = new_defers;
+    frame->defer_capacity = new_capacity;
+}
+
+static void vm_exception_handler_reserve(VM* vm, int additional) {
+    if (!vm || additional <= 0) return;
+
+    int needed = vm->exception_handler_count + additional;
+    if (needed <= vm->exception_handler_capacity) return;
+
+    int new_capacity = vm->exception_handler_capacity > 0 ? vm->exception_handler_capacity : 8;
+    while (new_capacity < needed) {
+        new_capacity *= 2;
+    }
+
+    ExceptionHandler* new_handlers = (ExceptionHandler*)safe_realloc(vm->exception_handlers,
+                                                                     (size_t)new_capacity * sizeof(ExceptionHandler));
+    vm->exception_handlers = new_handlers;
+    vm->exception_handler_capacity = new_capacity;
 }
 
 static AsyncTask* async_task_create(ObjFunction* function, int stack_count) {
@@ -4148,12 +4186,8 @@ static int vm_enter_sync_function_from_call(VM* vm,
         return -1;
     }
 
-    vm->frame_count++;
-    if (vm->frame_count > vm->frame_capacity) {
-        vm->frame_capacity = vm->frame_count * 2;
-        vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-    }
-    vm->frames[vm->frame_count - 1] = new_frame;
+    vm_frame_reserve(vm, 1);
+    vm->frames[vm->frame_count++] = new_frame;
     vm->current_call_depth = vm->frame_count;
 
     *io_frame = new_frame;
@@ -6067,12 +6101,8 @@ static int vm_resume_ready_task(VM* vm, CallFrame* current_frame, CallFrame* out
         task->entry_profiled = true;
     }
 
-    vm->frame_count++;
-    if (vm->frame_count > vm->frame_capacity) {
-        vm->frame_capacity = vm->frame_count * 2;
-        vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-    }
-    vm->frames[vm->frame_count - 1] = new_frame;
+    vm_frame_reserve(vm, 1);
+    vm->frames[vm->frame_count++] = new_frame;
     vm->current_call_depth = vm->frame_count;
 
     *out_frame = new_frame;
@@ -7146,13 +7176,8 @@ int vm_execute(VM* vm, ObjFunction* func) {
 
     jit_record_function_entry(vm, func);
 
-    vm->frame_count++;
-    if (vm->frame_count > vm->frame_capacity) {
-        vm->frame_capacity = vm->frame_count * 2;
-        vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-    }
-
-    vm->frames[vm->frame_count - 1] = frame;
+    vm_frame_reserve(vm, 1);
+    vm->frames[vm->frame_count++] = frame;
     return vm_run_loop(vm, false, 0, 0);
 }
 
@@ -10273,12 +10298,8 @@ vm_debug_continue_execution:
                 }
                 jit_record_function_entry(vm, called_func);
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -10511,12 +10532,8 @@ vm_debug_continue_execution:
                     return -1;
                 }
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -10649,12 +10666,8 @@ vm_debug_continue_execution:
                     return -1;
                 }
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -10782,12 +10795,8 @@ vm_debug_continue_execution:
                     return -1;
                 }
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -10909,12 +10918,8 @@ vm_debug_continue_execution:
                     return -1;
                 }
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -10942,12 +10947,8 @@ vm_debug_continue_execution:
                 }
                 dc.callee = pop(vm);
 
-                frame.defer_count++;
-                if (frame.defer_count > frame.defer_capacity) {
-                    frame.defer_capacity = frame.defer_count * 2;
-                    frame.defers = (DeferredCall*)safe_realloc(frame.defers, (size_t)frame.defer_capacity * sizeof(DeferredCall));
-                }
-                frame.defers[frame.defer_count - 1] = dc;
+                call_frame_defer_reserve(&frame, 1);
+                frame.defers[frame.defer_count++] = dc;
                 break;
             }
 
@@ -11083,12 +11084,8 @@ vm_debug_continue_execution:
                 }
                 jit_record_function_entry(vm, called_func);
 
-                vm->frame_count++;
-                if (vm->frame_count > vm->frame_capacity) {
-                    vm->frame_capacity = vm->frame_count * 2;
-                    vm->frames = (CallFrame*)safe_realloc(vm->frames, vm->frame_capacity * sizeof(CallFrame));
-                }
-                vm->frames[vm->frame_count - 1] = new_frame;
+                vm_frame_reserve(vm, 1);
+                vm->frames[vm->frame_count++] = new_frame;
                 vm->current_call_depth = vm->frame_count;
 
                 frame = new_frame;
@@ -13892,14 +13889,10 @@ vm_debug_continue_execution:
 }
 
 void vm_push_exception_handler(VM* vm, int handler_ip) {
+    vm_exception_handler_reserve(vm, 1);
+    vm->exception_handlers[vm->exception_handler_count].handler_ip = handler_ip;
+    vm->exception_handlers[vm->exception_handler_count].stack_depth = vm->stack.count;
     vm->exception_handler_count++;
-    if (vm->exception_handler_count > vm->exception_handler_capacity) {
-        vm->exception_handler_capacity = vm->exception_handler_count * 2;
-        vm->exception_handlers = (ExceptionHandler*)safe_realloc(vm->exception_handlers,
-            vm->exception_handler_capacity * sizeof(ExceptionHandler));
-    }
-    vm->exception_handlers[vm->exception_handler_count - 1].handler_ip = handler_ip;
-    vm->exception_handlers[vm->exception_handler_count - 1].stack_depth = vm->stack.count;
 }
 
 ExceptionHandler vm_pop_exception_handler(VM* vm) {

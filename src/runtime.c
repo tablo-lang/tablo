@@ -1065,6 +1065,13 @@ static void runtime_set_fallback_error(Runtime* rt, const char* message) {
     if (!rt) return;
     const char* text = (message && message[0] != '\0') ? message : "Out of memory";
     rt->fallback_error_set = true;
+    if (text >= rt->fallback_error_message &&
+        text < rt->fallback_error_message + sizeof(rt->fallback_error_message)) {
+        char preserved[sizeof(rt->fallback_error_message)];
+        snprintf(preserved, sizeof(preserved), "%s", text);
+        snprintf(rt->fallback_error_message, sizeof(rt->fallback_error_message), "%s", preserved);
+        return;
+    }
     snprintf(rt->fallback_error_message, sizeof(rt->fallback_error_message), "%s", text);
 }
 
