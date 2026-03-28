@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <threads.h>
+#include "tablo_threads.h"
 
 #ifndef TABLO_VERSION
 #define TABLO_VERSION "dev"

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
+#include "tablo_threads.h"
 
 #ifdef _WIN32
 #define NOMINMAX

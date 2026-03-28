@@ -121,6 +121,7 @@ target_link_libraries(cli_test_command_tests tablo_lib)
 
 add_library(tablo_test_extension SHARED tests/tablo_test_extension.c)
 target_include_directories(tablo_test_extension PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(tablo_test_extension PRIVATE Threads::Threads)
 set_target_properties(tablo_test_extension PROPERTIES PREFIX "")
 
 if(TABLO_ENABLE_GLFW_EXTENSION)
@@ -152,7 +153,7 @@ if(TABLO_ENABLE_GLFW_EXTENSION)
 
     add_library(tablo_glfw_extension SHARED tests/tablo_glfw_extension.c)
     target_include_directories(tablo_glfw_extension PRIVATE ${PROJECT_SOURCE_DIR}/src)
-    target_link_libraries(tablo_glfw_extension PRIVATE ${TABLO_GLFW_TARGET})
+    target_link_libraries(tablo_glfw_extension PRIVATE ${TABLO_GLFW_TARGET} Threads::Threads)
     set_target_properties(tablo_glfw_extension PROPERTIES PREFIX "")
 
     add_executable(glfw_extension_host_tests tests/glfw_extension_host_tests.c)
