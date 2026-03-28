@@ -8,6 +8,7 @@ typedef struct NativeExtensionRegistry NativeExtensionRegistry;
 typedef struct {
     bool warn_unused_error;
     bool strict_errors;
+    bool report_diagnostics;
     NativeExtensionRegistry* extension_registry;
 } TypeCheckOptions;
 

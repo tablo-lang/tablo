@@ -448,7 +448,7 @@ static Module* module_loader_load_module(ModuleLoader* loader, const char* file_
         loader->error = parse_result.error;
         // Ensure we don't double-free when freeing the parse result program.
         parse_result.error = NULL;
-        program_free(parse_result.program);
+        parser_free_parse_only_result(&parse_result);
         module_loader_pop_loading(loader);
         return NULL;
     }
@@ -459,7 +459,7 @@ static Module* module_loader_load_module(ModuleLoader* loader, const char* file_
         if (s && s->kind == STMT_IMPORT) {
             char* resolved = resolve_import_path(loader, file_path, s);
             if (!resolved) {
-                program_free(parse_result.program);
+                parser_free_parse_only_result(&parse_result);
                 module_loader_pop_loading(loader);
                 return NULL;
             }
@@ -467,7 +467,7 @@ static Module* module_loader_load_module(ModuleLoader* loader, const char* file_
             Module* imported = module_loader_load_module(loader, resolved);
             free(resolved);
             if (!imported) {
-                program_free(parse_result.program);
+                parser_free_parse_only_result(&parse_result);
                 module_loader_pop_loading(loader);
                 return NULL;
             }
@@ -502,6 +502,7 @@ static Module* module_loader_load_module(ModuleLoader* loader, const char* file_
 
 LoadResult module_loader_load_main(ModuleLoader* loader, const char* file_path) {
     TypeCheckOptions options = {0};
+    options.report_diagnostics = true;
     return module_loader_load_main_with_options(loader, file_path, options);
 }
 

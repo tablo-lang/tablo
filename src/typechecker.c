@@ -1649,6 +1649,7 @@ void typechecker_init(TypeChecker* tc) {
     tc->expected_expr_type = NULL;
     tc->options.warn_unused_error = false;
     tc->options.strict_errors = false;
+    tc->options.report_diagnostics = true;
     tc->options.extension_registry = NULL;
 
     typechecker_declare_builtin_error_type(tc);
@@ -1692,8 +1693,10 @@ static void typechecker_error(TypeChecker* tc, const char* message, const char* 
         char buffer[512];
         snprintf(buffer, sizeof(buffer), "%s:%d:%d: %s", file ? file : "<unknown>", line, column, message);
         tc->error = error_create(ERROR_TYPE, buffer, file, line, column);
-        fprintf(stderr, "Type error: %s\n", buffer);
-        typechecker_print_source_context(file, line, column);
+        if (tc->options.report_diagnostics) {
+            fprintf(stderr, "Type error: %s\n", buffer);
+            typechecker_print_source_context(file, line, column);
+        }
     }
 }
 
@@ -11983,6 +11986,7 @@ static void typecheck_statement(TypeChecker* tc, Stmt* stmt) {
 
 TypeCheckResult typecheck(Program* program) {
     TypeCheckOptions options = {0};
+    options.report_diagnostics = true;
     return typecheck_with_options(program, options);
 }
 

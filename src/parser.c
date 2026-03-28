@@ -4,6 +4,23 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct {
+    Type** items;
+    int count;
+    int capacity;
+} ParserTypeRootList;
+
+static void parser_type_root_list_add(ParserTypeRootList* list, Type* type);
+static void parser_collect_expr_type_roots(ParserTypeRootList* list, Expr* expr);
+static void parser_collect_stmt_type_roots(ParserTypeRootList* list, Stmt* stmt);
+static void parser_collect_program_type_roots(ParserTypeRootList* list, Program* program);
+static void parser_release_parse_only_expr_type_arrays(Expr* expr);
+static void parser_release_parse_only_stmt_type_arrays(Stmt* stmt);
+static void parser_release_parse_only_program_type_arrays(Program* program);
+static ParseResult parser_parse_internal(const char* source, const char* file, bool report_diagnostics);
+static void parser_discard_parse_only_expr(Expr* expr);
+static void parser_discard_parse_only_stmt(Stmt* stmt);
+
 static void parser_describe_token(const Token* token, char* out, size_t out_size) {
     if (!out || out_size == 0) return;
     out[0] = '\0';
@@ -101,14 +118,44 @@ static void parser_error_at(Parser* parser, const char* message, int line, int c
         parser->error_column = column;
     }
 
-    fprintf(stderr, "Syntax error at %s:%d:%d: %s\n", file, line, column, message ? message : "Syntax error");
-    parser_print_source_context(parser, line, column);
+    if (parser->report_diagnostics) {
+        fprintf(stderr, "Syntax error at %s:%d:%d: %s\n", file, line, column, message ? message : "Syntax error");
+        parser_print_source_context(parser, line, column);
+    }
 }
 
 static void parser_error(Parser* parser, const char* message) {
     if (!parser || parser->panic_mode) return;
     parser_record_first_error(parser, message);
     parser_error_at(parser, message, parser->current.line, parser->current.column);
+}
+
+static void parser_discard_parse_only_expr(Expr* expr) {
+    if (!expr) return;
+
+    ParserTypeRootList type_roots = {0};
+    parser_collect_expr_type_roots(&type_roots, expr);
+    parser_release_parse_only_expr_type_arrays(expr);
+    expr_free(expr);
+
+    for (int i = 0; i < type_roots.count; i++) {
+        type_free(type_roots.items[i]);
+    }
+    free(type_roots.items);
+}
+
+static void parser_discard_parse_only_stmt(Stmt* stmt) {
+    if (!stmt) return;
+
+    ParserTypeRootList type_roots = {0};
+    parser_collect_stmt_type_roots(&type_roots, stmt);
+    parser_release_parse_only_stmt_type_arrays(stmt);
+    stmt_free(stmt);
+
+    for (int i = 0; i < type_roots.count; i++) {
+        type_free(type_roots.items[i]);
+    }
+    free(type_roots.items);
 }
 
 static void parser_advance(Parser* parser) {
@@ -206,6 +253,33 @@ static bool parser_token_starts_non_expression_statement(TokenType type) {
         case TOKEN_KEYWORD_CONTINUE:
         case TOKEN_KEYWORD_RETURN:
         case TOKEN_KEYWORD_DEFER:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool parser_token_starts_expression(TokenType type) {
+    switch (type) {
+        case TOKEN_NUMBER_INT:
+        case TOKEN_NUMBER_BIGINT:
+        case TOKEN_NUMBER_DOUBLE:
+        case TOKEN_STRING:
+        case TOKEN_TRUE:
+        case TOKEN_FALSE:
+        case TOKEN_KEYWORD_NIL:
+        case TOKEN_KEYWORD_FUNC:
+        case TOKEN_KEYWORD_ASYNC:
+        case TOKEN_KEYWORD_IF:
+        case TOKEN_KEYWORD_MATCH:
+        case TOKEN_IDENTIFIER:
+        case TOKEN_LPAREN:
+        case TOKEN_LBRACKET:
+        case TOKEN_LBRACE:
+        case TOKEN_KEYWORD_AWAIT:
+        case TOKEN_MINUS:
+        case TOKEN_NOT:
+        case TOKEN_BIT_NOT:
             return true;
         default:
             return false;
@@ -322,11 +396,18 @@ static void parser_consume_identifier_like(Parser* parser, const char* message) 
     parser_error(parser, detailed);
 }
 
-static void parser_synchronize(Parser* parser) {
+static void parser_synchronize(Parser* parser, bool stop_at_rbrace) {
     parser->panic_mode = false;
     
     while (parser->current.type != TOKEN_EOF) {
-        if (parser->previous.type == TOKEN_SEMICOLON) return;
+        if (parser->previous.type == TOKEN_SEMICOLON) {
+            if ((stop_at_rbrace && parser->current.type == TOKEN_RBRACE) ||
+                parser_token_starts_declaration(parser->current.type) ||
+                parser_token_starts_non_expression_statement(parser->current.type) ||
+                parser_token_starts_expression(parser->current.type)) {
+                return;
+            }
+        }
         
         switch (parser->current.type) {
             case TOKEN_KEYWORD_FUNC:
@@ -346,7 +427,13 @@ static void parser_synchronize(Parser* parser) {
             case TOKEN_KEYWORD_RETURN:
             case TOKEN_KEYWORD_RECORD:
             case TOKEN_KEYWORD_ENUM:
+            case TOKEN_KEYWORD_IMPORT:
                 return;
+            case TOKEN_RBRACE:
+                if (stop_at_rbrace) {
+                    return;
+                }
+                break;
             default:
                 break;
         }
@@ -590,7 +677,10 @@ static Type* parse_type(Parser* parser) {
     // Check for tuple type: (type1, type2, ...)
     if (parser->current.type == TOKEN_LPAREN) {
         Token next = lexer_peek_token(&parser->lexer);
-        if (parser_token_starts_type(next.type)) {
+        bool is_tuple_type = parser_token_starts_type(next.type);
+        token_free(&next);
+
+        if (is_tuple_type) {
             parser_advance(parser); // consume '('
             Type** element_types = NULL;
             int element_count = 0;
@@ -835,6 +925,7 @@ static Expr* parse_embedded_interpolation_expr(Parser* parser, const char* sourc
     inner.previous.lexeme = NULL;
     inner.had_error = false;
     inner.panic_mode = false;
+    inner.report_diagnostics = parser->report_diagnostics;
     inner.first_error_message = NULL;
     inner.error_line = 0;
     inner.error_column = 0;
@@ -842,6 +933,8 @@ static Expr* parse_embedded_interpolation_expr(Parser* parser, const char* sourc
     inner.max_depth = PARSER_MAX_DEPTH;
     inner.active_type_params = NULL;
     inner.active_type_param_count = 0;
+    inner.synthetic_counter = 0;
+    inner.current_function_is_async = false;
 
     Expr* expr = parse_expression(&inner);
     if (!inner.had_error && inner.current.type != TOKEN_EOF) {
@@ -849,7 +942,7 @@ static Expr* parse_embedded_interpolation_expr(Parser* parser, const char* sourc
     }
 
     if (inner.had_error || !expr || inner.current.type != TOKEN_EOF) {
-        if (expr) expr_free(expr);
+        if (expr) parser_discard_parse_only_expr(expr);
         expr = NULL;
         parser_error_at(parser, "Invalid interpolation expression", line, column);
     }
@@ -1006,7 +1099,7 @@ static Expr* parse_string_literal_or_interpolation(Parser* parser, const Token* 
 
 fail:
     for (int j = 0; j < part_count; j++) {
-        expr_free(parts[j]);
+        parser_discard_parse_only_expr(parts[j]);
     }
     if (parts) free(parts);
     return NULL;
@@ -1158,8 +1251,13 @@ static Expr* parse_primary(Parser* parser) {
     // Set literal: { value1, value2, ... }
     if (parser_match(parser, TOKEN_LBRACE)) {
         // Check if this is a record literal by looking for identifier: value pattern
-        if (parser_token_is_identifier_like(parser->current.type) &&
-            lexer_peek_token(&parser->lexer).type == TOKEN_COLON) {
+        Token lookahead = lexer_peek_token(&parser->lexer);
+        bool is_record_literal =
+            parser_token_is_identifier_like(parser->current.type) &&
+            lookahead.type == TOKEN_COLON;
+        token_free(&lookahead);
+
+        if (is_record_literal) {
             char** field_names = NULL;
             Expr** field_values = NULL;
             int field_count = 0;
@@ -2079,8 +2177,8 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
         parser_consume(parser, TOKEN_SEMICOLON, "Expected ';' after assignment");
 
         if (!expr || !value) {
-            expr_free(expr);
-            expr_free(value);
+            parser_discard_parse_only_expr(expr);
+            parser_discard_parse_only_expr(value);
             return NULL;
         }
 
@@ -2097,8 +2195,8 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
 
             if (binary_op == TOKEN_ERROR) {
                 parser_error(parser, "Invalid compound assignment operator");
-                expr_free(expr);
-                expr_free(value);
+                parser_discard_parse_only_expr(expr);
+                parser_discard_parse_only_expr(value);
                 return NULL;
             }
 
@@ -2107,7 +2205,7 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
                 Expr* lhs = expr_create_identifier(expr->identifier, parser->lexer.file, expr->line, expr->column);
                 Expr* expanded = expr_create_binary(binary_op, lhs, value, parser->lexer.file, expr->line, expr->column);
                 Stmt* stmt = stmt_create_assign(expr->identifier, expanded, TOKEN_ASSIGN, parser->lexer.file, expr->line, expr->column);
-                expr_free(expr);
+                parser_discard_parse_only_expr(expr);
                 return stmt;
             }
 
@@ -2120,7 +2218,7 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
                 expr->index.index = NULL;
 
                 Stmt* stmt = stmt_create_assign_index(target, index, value, assign_op, parser->lexer.file, expr->line, expr->column);
-                expr_free(expr);
+                parser_discard_parse_only_expr(expr);
                 return stmt;
             }
 
@@ -2132,19 +2230,19 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
 
                 Stmt* stmt = stmt_create_assign_field(object, field_name, value, assign_op, parser->lexer.file, expr->line, expr->column);
                 if (field_name) free(field_name);
-                expr_free(expr);
+                parser_discard_parse_only_expr(expr);
                 return stmt;
             }
 
             parser_error(parser, "Invalid compound assignment target");
-            expr_free(expr);
-            expr_free(value);
+            parser_discard_parse_only_expr(expr);
+            parser_discard_parse_only_expr(value);
             return NULL;
         }
 
         if (expr->kind == EXPR_IDENTIFIER) {
             Stmt* stmt = stmt_create_assign(expr->identifier, value, TOKEN_ASSIGN, parser->lexer.file, expr->line, expr->column);
-            expr_free(expr);
+            parser_discard_parse_only_expr(expr);
             return stmt;
         }
 
@@ -2155,7 +2253,7 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
             expr->index.index = NULL;
 
             Stmt* stmt = stmt_create_assign_index(target, index, value, TOKEN_ASSIGN, parser->lexer.file, expr->line, expr->column);
-            expr_free(expr);
+            parser_discard_parse_only_expr(expr);
             return stmt;
         }
 
@@ -2167,13 +2265,13 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
 
             Stmt* stmt = stmt_create_assign_field(object, field_name, value, TOKEN_ASSIGN, parser->lexer.file, expr->line, expr->column);
             if (field_name) free(field_name);
-            expr_free(expr);
+            parser_discard_parse_only_expr(expr);
             return stmt;
         }
 
         parser_error(parser, "Invalid assignment target");
-        expr_free(expr);
-        expr_free(value);
+        parser_discard_parse_only_expr(expr);
+        parser_discard_parse_only_expr(value);
         return NULL;
     }
 
@@ -2189,7 +2287,7 @@ static Stmt* parser_finish_expression_statement(Parser* parser,
     }
 
     parser_error(parser, "Expected ';' after expression");
-    expr_free(expr);
+    parser_discard_parse_only_expr(expr);
     return NULL;
 }
 
@@ -2199,9 +2297,14 @@ static Stmt* parse_block_statement(Parser* parser) {
     
     while (parser->current.type != TOKEN_RBRACE && parser->current.type != TOKEN_EOF) {
         Stmt* stmt = parse_declaration(parser);
-        stmt_count++;
-        statements = (Stmt**)safe_realloc(statements, stmt_count * sizeof(Stmt*));
-        statements[stmt_count - 1] = stmt;
+        if (stmt) {
+            stmt_count++;
+            statements = (Stmt**)safe_realloc(statements, (size_t)stmt_count * sizeof(Stmt*));
+            statements[stmt_count - 1] = stmt;
+            continue;
+        }
+
+        parser_synchronize(parser, true);
     }
     
     parser_consume(parser, TOKEN_RBRACE, "Expected '}' after block");
@@ -2558,7 +2661,7 @@ static void parser_free_type_switch_arms(SwitchTypeArm* arms, int arm_count) {
     for (int i = 0; i < arm_count; i++) {
         parser_free_type_case_labels(arms[i].types, arms[i].type_count);
         if (arms[i].binding_name) free(arms[i].binding_name);
-        stmt_free(arms[i].body);
+        parser_discard_parse_only_stmt(arms[i].body);
     }
     free(arms);
 }
@@ -2731,7 +2834,7 @@ static Stmt* parse_switch_statement(Parser* parser) {
             if (saw_value_case) {
                 parser_free_type_case_labels(case_types, case_type_count);
                 if (binding_name) free(binding_name);
-                stmt_free(body);
+                parser_discard_parse_only_stmt(body);
                 continue;
             }
 
@@ -2765,10 +2868,10 @@ static Stmt* parse_switch_statement(Parser* parser) {
 
         if (saw_type_case) {
             for (int i = 0; i < case_pattern_count; i++) {
-                expr_free(case_patterns[i]);
+                parser_discard_parse_only_expr(case_patterns[i]);
             }
             free(case_patterns);
-            stmt_free(body);
+            parser_discard_parse_only_stmt(body);
             continue;
         }
 
@@ -2793,8 +2896,8 @@ static Stmt* parse_switch_statement(Parser* parser) {
     if (saw_type_case) {
         if (patterns || bodies) {
             for (int i = 0; i < arm_count; i++) {
-                expr_free(patterns ? patterns[i] : NULL);
-                stmt_free(bodies ? bodies[i] : NULL);
+                parser_discard_parse_only_expr(patterns ? patterns[i] : NULL);
+                parser_discard_parse_only_stmt(bodies ? bodies[i] : NULL);
             }
             if (patterns) free(patterns);
             if (bodies) free(bodies);
@@ -3615,7 +3718,7 @@ static Stmt* parse_statement(Parser* parser) {
     return parse_expression_statement(parser);
 }
 
-ParseResult parser_parse(const char* source, const char* file) {
+static ParseResult parser_parse_internal(const char* source, const char* file, bool report_diagnostics) {
     Parser parser;
     lexer_init(&parser.lexer, source, file);
     parser.current = lexer_next_token(&parser.lexer);
@@ -3623,6 +3726,7 @@ ParseResult parser_parse(const char* source, const char* file) {
     parser.previous.lexeme = NULL;
     parser.had_error = false;
     parser.panic_mode = false;
+    parser.report_diagnostics = report_diagnostics;
     parser.first_error_message = NULL;
     parser.error_line = 0;
     parser.error_column = 0;
@@ -3640,7 +3744,7 @@ ParseResult parser_parse(const char* source, const char* file) {
         if (stmt) {
             program_add_stmt(program, stmt);
         }
-        parser_synchronize(&parser);
+        parser_synchronize(&parser, false);
     }
     
     ParseResult result;
@@ -3658,12 +3762,482 @@ ParseResult parser_parse(const char* source, const char* file) {
     parser.lexer.file = NULL;
     if (parser.first_error_message) free(parser.first_error_message);
     parser.first_error_message = NULL;
-    
+
     return result;
+}
+
+ParseResult parser_parse(const char* source, const char* file) {
+    return parser_parse_internal(source, file, true);
+}
+
+ParseResult parser_parse_quiet(const char* source, const char* file) {
+    return parser_parse_internal(source, file, false);
+}
+
+static void parser_type_root_list_add(ParserTypeRootList* list, Type* type) {
+    if (!list || !type) return;
+
+    for (int i = 0; i < list->count; i++) {
+        if (list->items[i] == type) {
+            return;
+        }
+    }
+
+    if (list->count >= list->capacity) {
+        int new_capacity = list->capacity > 0 ? list->capacity * 2 : 32;
+        list->items = (Type**)safe_realloc(list->items, (size_t)new_capacity * sizeof(Type*));
+        list->capacity = new_capacity;
+    }
+
+    list->items[list->count++] = type;
+}
+
+static void parser_collect_expr_type_roots(ParserTypeRootList* list, Expr* expr) {
+    if (!list || !expr) return;
+
+    parser_type_root_list_add(list, expr->type);
+
+    switch (expr->kind) {
+        case EXPR_LITERAL:
+        case EXPR_IDENTIFIER:
+        case EXPR_NIL:
+            break;
+        case EXPR_BINARY:
+            parser_collect_expr_type_roots(list, expr->binary.left);
+            parser_collect_expr_type_roots(list, expr->binary.right);
+            break;
+        case EXPR_UNARY:
+            parser_collect_expr_type_roots(list, expr->unary.operand);
+            break;
+        case EXPR_CALL:
+            parser_collect_expr_type_roots(list, expr->call.callee);
+            for (int i = 0; i < expr->call.arg_count; i++) {
+                parser_collect_expr_type_roots(list, expr->call.args[i]);
+            }
+            for (int i = 0; i < expr->call.type_arg_count; i++) {
+                parser_type_root_list_add(list, expr->call.type_args ? expr->call.type_args[i] : NULL);
+            }
+            break;
+        case EXPR_FUNC_LITERAL:
+            parser_type_root_list_add(list, expr->func_literal.return_type);
+            for (int i = 0; i < expr->func_literal.param_count; i++) {
+                parser_type_root_list_add(list, expr->func_literal.param_types ? expr->func_literal.param_types[i] : NULL);
+            }
+            parser_collect_stmt_type_roots(list, expr->func_literal.body);
+            break;
+        case EXPR_INDEX:
+            parser_collect_expr_type_roots(list, expr->index.array);
+            parser_collect_expr_type_roots(list, expr->index.index);
+            break;
+        case EXPR_ARRAY_LITERAL:
+            for (int i = 0; i < expr->array_literal.element_count; i++) {
+                parser_collect_expr_type_roots(list, expr->array_literal.elements[i]);
+            }
+            break;
+        case EXPR_CAST:
+            parser_collect_expr_type_roots(list, expr->cast.value);
+            parser_type_root_list_add(list, expr->cast.target_type);
+            break;
+        case EXPR_TRY:
+            parser_collect_expr_type_roots(list, expr->try_expr.expr);
+            break;
+        case EXPR_AWAIT:
+            parser_collect_expr_type_roots(list, expr->await_expr.expr);
+            break;
+        case EXPR_TYPE_TEST:
+            parser_collect_expr_type_roots(list, expr->type_test.value);
+            parser_type_root_list_add(list, expr->type_test.target_type);
+            break;
+        case EXPR_IF:
+            parser_collect_expr_type_roots(list, expr->if_expr.condition);
+            parser_collect_expr_type_roots(list, expr->if_expr.then_expr);
+            parser_collect_expr_type_roots(list, expr->if_expr.else_expr);
+            break;
+        case EXPR_MATCH:
+            parser_collect_expr_type_roots(list, expr->match_expr.subject);
+            for (int i = 0; i < expr->match_expr.arm_count; i++) {
+                parser_collect_expr_type_roots(list, expr->match_expr.patterns ? expr->match_expr.patterns[i] : NULL);
+                parser_collect_expr_type_roots(list, expr->match_expr.guards ? expr->match_expr.guards[i] : NULL);
+                parser_collect_expr_type_roots(list, expr->match_expr.values ? expr->match_expr.values[i] : NULL);
+            }
+            parser_collect_expr_type_roots(list, expr->match_expr.else_expr);
+            break;
+        case EXPR_BLOCK:
+            for (int i = 0; i < expr->block_expr.stmt_count; i++) {
+                parser_collect_stmt_type_roots(list, expr->block_expr.statements[i]);
+            }
+            parser_collect_expr_type_roots(list, expr->block_expr.value);
+            break;
+        case EXPR_RECORD_LITERAL:
+            parser_type_root_list_add(list, expr->record_literal.record_type);
+            parser_type_root_list_add(list, expr->record_literal.pattern_type);
+            for (int i = 0; i < expr->record_literal.field_count; i++) {
+                parser_collect_expr_type_roots(list, expr->record_literal.field_values[i]);
+            }
+            break;
+        case EXPR_FIELD_ACCESS:
+            parser_collect_expr_type_roots(list, expr->field_access.object);
+            break;
+        case EXPR_TUPLE_LITERAL:
+            for (int i = 0; i < expr->tuple_literal.element_count; i++) {
+                parser_collect_expr_type_roots(list, expr->tuple_literal.elements[i]);
+            }
+            break;
+        case EXPR_TUPLE_ACCESS:
+            parser_collect_expr_type_roots(list, expr->tuple_access.tuple);
+            break;
+        case EXPR_MAP_LITERAL:
+            parser_type_root_list_add(list, expr->map_literal.map_type);
+            for (int i = 0; i < expr->map_literal.entry_count; i++) {
+                parser_collect_expr_type_roots(list, expr->map_literal.keys[i]);
+                parser_collect_expr_type_roots(list, expr->map_literal.values[i]);
+            }
+            break;
+        case EXPR_SET_LITERAL:
+            parser_type_root_list_add(list, expr->set_literal.set_type);
+            for (int i = 0; i < expr->set_literal.element_count; i++) {
+                parser_collect_expr_type_roots(list, expr->set_literal.elements[i]);
+            }
+            break;
+        case EXPR_ARRAY:
+            break;
+    }
+}
+
+static void parser_collect_stmt_type_roots(ParserTypeRootList* list, Stmt* stmt) {
+    if (!list || !stmt) return;
+
+    switch (stmt->kind) {
+        case STMT_VAR_DECL:
+            parser_type_root_list_add(list, stmt->var_decl.type_annotation);
+            parser_collect_expr_type_roots(list, stmt->var_decl.initializer);
+            break;
+        case STMT_VAR_TUPLE_DECL:
+            parser_type_root_list_add(list, stmt->var_tuple_decl.type_annotation);
+            parser_collect_expr_type_roots(list, stmt->var_tuple_decl.initializer);
+            break;
+        case STMT_EXPR:
+            parser_collect_expr_type_roots(list, stmt->expr_stmt);
+            break;
+        case STMT_ASSIGN:
+            parser_collect_expr_type_roots(list, stmt->assign.value);
+            break;
+        case STMT_ASSIGN_INDEX:
+            parser_collect_expr_type_roots(list, stmt->assign_index.target);
+            parser_collect_expr_type_roots(list, stmt->assign_index.index);
+            parser_collect_expr_type_roots(list, stmt->assign_index.value);
+            break;
+        case STMT_ASSIGN_FIELD:
+            parser_collect_expr_type_roots(list, stmt->assign_field.object);
+            parser_collect_expr_type_roots(list, stmt->assign_field.value);
+            break;
+        case STMT_BLOCK:
+            for (int i = 0; i < stmt->block.stmt_count; i++) {
+                parser_collect_stmt_type_roots(list, stmt->block.statements[i]);
+            }
+            break;
+        case STMT_IF:
+            parser_collect_expr_type_roots(list, stmt->if_stmt.condition);
+            parser_collect_stmt_type_roots(list, stmt->if_stmt.then_branch);
+            parser_collect_stmt_type_roots(list, stmt->if_stmt.else_branch);
+            break;
+        case STMT_MATCH:
+            parser_collect_expr_type_roots(list, stmt->match_stmt.subject);
+            for (int i = 0; i < stmt->match_stmt.arm_count; i++) {
+                parser_collect_expr_type_roots(list, stmt->match_stmt.patterns ? stmt->match_stmt.patterns[i] : NULL);
+                parser_collect_expr_type_roots(list, stmt->match_stmt.guards ? stmt->match_stmt.guards[i] : NULL);
+                parser_collect_stmt_type_roots(list, stmt->match_stmt.bodies ? stmt->match_stmt.bodies[i] : NULL);
+            }
+            parser_collect_stmt_type_roots(list, stmt->match_stmt.else_branch);
+            break;
+        case STMT_WHILE:
+            parser_collect_expr_type_roots(list, stmt->while_stmt.condition);
+            parser_collect_stmt_type_roots(list, stmt->while_stmt.body);
+            break;
+        case STMT_FOREACH:
+            parser_collect_expr_type_roots(list, stmt->foreach.iterable);
+            parser_collect_stmt_type_roots(list, stmt->foreach.body);
+            break;
+        case STMT_FOR_RANGE:
+            parser_collect_expr_type_roots(list, stmt->for_range.start);
+            parser_collect_expr_type_roots(list, stmt->for_range.end);
+            parser_collect_stmt_type_roots(list, stmt->for_range.body);
+            break;
+        case STMT_BREAK:
+        case STMT_CONTINUE:
+        case STMT_IMPORT:
+        case STMT_IMPL_DECL:
+            break;
+        case STMT_RETURN:
+            parser_collect_expr_type_roots(list, stmt->return_value);
+            break;
+        case STMT_DEFER:
+            parser_collect_expr_type_roots(list, stmt->defer_expr);
+            break;
+        case STMT_FUNC_DECL:
+            parser_type_root_list_add(list, stmt->func_decl.return_type);
+            for (int i = 0; i < stmt->func_decl.type_param_count; i++) {
+                parser_type_root_list_add(list,
+                                          stmt->func_decl.type_param_constraints
+                                              ? stmt->func_decl.type_param_constraints[i]
+                                              : NULL);
+            }
+            for (int i = 0; i < stmt->func_decl.param_count; i++) {
+                parser_type_root_list_add(list, stmt->func_decl.param_types ? stmt->func_decl.param_types[i] : NULL);
+            }
+            parser_collect_stmt_type_roots(list, stmt->func_decl.body);
+            break;
+        case STMT_RECORD_DECL:
+            for (int i = 0; i < stmt->record_decl.field_count; i++) {
+                parser_type_root_list_add(list, stmt->record_decl.field_types ? stmt->record_decl.field_types[i] : NULL);
+            }
+            break;
+        case STMT_INTERFACE_DECL:
+            for (int i = 0; i < stmt->interface_decl.method_count; i++) {
+                parser_type_root_list_add(list, stmt->interface_decl.method_types ? stmt->interface_decl.method_types[i] : NULL);
+            }
+            break;
+        case STMT_TYPE_ALIAS:
+            parser_type_root_list_add(list, stmt->type_alias.target_type);
+            break;
+        case STMT_ENUM_DECL:
+            for (int i = 0; i < stmt->enum_decl.member_count; i++) {
+                int payload_count = stmt->enum_decl.member_payload_counts
+                    ? stmt->enum_decl.member_payload_counts[i]
+                    : 0;
+                for (int j = 0; j < payload_count; j++) {
+                    parser_type_root_list_add(list,
+                                              (stmt->enum_decl.member_payload_types &&
+                                               stmt->enum_decl.member_payload_types[i])
+                                                  ? stmt->enum_decl.member_payload_types[i][j]
+                                                  : NULL);
+                }
+            }
+            break;
+    }
+}
+
+static void parser_collect_program_type_roots(ParserTypeRootList* list, Program* program) {
+    if (!list || !program) return;
+
+    for (int i = 0; i < program->stmt_count; i++) {
+        parser_collect_stmt_type_roots(list, program->statements[i]);
+    }
+}
+
+static void parser_release_parse_only_expr_type_arrays(Expr* expr) {
+    if (!expr) return;
+
+    switch (expr->kind) {
+        case EXPR_LITERAL:
+        case EXPR_IDENTIFIER:
+        case EXPR_NIL:
+        case EXPR_ARRAY:
+            break;
+        case EXPR_BINARY:
+            parser_release_parse_only_expr_type_arrays(expr->binary.left);
+            parser_release_parse_only_expr_type_arrays(expr->binary.right);
+            break;
+        case EXPR_UNARY:
+            parser_release_parse_only_expr_type_arrays(expr->unary.operand);
+            break;
+        case EXPR_CALL:
+            parser_release_parse_only_expr_type_arrays(expr->call.callee);
+            for (int i = 0; i < expr->call.arg_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->call.args[i]);
+            }
+            break;
+        case EXPR_FUNC_LITERAL:
+            parser_release_parse_only_stmt_type_arrays(expr->func_literal.body);
+            break;
+        case EXPR_INDEX:
+            parser_release_parse_only_expr_type_arrays(expr->index.array);
+            parser_release_parse_only_expr_type_arrays(expr->index.index);
+            break;
+        case EXPR_ARRAY_LITERAL:
+            for (int i = 0; i < expr->array_literal.element_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->array_literal.elements[i]);
+            }
+            break;
+        case EXPR_CAST:
+            parser_release_parse_only_expr_type_arrays(expr->cast.value);
+            break;
+        case EXPR_TRY:
+            parser_release_parse_only_expr_type_arrays(expr->try_expr.expr);
+            break;
+        case EXPR_AWAIT:
+            parser_release_parse_only_expr_type_arrays(expr->await_expr.expr);
+            break;
+        case EXPR_TYPE_TEST:
+            parser_release_parse_only_expr_type_arrays(expr->type_test.value);
+            break;
+        case EXPR_IF:
+            parser_release_parse_only_expr_type_arrays(expr->if_expr.condition);
+            parser_release_parse_only_expr_type_arrays(expr->if_expr.then_expr);
+            parser_release_parse_only_expr_type_arrays(expr->if_expr.else_expr);
+            break;
+        case EXPR_MATCH:
+            parser_release_parse_only_expr_type_arrays(expr->match_expr.subject);
+            for (int i = 0; i < expr->match_expr.arm_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->match_expr.patterns ? expr->match_expr.patterns[i] : NULL);
+                parser_release_parse_only_expr_type_arrays(expr->match_expr.guards ? expr->match_expr.guards[i] : NULL);
+                parser_release_parse_only_expr_type_arrays(expr->match_expr.values ? expr->match_expr.values[i] : NULL);
+            }
+            parser_release_parse_only_expr_type_arrays(expr->match_expr.else_expr);
+            break;
+        case EXPR_BLOCK:
+            for (int i = 0; i < expr->block_expr.stmt_count; i++) {
+                parser_release_parse_only_stmt_type_arrays(expr->block_expr.statements[i]);
+            }
+            parser_release_parse_only_expr_type_arrays(expr->block_expr.value);
+            break;
+        case EXPR_RECORD_LITERAL:
+            for (int i = 0; i < expr->record_literal.field_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->record_literal.field_values[i]);
+            }
+            break;
+        case EXPR_FIELD_ACCESS:
+            parser_release_parse_only_expr_type_arrays(expr->field_access.object);
+            break;
+        case EXPR_TUPLE_LITERAL:
+            for (int i = 0; i < expr->tuple_literal.element_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->tuple_literal.elements[i]);
+            }
+            break;
+        case EXPR_TUPLE_ACCESS:
+            parser_release_parse_only_expr_type_arrays(expr->tuple_access.tuple);
+            break;
+        case EXPR_MAP_LITERAL:
+            for (int i = 0; i < expr->map_literal.entry_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->map_literal.keys[i]);
+                parser_release_parse_only_expr_type_arrays(expr->map_literal.values[i]);
+            }
+            break;
+        case EXPR_SET_LITERAL:
+            for (int i = 0; i < expr->set_literal.element_count; i++) {
+                parser_release_parse_only_expr_type_arrays(expr->set_literal.elements[i]);
+            }
+            break;
+    }
+}
+
+static void parser_release_parse_only_stmt_type_arrays(Stmt* stmt) {
+    if (!stmt) return;
+
+    switch (stmt->kind) {
+        case STMT_VAR_DECL:
+            parser_release_parse_only_expr_type_arrays(stmt->var_decl.initializer);
+            break;
+        case STMT_VAR_TUPLE_DECL:
+            parser_release_parse_only_expr_type_arrays(stmt->var_tuple_decl.initializer);
+            break;
+        case STMT_EXPR:
+            parser_release_parse_only_expr_type_arrays(stmt->expr_stmt);
+            break;
+        case STMT_ASSIGN:
+            parser_release_parse_only_expr_type_arrays(stmt->assign.value);
+            break;
+        case STMT_ASSIGN_INDEX:
+            parser_release_parse_only_expr_type_arrays(stmt->assign_index.target);
+            parser_release_parse_only_expr_type_arrays(stmt->assign_index.index);
+            parser_release_parse_only_expr_type_arrays(stmt->assign_index.value);
+            break;
+        case STMT_ASSIGN_FIELD:
+            parser_release_parse_only_expr_type_arrays(stmt->assign_field.object);
+            parser_release_parse_only_expr_type_arrays(stmt->assign_field.value);
+            break;
+        case STMT_BLOCK:
+            for (int i = 0; i < stmt->block.stmt_count; i++) {
+                parser_release_parse_only_stmt_type_arrays(stmt->block.statements[i]);
+            }
+            break;
+        case STMT_IF:
+            parser_release_parse_only_expr_type_arrays(stmt->if_stmt.condition);
+            parser_release_parse_only_stmt_type_arrays(stmt->if_stmt.then_branch);
+            parser_release_parse_only_stmt_type_arrays(stmt->if_stmt.else_branch);
+            break;
+        case STMT_MATCH:
+            parser_release_parse_only_expr_type_arrays(stmt->match_stmt.subject);
+            for (int i = 0; i < stmt->match_stmt.arm_count; i++) {
+                parser_release_parse_only_expr_type_arrays(stmt->match_stmt.patterns ? stmt->match_stmt.patterns[i] : NULL);
+                parser_release_parse_only_expr_type_arrays(stmt->match_stmt.guards ? stmt->match_stmt.guards[i] : NULL);
+                parser_release_parse_only_stmt_type_arrays(stmt->match_stmt.bodies ? stmt->match_stmt.bodies[i] : NULL);
+            }
+            parser_release_parse_only_stmt_type_arrays(stmt->match_stmt.else_branch);
+            break;
+        case STMT_WHILE:
+            parser_release_parse_only_expr_type_arrays(stmt->while_stmt.condition);
+            parser_release_parse_only_stmt_type_arrays(stmt->while_stmt.body);
+            break;
+        case STMT_FOREACH:
+            parser_release_parse_only_expr_type_arrays(stmt->foreach.iterable);
+            parser_release_parse_only_stmt_type_arrays(stmt->foreach.body);
+            break;
+        case STMT_FOR_RANGE:
+            parser_release_parse_only_expr_type_arrays(stmt->for_range.start);
+            parser_release_parse_only_expr_type_arrays(stmt->for_range.end);
+            parser_release_parse_only_stmt_type_arrays(stmt->for_range.body);
+            break;
+        case STMT_BREAK:
+        case STMT_CONTINUE:
+        case STMT_IMPORT:
+        case STMT_IMPL_DECL:
+            break;
+        case STMT_RETURN:
+            parser_release_parse_only_expr_type_arrays(stmt->return_value);
+            break;
+        case STMT_DEFER:
+            parser_release_parse_only_expr_type_arrays(stmt->defer_expr);
+            break;
+        case STMT_FUNC_DECL:
+            parser_release_parse_only_stmt_type_arrays(stmt->func_decl.body);
+            free(stmt->func_decl.param_types);
+            stmt->func_decl.param_types = NULL;
+            break;
+        case STMT_RECORD_DECL:
+            free(stmt->record_decl.field_types);
+            stmt->record_decl.field_types = NULL;
+            break;
+        case STMT_INTERFACE_DECL:
+            free(stmt->interface_decl.method_types);
+            stmt->interface_decl.method_types = NULL;
+            break;
+        case STMT_TYPE_ALIAS:
+            break;
+        case STMT_ENUM_DECL:
+            break;
+    }
+}
+
+static void parser_release_parse_only_program_type_arrays(Program* program) {
+    if (!program) return;
+
+    for (int i = 0; i < program->stmt_count; i++) {
+        parser_release_parse_only_stmt_type_arrays(program->statements[i]);
+    }
 }
 
 void parser_free_result(ParseResult* result) {
     if (!result) return;
     program_free(result->program);
     error_free(result->error);
+}
+
+void parser_free_parse_only_result(ParseResult* result) {
+    ParserTypeRootList type_roots = {0};
+
+    if (!result) return;
+
+    parser_collect_program_type_roots(&type_roots, result->program);
+    parser_release_parse_only_program_type_arrays(result->program);
+    program_free(result->program);
+    result->program = NULL;
+
+    for (int i = 0; i < type_roots.count; i++) {
+        type_free(type_roots.items[i]);
+    }
+    free(type_roots.items);
+
+    error_free(result->error);
+    result->error = NULL;
 }

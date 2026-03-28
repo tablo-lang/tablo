@@ -10,6 +10,7 @@ typedef struct {
     Token previous;
     bool had_error;
     bool panic_mode;
+    bool report_diagnostics;
     char* first_error_message;
     int error_line;
     int error_column;
@@ -43,6 +44,8 @@ typedef struct {
 } ParseResult;
 
 ParseResult parser_parse(const char* source, const char* file);
+ParseResult parser_parse_quiet(const char* source, const char* file);
 void parser_free_result(ParseResult* result);
+void parser_free_parse_only_result(ParseResult* result);
 
 #endif

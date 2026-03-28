@@ -5700,6 +5700,7 @@ static void test_parser(void) {
     ParseResult match_enum_unreachable_else_parse = parser_parse(match_enum_unreachable_else_source, "test.tblo");
     if (!match_enum_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_enum_unreachable_else_tc = typecheck_with_options(match_enum_unreachable_else_parse.program, strict_opts);
         if (match_enum_unreachable_else_tc.error &&
@@ -5733,6 +5734,7 @@ static void test_parser(void) {
     ParseResult match_enum_unreachable_arm_parse = parser_parse(match_enum_unreachable_arm_source, "test.tblo");
     if (!match_enum_unreachable_arm_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_enum_unreachable_arm_tc = typecheck_with_options(match_enum_unreachable_arm_parse.program, strict_opts);
         if (match_enum_unreachable_arm_tc.error &&
@@ -5892,6 +5894,7 @@ static void test_parser(void) {
         parser_parse(match_enum_payload_partition_unreachable_else_source, "test.tblo");
     if (!match_enum_payload_partition_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_enum_payload_partition_unreachable_else_tc =
             typecheck_with_options(match_enum_payload_partition_unreachable_else_parse.program,
@@ -6034,6 +6037,7 @@ static void test_parser(void) {
     ParseResult match_bool_unreachable_else_parse = parser_parse(match_bool_unreachable_else_source, "test.tblo");
     if (!match_bool_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_bool_unreachable_else_tc = typecheck_with_options(match_bool_unreachable_else_parse.program, strict_opts);
         if (match_bool_unreachable_else_tc.error &&
@@ -6064,6 +6068,7 @@ static void test_parser(void) {
     ParseResult match_bool_unreachable_arm_parse = parser_parse(match_bool_unreachable_arm_source, "test.tblo");
     if (!match_bool_unreachable_arm_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_bool_unreachable_arm_tc = typecheck_with_options(match_bool_unreachable_arm_parse.program, strict_opts);
         if (match_bool_unreachable_arm_tc.error &&
@@ -6098,6 +6103,7 @@ static void test_parser(void) {
         parser_parse(match_record_unreachable_else_source, "test.tblo");
     if (!match_record_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_record_unreachable_else_tc =
             typecheck_with_options(match_record_unreachable_else_parse.program, strict_opts);
@@ -6135,6 +6141,7 @@ static void test_parser(void) {
         parser_parse(match_record_partition_unreachable_else_source, "test.tblo");
     if (!match_record_partition_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_record_partition_unreachable_else_tc =
             typecheck_with_options(match_record_partition_unreachable_else_parse.program, strict_opts);
@@ -6167,6 +6174,7 @@ static void test_parser(void) {
         parser_parse(match_tuple_unreachable_arm_source, "test.tblo");
     if (!match_tuple_unreachable_arm_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_tuple_unreachable_arm_tc =
             typecheck_with_options(match_tuple_unreachable_arm_parse.program, strict_opts);
@@ -6200,6 +6208,7 @@ static void test_parser(void) {
         parser_parse(match_tuple_partition_unreachable_arm_source, "test.tblo");
     if (!match_tuple_partition_unreachable_arm_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_tuple_partition_unreachable_arm_tc =
             typecheck_with_options(match_tuple_partition_unreachable_arm_parse.program, strict_opts);
@@ -6239,6 +6248,7 @@ static void test_parser(void) {
         parser_parse(match_record_matrix_unreachable_else_source, "test.tblo");
     if (!match_record_matrix_unreachable_else_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_record_matrix_unreachable_else_tc =
             typecheck_with_options(match_record_matrix_unreachable_else_parse.program, strict_opts);
@@ -6274,6 +6284,7 @@ static void test_parser(void) {
         parser_parse(match_tuple_matrix_unreachable_arm_source, "test.tblo");
     if (!match_tuple_matrix_unreachable_arm_parse.error) {
         TypeCheckOptions strict_opts = {0};
+        strict_opts.report_diagnostics = true;
         strict_opts.strict_errors = true;
         TypeCheckResult match_tuple_matrix_unreachable_arm_tc =
             typecheck_with_options(match_tuple_matrix_unreachable_arm_parse.program, strict_opts);

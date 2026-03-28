@@ -30,8 +30,8 @@ int fuzz_parser_one_input(const uint8_t* data, size_t size) {
         return 0;
     }
 
-    ParseResult result = parser_parse(input, "fuzz_parser.tblo");
-    parser_free_result(&result);
+    ParseResult result = parser_parse_quiet(input, "fuzz_parser.tblo");
+    parser_free_parse_only_result(&result);
 
     safe_alloc_pop_jmp_context(&alloc_ctx);
     free(input);
