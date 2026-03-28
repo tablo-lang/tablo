@@ -334,9 +334,9 @@ char* path_sandbox_resolve_alloc(const char* sandbox_root,
             if (out_error) *out_error = "Path escapes sandbox";
             return NULL;
         }
-        free(target_real);
         free(root_real);
-        return joined;
+        free(joined);
+        return target_real;
     }
 
     if (!allow_missing_leaf) {
@@ -389,9 +389,25 @@ char* path_sandbox_resolve_alloc(const char* sandbox_root,
         return NULL;
     }
 
+    char sep_char = pick_join_sep(parent_real);
+    size_t parent_len = strlen(parent_real);
+    size_t leaf_len = strlen(leaf);
+    bool parent_has_sep = parent_len > 0 && path_is_sep(parent_real[parent_len - 1]);
+    char* resolved = (char*)safe_malloc(parent_len + (parent_has_sep ? 0 : 1) + leaf_len + 1);
+    size_t pos = 0;
+    memcpy(resolved + pos, parent_real, parent_len);
+    pos += parent_len;
+    if (!parent_has_sep) {
+        resolved[pos++] = sep_char;
+    }
+    memcpy(resolved + pos, leaf, leaf_len);
+    pos += leaf_len;
+    resolved[pos] = '\0';
+
     free(parent_real);
     free(root_real);
-    return joined;
+    free(joined);
+    return resolved;
 }
 
 #ifndef _WIN32

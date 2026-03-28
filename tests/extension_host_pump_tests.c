@@ -7,11 +7,16 @@
 #include <time.h>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #else
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 static int tests_passed = 0;
@@ -85,12 +90,75 @@ static int file_exists(const char* path) {
 #endif
 }
 
+static int build_sibling_executable_path(const char* filename, char* out, size_t out_size) {
+    char exe_path[1024];
+    char* last_slash = NULL;
+    char* last_backslash = NULL;
+    char* last_sep = NULL;
+    int wrote = 0;
+
+    if (!filename || !out || out_size == 0) return 0;
+
+#ifdef _WIN32
+    DWORD got = GetModuleFileNameA(NULL, exe_path, (DWORD)sizeof(exe_path));
+    if (got == 0 || got >= (DWORD)sizeof(exe_path)) return 0;
+#elif defined(__APPLE__)
+    uint32_t path_size = (uint32_t)sizeof(exe_path);
+    char resolved[1024];
+    if (_NSGetExecutablePath(exe_path, &path_size) != 0) return 0;
+    if (!realpath(exe_path, resolved)) return 0;
+    memcpy(exe_path, resolved, sizeof(resolved));
+#else
+    ssize_t got = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (got <= 0 || got >= (ssize_t)sizeof(exe_path)) return 0;
+    exe_path[got] = '\0';
+#endif
+
+    last_slash = strrchr(exe_path, '/');
+    last_backslash = strrchr(exe_path, '\\');
+    last_sep = last_slash;
+    if (!last_sep || (last_backslash && last_backslash > last_sep)) {
+        last_sep = last_backslash;
+    }
+    if (!last_sep) return 0;
+    *last_sep = '\0';
+
+#ifdef _WIN32
+    wrote = snprintf(out, out_size, "%s\\%s", exe_path, filename);
+#else
+    wrote = snprintf(out, out_size, "%s/%s", exe_path, filename);
+#endif
+    return wrote > 0 && (size_t)wrote < out_size;
+}
+
 static char* locate_test_extension_library(void) {
+    char sibling_path[1024];
+
+#ifdef _WIN32
+    if (build_sibling_executable_path("tablo_test_extension.dll", sibling_path, sizeof(sibling_path)) &&
+        file_exists(sibling_path)) {
+        return safe_strdup(sibling_path);
+    }
+#elif __APPLE__
+    if (build_sibling_executable_path("tablo_test_extension.dylib", sibling_path, sizeof(sibling_path)) &&
+        file_exists(sibling_path)) {
+        return safe_strdup(sibling_path);
+    }
+#else
+    if (build_sibling_executable_path("tablo_test_extension.so", sibling_path, sizeof(sibling_path)) &&
+        file_exists(sibling_path)) {
+        return safe_strdup(sibling_path);
+    }
+#endif
+
 #ifdef _WIN32
     static const char* candidates[] = {
         "..\\build-tablo\\Release\\tablo_test_extension.dll",
         "..\\build-tablo\\Debug\\tablo_test_extension.dll",
         "..\\build-tablo\\tablo_test_extension.dll",
+        "..\\build-wsl-ci\\Release\\tablo_test_extension.dll",
+        "..\\build-wsl-ci\\Debug\\tablo_test_extension.dll",
+        "..\\build-wsl-ci\\tablo_test_extension.dll",
         "..\\build\\Release\\tablo_test_extension.dll",
         "..\\build\\Debug\\tablo_test_extension.dll",
         "..\\build\\tablo_test_extension.dll",
@@ -106,6 +174,9 @@ static char* locate_test_extension_library(void) {
         "../build-tablo/Release/tablo_test_extension.dylib",
         "../build-tablo/Debug/tablo_test_extension.dylib",
         "../build-tablo/tablo_test_extension.dylib",
+        "../build-wsl-ci/Release/tablo_test_extension.dylib",
+        "../build-wsl-ci/Debug/tablo_test_extension.dylib",
+        "../build-wsl-ci/tablo_test_extension.dylib",
         "../build/Release/tablo_test_extension.dylib",
         "../build/Debug/tablo_test_extension.dylib",
         "../build/tablo_test_extension.dylib",
@@ -121,6 +192,9 @@ static char* locate_test_extension_library(void) {
         "../build-tablo/Release/tablo_test_extension.so",
         "../build-tablo/Debug/tablo_test_extension.so",
         "../build-tablo/tablo_test_extension.so",
+        "../build-wsl-ci/Release/tablo_test_extension.so",
+        "../build-wsl-ci/Debug/tablo_test_extension.so",
+        "../build-wsl-ci/tablo_test_extension.so",
         "../build/Release/tablo_test_extension.so",
         "../build/Debug/tablo_test_extension.so",
         "../build/tablo_test_extension.so",

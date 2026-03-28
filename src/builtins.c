@@ -16978,6 +16978,14 @@ static bool httpx_connect_socket(VM* vm,
     if (err_msg) *err_msg = NULL;
     if (!out_socket) return false;
 
+#ifndef _WIN32
+    if (is_https) {
+        if (err_code) *err_code = ERR_UNSUPPORTED;
+        if (err_msg) *err_msg = "HTTPS is not supported on this build";
+        return false;
+    }
+#endif
+
     int sock_fd = -1;
     int64_t connect_err_code = 0;
     const char* connect_err_msg = NULL;

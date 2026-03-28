@@ -1,5 +1,6 @@
 #include "test_runner.h"
 #include "../../src/runtime.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,23 +75,99 @@ void output_free(CapturedOutput* output) {
     output->capacity = 0;
 }
 
+static size_t append_utf8_codepoint(char* out, size_t out_size, size_t pos, uint32_t codepoint) {
+    if (!out || pos >= out_size) return (size_t)-1;
+
+    if (codepoint <= 0x7Fu) {
+        if (pos + 1 >= out_size) return (size_t)-1;
+        out[pos++] = (char)codepoint;
+    } else if (codepoint <= 0x7FFu) {
+        if (pos + 2 >= out_size) return (size_t)-1;
+        out[pos++] = (char)(0xC0u | ((codepoint >> 6) & 0x1Fu));
+        out[pos++] = (char)(0x80u | (codepoint & 0x3Fu));
+    } else if (codepoint <= 0xFFFFu) {
+        if (pos + 3 >= out_size) return (size_t)-1;
+        out[pos++] = (char)(0xE0u | ((codepoint >> 12) & 0x0Fu));
+        out[pos++] = (char)(0x80u | ((codepoint >> 6) & 0x3Fu));
+        out[pos++] = (char)(0x80u | (codepoint & 0x3Fu));
+    } else {
+        if (pos + 4 >= out_size) return (size_t)-1;
+        out[pos++] = (char)(0xF0u | ((codepoint >> 18) & 0x07u));
+        out[pos++] = (char)(0x80u | ((codepoint >> 12) & 0x3Fu));
+        out[pos++] = (char)(0x80u | ((codepoint >> 6) & 0x3Fu));
+        out[pos++] = (char)(0x80u | (codepoint & 0x3Fu));
+    }
+    return pos;
+}
+
+static char* decode_utf16_contents(const unsigned char* bytes, size_t length, int big_endian) {
+    size_t capacity = length * 2 + 1;
+    char* decoded = (char*)malloc(capacity);
+    size_t out_pos = 0;
+
+    if (!decoded) return NULL;
+
+    for (size_t i = 2; i + 1 < length; i += 2) {
+        uint16_t unit = big_endian
+            ? (uint16_t)(((uint16_t)bytes[i] << 8) | (uint16_t)bytes[i + 1])
+            : (uint16_t)((uint16_t)bytes[i] | ((uint16_t)bytes[i + 1] << 8));
+        uint32_t codepoint = unit;
+
+        if (unit >= 0xD800u && unit <= 0xDBFFu && i + 3 < length) {
+            uint16_t low = big_endian
+                ? (uint16_t)(((uint16_t)bytes[i + 2] << 8) | (uint16_t)bytes[i + 3])
+                : (uint16_t)((uint16_t)bytes[i + 2] | ((uint16_t)bytes[i + 3] << 8));
+            if (low >= 0xDC00u && low <= 0xDFFFu) {
+                codepoint = 0x10000u + ((((uint32_t)unit - 0xD800u) << 10) | ((uint32_t)low - 0xDC00u));
+                i += 2;
+            }
+        }
+
+        out_pos = append_utf8_codepoint(decoded, capacity, out_pos, codepoint);
+        if (out_pos == (size_t)-1) {
+            free(decoded);
+            return NULL;
+        }
+    }
+
+    decoded[out_pos] = '\0';
+    return decoded;
+}
+
 int compare_outputs(const char* actual, const char* expected) {
+    const unsigned char* a = (const unsigned char*)actual;
+    const unsigned char* e = (const unsigned char*)expected;
+
     if (!actual || !expected) {
         return 0;
     }
 
-    size_t actual_len = strlen(actual);
-    size_t expected_len = strlen(expected);
-
-    if (actual_len != expected_len) {
-        return 0;
+    while (*a != '\0' || *e != '\0') {
+        if (*a == '\r') {
+            a++;
+            continue;
+        }
+        if (*e == '\r') {
+            e++;
+            continue;
+        }
+        if (*a != *e) {
+            return 0;
+        }
+        if (*a == '\0') {
+            break;
+        }
+        a++;
+        e++;
     }
 
-    return strcmp(actual, expected) == 0;
+    while (*a == '\r') a++;
+    while (*e == '\r') e++;
+    return *a == '\0' && *e == '\0';
 }
 
 char* read_file_contents(const char* filename) {
-    FILE* file = fopen(filename, "r");
+    FILE* file = fopen(filename, "rb");
     if (!file) {
         return NULL;
     }
@@ -99,10 +176,24 @@ char* read_file_contents(const char* filename) {
     long length = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    char* contents = (char*)malloc(length + 1);
-    if (contents) {
-        size_t read = fread(contents, 1, length, file);
-        contents[read] = '\0';
+    unsigned char* raw = (unsigned char*)malloc((size_t)length + 1);
+    char* contents = NULL;
+    if (raw) {
+        size_t read = fread(raw, 1, (size_t)length, file);
+        raw[read] = '\0';
+        if (read >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
+            contents = decode_utf16_contents(raw, read, 0);
+        } else if (read >= 2 && raw[0] == 0xFE && raw[1] == 0xFF) {
+            contents = decode_utf16_contents(raw, read, 1);
+        } else {
+            size_t offset = (read >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) ? 3 : 0;
+            contents = (char*)malloc(read - offset + 1);
+            if (contents) {
+                memcpy(contents, raw + offset, read - offset);
+                contents[read - offset] = '\0';
+            }
+        }
+        free(raw);
     }
 
     fclose(file);

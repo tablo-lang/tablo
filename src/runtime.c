@@ -18,7 +18,7 @@
 #endif
 
 // Bump when cache key semantics must change (for example compiler/bytecode behavior updates).
-static const char* RUNTIME_CACHE_ABI_TAG = "tablo-cache-abi-2026-03-20-native-extension-v1";
+static const char* RUNTIME_CACHE_ABI_TAG = "tablo-cache-abi-2026-03-28-block-expression-codegen-v1";
 
 typedef struct {
     bool has_override;

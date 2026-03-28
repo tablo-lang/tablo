@@ -9388,6 +9388,7 @@ static void compile_match_expression(Compiler* comp, Expr* expr) {
         return;
     }
     emit_byte2(comp, OP_STORE_LOCAL, (uint8_t)result_slot, line);
+    int result_scope_start = comp->function->local_count;
 
     compile_expression(comp, expr->match_expr.subject);
     int subject_slot = add_local_anon(comp, line);
@@ -9443,8 +9444,9 @@ static void compile_match_expression(Compiler* comp, Expr* expr) {
     }
     if (end_jumps) free(end_jumps);
 
-    end_scope(comp, scope_start);
+    end_scope(comp, result_scope_start);
     emit_byte2(comp, OP_LOAD_LOCAL, (uint8_t)result_slot, line);
+    end_scope(comp, scope_start);
 }
 
 static void compile_if_expression(Compiler* comp, Expr* expr) {
@@ -9461,6 +9463,7 @@ static void compile_if_expression(Compiler* comp, Expr* expr) {
         return;
     }
     emit_byte2(comp, OP_STORE_LOCAL, (uint8_t)result_slot, line);
+    int result_scope_start = comp->function->local_count;
 
     compile_expression(comp, expr->if_expr.condition);
     int else_jump = emit_jump(comp, OP_JUMP_IF_FALSE, line);
@@ -9478,8 +9481,9 @@ static void compile_if_expression(Compiler* comp, Expr* expr) {
 
     patch_jump(comp, end_jump);
 
-    end_scope(comp, scope_start);
+    end_scope(comp, result_scope_start);
     emit_byte2(comp, OP_LOAD_LOCAL, (uint8_t)result_slot, line);
+    end_scope(comp, scope_start);
 }
 
 static void compile_block_expression(Compiler* comp, Expr* expr) {
@@ -9488,10 +9492,12 @@ static void compile_block_expression(Compiler* comp, Expr* expr) {
     comp->depth++;
     int scope_start = comp->function->local_count;
 
-    compile_statement_list_with_ir(comp,
-                                   expr->block_expr.statements,
-                                   expr->block_expr.stmt_count,
-                                   true);
+    // The trailing value expression can read locals defined by the prefix
+    // statements, so the statement/value boundary needs exact live-out
+    // semantics. Compile block-expression prefixes directly for correctness.
+    for (int i = 0; i < expr->block_expr.stmt_count; i++) {
+        compile_statement(comp, expr->block_expr.statements[i]);
+    }
 
     compile_expression(comp, expr->block_expr.value);
 

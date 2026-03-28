@@ -212,14 +212,34 @@ static char* try_resolve_import_via_vendor(ModuleLoader* loader, const char* imp
 
     const char* err = NULL;
     char* resolved = path_sandbox_resolve_alloc(loader->sandbox_root, joined, false, &err);
-    free(joined);
-    if (!resolved) return NULL;
+    if (!resolved) {
+        free(joined);
+        return NULL;
+    }
 
     if (!path_is_regular_file(resolved)) {
+        free(joined);
         free(resolved);
         return NULL;
     }
 
+    if (!path_is_absolute(loader->sandbox_root)) {
+#ifdef _WIN32
+        if (strchr(loader->sandbox_root, ':') == NULL)
+#else
+        if (1)
+#endif
+        {
+            char* relative = path_sandbox_join_alloc(loader->sandbox_root, joined, NULL);
+            if (relative) {
+                free(joined);
+                free(resolved);
+                return relative;
+            }
+        }
+    }
+
+    free(joined);
     return resolved;
 }
 
@@ -308,9 +328,9 @@ static char* resolve_import_path(ModuleLoader* loader, const char* importer_path
 
     const char* err = NULL;
     char* resolved = path_sandbox_resolve_alloc(root, joined, false, &err);
-    free(joined);
     if (!resolved) {
         char* via_vendor = try_resolve_import_via_vendor(loader, import_path);
+        free(joined);
         if (via_vendor) {
             return via_vendor;
         }
@@ -319,10 +339,27 @@ static char* resolve_import_path(ModuleLoader* loader, const char* importer_path
     }
 
     if (path_is_regular_file(resolved)) {
+        if (!path_is_absolute(root)) {
+#ifdef _WIN32
+            if (strchr(root, ':') == NULL)
+#else
+            if (1)
+#endif
+            {
+                char* relative = path_sandbox_join_alloc(root, joined, NULL);
+                if (relative) {
+                    free(joined);
+                    free(resolved);
+                    return relative;
+                }
+            }
+        }
+        free(joined);
         return resolved;
     }
 
     char* via_vendor = try_resolve_import_via_vendor(loader, import_path);
+    free(joined);
     if (via_vendor) {
         free(resolved);
         return via_vendor;
