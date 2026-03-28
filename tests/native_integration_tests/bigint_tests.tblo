@@ -1,0 +1,80 @@
+func factorial(n: bigint): bigint {
+    if (n <= 1) { return 1n; }
+    return n * factorial(n - 1);
+}
+
+func main(): void {
+    println(123456789012345678901234567890);
+    println(factorial(20n));
+    println(factorial(80n));
+    println(2n + 3);
+    println(5 - 7n);
+    println(10n * 20);
+    println(7n / 2);
+    println(7n % 2);
+    println(absBigInt(-123456789n));
+    println(signBigInt(-5n));
+    println(signBigInt(0n));
+    println(signBigInt(5n));
+    println(isEvenBigInt(42n));
+    println(isEvenBigInt(41n));
+    println(isOddBigInt(41n));
+    println(digitsBigInt(0n));
+    println(digitsBigInt(99999n));
+    println(powBigInt(2n, 10));
+    println(powBigInt(-2n, 3));
+    println(gcdBigInt(-48n, 18n));
+    println(lcmBigInt(6n, 8n));
+    println(lcmBigInt(0n, 5n));
+    println(modPowBigInt(2n, 10, 1000n));
+    println(modPowBigInt(5n, 0, 7n));
+    println(modPowBigInt(4n, 13n, 497n));
+    println(modInverseBigInt(3n, 11n));
+    println(modInverseBigInt(2n, 4n));
+    println(isProbablePrimeBigInt(17n, 5));
+    println(isProbablePrimeBigInt(21n, 5));
+    var p: bigint = 260383910998100473498476037532413900427n;
+    var q: bigint = 280658985323487611943463816561831840579n;
+    var n: bigint = 73079084255288185377376629892224228867340176860632755603664236481745844027233n;
+    var phi: bigint = 73079084255288185377376629892224228866799133964311167518222296627651598286228n;
+    var d: bigint = 4652119253445569821542263147693050991535865036530603947175235691755229382641n;
+    var m: bigint = 123456789012345678901234567890123456789n;
+    var c: bigint = modPowBigInt(m, 65537, n);
+    println(c);
+    println(modPowBigInt(c, d, n));
+    println(gcdBigInt(n, p));
+    println(digitsBigInt(n));
+    println(modInverseBigInt(65537n, phi));
+    println(isProbablePrimeBigInt(p, 8));
+    println(isProbablePrimeBigInt(n, 8));
+    println(compareBigInt(5n, 10n));
+    println(compareBigInt(7n, 7n));
+    println(compareBigInt(9n, 3n));
+    println(absCmpBigInt(-5n, 3n));
+    println(absCmpBigInt(-5n, 5n));
+    println(absCmpBigInt(2n, 10n));
+    println(clampBigInt(5n, 0n, 10n));
+    println(clampBigInt(15n, 0n, 10n));
+    println(clampBigInt(-5n, 0n, 10n));
+    println(clampBigInt(5n, 10n, 0n));
+    println(isZeroBigInt(0n));
+    println(isZeroBigInt(10n));
+    println(isNegativeBigInt(-1n));
+    println(isNegativeBigInt(0n));
+    println(toDouble(10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000n));
+    println(toDouble(-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000n));
+
+    // Hex literals and formatting helpers
+    println(typeOf(0x7fffffffffffffff));
+    println(typeOf(0x8000000000000000));
+    println(0xFFn);
+    println(0x0100n);
+    println(0xDEADBEEFn);
+    println(toBigInt("0xDEADBEEF").0);
+    println("0xdeadbeef" as bigint);
+    println(toHexBigInt(0n));
+    println(toHexBigInt(255n));
+    println(toHexBigInt(-255n));
+    println(toHexBigInt(0x0100n));
+    println(toHexBigInt(0xDEADBEEFn));
+}

@@ -1,0 +1,337 @@
+import "fixtures/http.tblo";
+
+func main(): void {
+    var valid_raw: map<string, any> = {
+        "status": 201,
+        "body": "created",
+        "headers": {
+            "Content-Type": "text/plain"
+        }
+    };
+
+    var decode_ok = httpClientDecodeResponseMap(valid_raw as any);
+    println(decode_ok.1 == nil);
+    if (decode_ok.1 == nil) {
+        println(decode_ok.0.status == 201);
+        println(decode_ok.0.body == "created");
+        println(mapCount(decode_ok.0.headers) >= 1);
+    }
+
+    var decode_nil = httpClientDecodeResponseMap(nil);
+    println(decode_nil.1 != nil);
+    if (decode_nil.1 != nil) {
+        println(decode_nil.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var decode_bad_status = httpClientDecodeResponseMap({
+        "status": "201",
+        "body": "ok",
+        "headers": {}
+    } as any);
+    println(decode_bad_status.1 != nil);
+    if (decode_bad_status.1 != nil) {
+        println(decode_bad_status.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var decode_bad_headers = httpClientDecodeResponseMap({
+        "status": 200,
+        "body": "ok",
+        "headers": 123
+    } as any);
+    println(decode_bad_headers.1 != nil);
+    if (decode_bad_headers.1 != nil) {
+        println(decode_bad_headers.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var copied = httpClientCopyHeaders({"A": "1", "B": "2"});
+    println(mapCount(copied) == 2);
+    println((mapGet(copied, "A") as string) == "1");
+
+    var copied_nil = httpClientCopyHeaders(nil);
+    println(mapCount(copied_nil) == 0);
+
+    var resp_ok: HttpClientResponse = {
+        status: 204,
+        headers: {},
+        body: ""
+    };
+    var expect_ok = httpClientExpect2xx(resp_ok);
+    println(expect_ok == nil);
+
+    var resp_fail: HttpClientResponse = {
+        status: 404,
+        headers: {"Content-Type": "text/plain"},
+        body: "Not Found"
+    };
+    var expect_fail = httpClientExpect2xx(resp_fail);
+    println(expect_fail != nil);
+    if (expect_fail != nil) {
+        println(expect_fail.code == ERR_HTTP);
+        if (expect_fail.data != nil && typeOf(expect_fail.data) == "map") {
+            var err_data: map<string, any> = expect_fail.data as map<string, any>;
+            println((mapGet(err_data, "status") as int) == 404);
+        }
+    }
+
+    var req_empty_method = httpClientRequest("", "http://example.com", nil, nil, 1000);
+    println(req_empty_method.1 != nil);
+    if (req_empty_method.1 != nil) {
+        println(req_empty_method.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_empty_url = httpClientRequest("GET", "", nil, nil, 1000);
+    println(req_empty_url.1 != nil);
+    if (req_empty_url.1 != nil) {
+        println(req_empty_url.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_bad_timeout = httpClientRequest("GET", "http://example.com", nil, nil, 0);
+    println(req_bad_timeout.1 != nil);
+    if (req_bad_timeout.1 != nil) {
+        println(req_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req2xx_bad_timeout = httpClientRequest2xx("GET", "http://example.com", nil, nil, 0);
+    println(req2xx_bad_timeout.1 != nil);
+    if (req2xx_bad_timeout.1 != nil) {
+        println(req2xx_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var get_bad_timeout = httpClientGet("http://example.com", nil, 0);
+    println(get_bad_timeout.1 != nil);
+    if (get_bad_timeout.1 != nil) {
+        println(get_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var post_bad_timeout = httpClientPost("http://example.com", "{}", nil, 0);
+    println(post_bad_timeout.1 != nil);
+    if (post_bad_timeout.1 != nil) {
+        println(post_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_default_bad_method = httpClientRequestDefault("", "http://example.com", nil, nil);
+    println(req_default_bad_method.1 != nil);
+    if (req_default_bad_method.1 != nil) {
+        println(req_default_bad_method.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var get_default_bad_url = httpClientGetDefault("", nil);
+    println(get_default_bad_url.1 != nil);
+    if (get_default_bad_url.1 != nil) {
+        println(get_default_bad_url.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var post_default_bad_url = httpClientPostDefault("", "{}", nil);
+    println(post_default_bad_url.1 != nil);
+    if (post_default_bad_url.1 != nil) {
+        println(post_default_bad_url.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var json_bad_timeout = httpClientGetJson("http://example.com", {"ok": "bool"} as any, nil, 0);
+    println(json_bad_timeout.1 != nil);
+    if (json_bad_timeout.1 != nil) {
+        println(json_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var json_encode_fail = httpClientRequestJson("POST",
+                                                 "http://example.com",
+                                                 (httpClientExpect2xx as any),
+                                                 {"ok": "bool"} as any,
+                                                 nil,
+                                                 1000);
+    println(json_encode_fail.1 != nil);
+    if (json_encode_fail.1 != nil) {
+        println(find(json_encode_fail.1.message, "failed to encode request JSON") >= 0);
+    }
+
+    var post_json_bad_timeout = httpClientPostJson("http://example.com",
+                                                   {"n": 1} as any,
+                                                   {"ok": "bool"} as any,
+                                                   nil,
+                                                   0);
+    println(post_json_bad_timeout.1 != nil);
+    if (post_json_bad_timeout.1 != nil) {
+        println(post_json_bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var https_req = httpClientRequest("GET", "https://nonexistent.invalid", nil, nil, 1000);
+    println(https_req.1 != nil);
+    if (https_req.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(https_req.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(https_req.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var https_stream = httpClientGetStream("https://nonexistent.invalid", nil, 1000);
+    println(https_stream.1 != nil);
+    if (https_stream.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(https_stream.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(https_stream.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var req_bad_options = httpClientRequestWithOptions("GET",
+                                                       "http://example.com",
+                                                       nil,
+                                                       nil,
+                                                       1000,
+                                                       {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(req_bad_options.1 != nil);
+    if (req_bad_options.1 != nil) {
+        println(req_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req2xx_bad_options = httpClientRequest2xxWithOptions("GET",
+                                                              "http://example.com",
+                                                              nil,
+                                                              nil,
+                                                              1000,
+                                                              {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(req2xx_bad_options.1 != nil);
+    if (req2xx_bad_options.1 != nil) {
+        println(req2xx_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_bad_keep_alive = httpClientRequestWithOptions("GET",
+                                                          "http://example.com",
+                                                          nil,
+                                                          nil,
+                                                          1000,
+                                                          {"keepAlive": "yes"} as map<string, any>);
+    println(req_bad_keep_alive.1 != nil);
+    if (req_bad_keep_alive.1 != nil) {
+        println(req_bad_keep_alive.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_bad_connection_pool = httpClientRequestWithOptions("GET",
+                                                               "http://example.com",
+                                                               nil,
+                                                               nil,
+                                                               1000,
+                                                               {"connectionPool": "yes"} as map<string, any>);
+    println(req_bad_connection_pool.1 != nil);
+    if (req_bad_connection_pool.1 != nil) {
+        println(req_bad_connection_pool.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var req_conflicting_pool_options = httpClientRequestWithOptions("GET",
+                                                                    "http://example.com",
+                                                                    nil,
+                                                                    nil,
+                                                                    1000,
+                                                                    {"keepAlive": true, "connectionPool": false} as map<string, any>);
+    println(req_conflicting_pool_options.1 != nil);
+    if (req_conflicting_pool_options.1 != nil) {
+        println(req_conflicting_pool_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var stream_bad_options = httpClientRequestStreamWithOptions("GET",
+                                                                "http://example.com",
+                                                                nil,
+                                                                nil,
+                                                                1000,
+                                                                {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(stream_bad_options.1 != nil);
+    if (stream_bad_options.1 != nil) {
+        println(stream_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var get_stream_bad_options = httpClientGetStreamWithOptions("http://example.com",
+                                                                nil,
+                                                                1000,
+                                                                {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(get_stream_bad_options.1 != nil);
+    if (get_stream_bad_options.1 != nil) {
+        println(get_stream_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var post_stream_bad_options = httpClientPostStreamWithOptions("http://example.com",
+                                                                  "{}",
+                                                                  nil,
+                                                                  1000,
+                                                                  {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(post_stream_bad_options.1 != nil);
+    if (post_stream_bad_options.1 != nil) {
+        println(post_stream_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var json_bad_options = httpClientRequestJsonWithOptions("GET",
+                                                            "http://example.com",
+                                                            nil,
+                                                            {"ok": "bool"} as any,
+                                                            nil,
+                                                            1000,
+                                                            {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(json_bad_options.1 != nil);
+    if (json_bad_options.1 != nil) {
+        println(json_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var get_json_bad_options = httpClientGetJsonWithOptions("http://example.com",
+                                                            {"ok": "bool"} as any,
+                                                            nil,
+                                                            1000,
+                                                            {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(get_json_bad_options.1 != nil);
+    if (get_json_bad_options.1 != nil) {
+        println(get_json_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var post_json_bad_options = httpClientPostJsonWithOptions("http://example.com",
+                                                              {"n": 1} as any,
+                                                              {"ok": "bool"} as any,
+                                                              nil,
+                                                              1000,
+                                                              {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(post_json_bad_options.1 != nil);
+    if (post_json_bad_options.1 != nil) {
+        println(post_json_bad_options.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var https_req_insecure = httpClientRequestWithOptions("GET",
+                                                          "https://nonexistent.invalid",
+                                                          nil,
+                                                          nil,
+                                                          1000,
+                                                          {"tlsInsecureSkipVerify": true} as map<string, any>);
+    println(https_req_insecure.1 != nil);
+    if (https_req_insecure.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(https_req_insecure.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(https_req_insecure.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var https_req2xx_insecure = httpClientRequest2xxWithOptions("GET",
+                                                                "https://nonexistent.invalid",
+                                                                nil,
+                                                                nil,
+                                                                1000,
+                                                                {"insecureSkipVerify": true} as map<string, any>);
+    println(https_req2xx_insecure.1 != nil);
+    if (https_req2xx_insecure.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(https_req2xx_insecure.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(https_req2xx_insecure.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var https_stream_insecure = httpClientGetStreamWithOptions("https://nonexistent.invalid",
+                                                               nil,
+                                                               1000,
+                                                               {"insecureSkipVerify": true} as map<string, any>);
+    println(https_stream_insecure.1 != nil);
+    if (https_stream_insecure.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(https_stream_insecure.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(https_stream_insecure.1.code == ERR_UNSUPPORTED);
+        }
+    }
+}

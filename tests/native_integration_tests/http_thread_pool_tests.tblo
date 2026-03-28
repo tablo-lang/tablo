@@ -1,0 +1,152 @@
+import "fixtures/http.tblo";
+
+func workerMiddleware(req: map<string, any>): map<string, any> {
+    mapSet(req, "_workerTag", "threaded");
+    return req;
+}
+
+func workerRouteOne(req: map<string, any>): map<string, any> {
+    var method: string = mapGet(req, "method") as string;
+    var path: string = mapGet(req, "path") as string;
+    var tag: string = mapGet(req, "_workerTag") as string;
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Worker": tag
+    };
+    return httpServerResponse(200, method + " " + path, headers);
+}
+
+func workerRouteTwo(req: map<string, any>): map<string, any> {
+    var method: string = mapGet(req, "method") as string;
+    var path: string = mapGet(req, "path") as string;
+    var body_any = mapGet(req, "body");
+    var body: string = "";
+    if (body_any != nil && typeOf(body_any) == "string") {
+        body = body_any as string;
+    }
+    var tag: string = mapGet(req, "_workerTag") as string;
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Worker": tag
+    };
+    return httpServerResponse(200, method + " " + path + " body=" + body, headers);
+}
+
+func workerRouteBoom(req: map<string, any>): any {
+    return nil;
+}
+
+func threadedWorker(): void {
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/one", workerRouteOne as any);
+    httpServerRoute(routes, "POST", "/two", workerRouteTwo as any);
+    httpServerRoute(routes, "GET", "/boom", workerRouteBoom as any);
+    var middleware: array<any> = [workerMiddleware as any];
+
+    var loop_r = httpServerWorkerServeLoop(routes, middleware, 5000);
+    if (loop_r.1 != nil) {
+        return;
+    }
+}
+
+func main(): void {
+    var ports: array<int> = [19201, 19202, 19203, 19204, 19205];
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+
+    foreach (p in ports) {
+        var s = httpServerStart("127.0.0.1", p, 120, 4096);
+        if (s.1 == nil) {
+            server = s.0;
+            started = true;
+            break;
+        }
+    }
+
+    println(started);
+    if (!started) {
+        return;
+    }
+
+    var c1 = tcpConnect("127.0.0.1", server.port);
+    var c2 = tcpConnect("127.0.0.1", server.port);
+    println(c1.1 == nil);
+    println(c2.1 == nil);
+
+    if (c1.1 == nil && c2.1 == nil) {
+        var client1 = c1.0;
+        var client2 = c2.0;
+
+        var send1 = tcpSend(client1, "GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        var send2 = tcpSend(client2, "POST /two HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabc");
+        println(send1.1 == nil);
+        println(send2.1 == nil);
+
+        var serve = httpServerServeThreadPool(server, "threadedWorker", 2, 2, 4);
+        println(serve.1 == nil);
+        if (serve.1 == nil) {
+            println(serve.0 == 2);
+        }
+
+        var recv1 = tcpReceive(client1, 4096);
+        var recv2 = tcpReceive(client2, 4096);
+        println(recv1.1 == nil);
+        println(recv2.1 == nil);
+        if (recv1.1 == nil) {
+            println(startsWith(recv1.0, "HTTP/1.1 200"));
+            println(find(recv1.0, "GET /one") >= 0);
+            println(find(recv1.0, "X-Worker: threaded") >= 0);
+        }
+        if (recv2.1 == nil) {
+            println(startsWith(recv2.0, "HTTP/1.1 200"));
+            println(find(recv2.0, "POST /two body=abc") >= 0);
+            println(find(recv2.0, "X-Worker: threaded") >= 0);
+        }
+
+        tcpClose(client1);
+        tcpClose(client2);
+    } else {
+        if (c1.1 == nil) {
+            tcpClose(c1.0);
+        }
+        if (c2.1 == nil) {
+            tcpClose(c2.0);
+        }
+    }
+
+    var c3 = tcpConnect("127.0.0.1", server.port);
+    println(c3.1 == nil);
+    if (c3.1 == nil) {
+        var client3 = c3.0;
+        var send3 = tcpSend(client3, "GET /boom HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send3.1 == nil);
+
+        var serve_err = httpServerServeThreadPool(server, "threadedWorker", 1, 1, 2);
+        println(serve_err.1 == nil);
+        if (serve_err.1 == nil) {
+            println(serve_err.0 == 1);
+        }
+
+        var recv3 = tcpReceive(client3, 4096);
+        println(recv3.1 == nil);
+        if (recv3.1 == nil) {
+            println(startsWith(recv3.0, "HTTP/1.1 500"));
+            println(find(recv3.0, "route handler returned nil") >= 0);
+        }
+        tcpClose(client3);
+    }
+
+    var bad_workers = httpServerServeThreadPool(server, "threadedWorker", 1, 0, 1);
+    println(bad_workers.1 != nil);
+    if (bad_workers.1 != nil) {
+        println(bad_workers.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_worker_fn = httpServerServeThreadPool(server, "missingWorker", 1, 1, 1);
+    println(bad_worker_fn.1 != nil);
+    if (bad_worker_fn.1 != nil) {
+        println(bad_worker_fn.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    httpServerClose(server);
+}

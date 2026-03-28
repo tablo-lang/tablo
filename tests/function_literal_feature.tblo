@@ -1,0 +1,20 @@
+func main(): void {
+    var add = func(a: int, b: int): int {
+        return a + b;
+    };
+
+    var result: int = add(40, 2);
+    println("result=" + str(result));
+
+    var direct: int = (func(x: int): int {
+        return x * 2;
+    })(3);
+    println("direct=" + str(direct));
+
+    var base: int = 10;
+    var addBase = func(y: int): int {
+        return base + y;
+    };
+    base = 99;
+    println("capture=" + str(addBase(5)));
+}

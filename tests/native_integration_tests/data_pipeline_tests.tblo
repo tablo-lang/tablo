@@ -1,0 +1,39 @@
+func min_int(arr: array<int>): int {
+    var m: int = arr[0];
+    foreach (x in arr) {
+        if (x < m) { m = x; }
+    }
+    return m;
+}
+
+func max_int(arr: array<int>): int {
+    var m: int = arr[0];
+    foreach (x in arr) {
+        if (x > m) { m = x; }
+    }
+    return m;
+}
+
+func main() {
+    // Parse "raw" string inputs into numeric values.
+    var raw: array<string> = ["10", "5", "32", "-3"];
+    var nums: array<int> = [];
+    foreach (s in raw) {
+        push(nums, toInt(s));
+    }
+
+    println(nums);
+
+    // Compute summary stats.
+    var total: int = 0;
+    foreach (n in nums) {
+        total = total + n;
+    }
+    println(total);
+    println(min_int(nums));
+    println(max_int(nums));
+
+    var avg: double = (total as double) / (len(nums) as double);
+    println(avg);
+}
+

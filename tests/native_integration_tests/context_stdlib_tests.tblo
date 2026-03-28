@@ -1,0 +1,164 @@
+import "fixtures/context.tblo";
+import "fixtures/concurrency.tblo";
+
+func contextWorkerAwaitCancel(): bool {
+    var arg_r = syncThreadArgTyped("any");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var payload: map<string, any> = arg_r.0 as map<string, any>;
+    var ctx: Context = {
+        cancelStateId: mapGetString(payload, "cancelStateId") as int,
+        deadlineMs: mapGetString(payload, "deadlineMs") as int,
+        parent: nil
+    };
+    var outbox_id: int = mapGetString(payload, "outboxId") as int;
+
+    var i: int = 0;
+    while (i < 200000) {
+        if (contextDone(ctx)) {
+            var _send_ok = syncChannelSend(outbox_id, "done" as any, 1000);
+            return true;
+        }
+        i = i + 1;
+    }
+
+    var _send_timeout = syncChannelSend(outbox_id, "timeout" as any, 1000);
+    return false;
+}
+
+func main(): void {
+    var bg: Context = contextBackground();
+    println(!contextDone(bg));
+    println(contextErr(bg) == nil);
+    println(contextDeadlineMs(bg) == 0);
+
+    var c1 = contextWithCancel(bg);
+    println(c1.1 == nil);
+    if (c1.1 == nil) {
+        var ctx1: Context = c1.0;
+        println(!contextDone(ctx1));
+
+        var cancel1 = contextCancel(ctx1, nil);
+        println(cancel1 == nil);
+        println(contextDone(ctx1));
+
+        var err1 = contextErr(ctx1);
+        println(err1 != nil);
+        if (err1 != nil) {
+            println(err1.code == ERR_LIMIT);
+        } else {
+            println(false);
+        }
+
+        var cancel_again = contextCancel(ctx1, nil);
+        println(cancel_again == nil);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var t1 = contextWithTimeoutMs(bg, 0);
+    println(t1.1 == nil);
+    if (t1.1 == nil) {
+        var timeout_ctx: Context = t1.0;
+        println(contextDone(timeout_ctx));
+        var timeout_err = contextErr(timeout_ctx);
+        println(timeout_err != nil);
+        if (timeout_err != nil) {
+            println(find(timeout_err.message, "deadline") >= 0);
+        } else {
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var parent_r = contextWithCancel(bg);
+    println(parent_r.1 == nil);
+    if (parent_r.1 == nil) {
+        var parent_ctx: Context = parent_r.0;
+        var child_r = contextWithCancel(parent_ctx);
+        println(child_r.1 == nil);
+        if (child_r.1 == nil) {
+            var child_ctx: Context = child_r.0;
+            var parent_cancel = contextCancel(parent_ctx, nil);
+            println(parent_cancel == nil);
+            println(contextDone(child_ctx));
+            println(contextErr(child_ctx) != nil);
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var outbox = concurrencyChannelOpen(4);
+    println(outbox.1 == nil);
+    if (outbox.1 == nil) {
+        var worker_ctx_r = contextWithCancel(bg);
+        var worker_ctx: Context = bg;
+        if (worker_ctx_r.1 == nil) {
+            worker_ctx = worker_ctx_r.0;
+        }
+
+        var spawn = syncThreadSpawnTyped("contextWorkerAwaitCancel",
+                                         {
+                                             "cancelStateId": worker_ctx.cancelStateId,
+                                             "deadlineMs": worker_ctx.deadlineMs,
+                                             "outboxId": outbox.0.id
+                                         } as any,
+                                         "any",
+                                         -1,
+                                         -1);
+        println(spawn.1 == nil);
+        if (spawn.1 == nil) {
+            var cancel_worker = contextCancel(worker_ctx, nil);
+            println(cancel_worker == nil);
+
+            var recv_r = concurrencyChannelRecv(outbox.0, 5000);
+            println(recv_r.1 == nil);
+            if (recv_r.1 == nil) {
+                println((recv_r.0 as string) == "done");
+            } else {
+                println(false);
+            }
+
+            var join_r = syncThreadJoinTyped(spawn.0 as int, "bool", 5000);
+            println(join_r.1 == nil);
+            if (join_r.1 == nil) {
+                println(join_r.0 as bool);
+            } else {
+                println(false);
+            }
+        } else {
+            println(false);
+            println(false);
+            println(false);
+            println(false);
+            println(false);
+        }
+
+        var outbox_closed = concurrencyChannelClose(outbox.0);
+        println(outbox_closed.1 == nil);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+}

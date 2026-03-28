@@ -1,0 +1,230 @@
+// Pool stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_pool_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_pool_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/pool.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchPoolAcquireReleaseHot(iters: int): void {
+    var opened = poolNew(64, 128);
+    if (opened.1 != nil) {
+        println("perf poolAcquireReleaseHot: setup failed");
+        return;
+    }
+    var store: PoolStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var ac_w = poolAcquire(store, {"n": w} as any);
+        store = ac_w.0;
+        if (ac_w.3 != nil) {
+            println("perf poolAcquireReleaseHot: warm acquire failed");
+            return;
+        }
+        sink = sink + ac_w.1.id;
+
+        var rel_w = poolRelease(store, ac_w.1, ac_w.1.value);
+        store = rel_w.0;
+        if (rel_w.2 != nil) {
+            println("perf poolAcquireReleaseHot: warm release failed");
+            return;
+        }
+        if (rel_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var ac_i = poolAcquire(store, {"n": i} as any);
+        store = ac_i.0;
+        if (ac_i.3 != nil) {
+            println("perf poolAcquireReleaseHot: acquire failed");
+            return;
+        }
+        sink = sink + ac_i.1.id;
+
+        var rel_i = poolRelease(store, ac_i.1, ac_i.1.value);
+        store = rel_i.0;
+        if (rel_i.2 != nil) {
+            println("perf poolAcquireReleaseHot: release failed");
+            return;
+        }
+        if (rel_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf poolAcquireReleaseHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchPoolAcquireExhaust(iters: int): void {
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var opened_w = poolNew(0, 64);
+        if (opened_w.1 != nil) {
+            println("perf poolAcquireExhaust: warm setup failed");
+            return;
+        }
+        var store_w: PoolStore = opened_w.0;
+        var k: int = 0;
+        while (k < 64) {
+            var ac_fill = poolAcquire(store_w, k as any);
+            store_w = ac_fill.0;
+            if (ac_fill.3 != nil) {
+                println("perf poolAcquireExhaust: warm fill failed");
+                return;
+            }
+            k = k + 1;
+        }
+        var ac_ex = poolAcquire(store_w, 999 as any);
+        store_w = ac_ex.0;
+        if (ac_ex.3 != nil) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var opened_i = poolNew(0, 64);
+        if (opened_i.1 != nil) {
+            println("perf poolAcquireExhaust: setup failed");
+            return;
+        }
+        var store_i: PoolStore = opened_i.0;
+        var j: int = 0;
+        while (j < 64) {
+            var ac_fill2 = poolAcquire(store_i, j as any);
+            store_i = ac_fill2.0;
+            if (ac_fill2.3 != nil) {
+                println("perf poolAcquireExhaust: fill failed");
+                return;
+            }
+            j = j + 1;
+        }
+        var ac_ex2 = poolAcquire(store_i, 999 as any);
+        store_i = ac_ex2.0;
+        if (ac_ex2.3 != nil) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf poolAcquireExhaust", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchPoolReleaseTyped(iters: int): void {
+    var opened = poolNew(32, 64);
+    if (opened.1 != nil) {
+        println("perf poolReleaseTyped: setup failed");
+        return;
+    }
+    var store: PoolStore = opened.0;
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var ac_w = poolAcquireTyped(store, {"id": w, "name": "u"} as any, schema as any);
+        store = ac_w.0;
+        if (ac_w.3 != nil) {
+            println("perf poolReleaseTyped: warm acquire failed");
+            return;
+        }
+        var rel_w = poolReleaseTyped(store, ac_w.1, {"id": w, "name": "u"} as any, schema as any);
+        store = rel_w.0;
+        if (rel_w.2 != nil) {
+            println("perf poolReleaseTyped: warm release failed");
+            return;
+        }
+        if (rel_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var ac_i = poolAcquireTyped(store, {"id": i, "name": "u"} as any, schema as any);
+        store = ac_i.0;
+        if (ac_i.3 != nil) {
+            println("perf poolReleaseTyped: acquire failed");
+            return;
+        }
+        var rel_i = poolReleaseTyped(store, ac_i.1, {"id": i, "name": "u"} as any, schema as any);
+        store = rel_i.0;
+        if (rel_i.2 != nil) {
+            println("perf poolReleaseTyped: release failed");
+            return;
+        }
+        if (rel_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf poolReleaseTyped", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Pool Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchPoolAcquireReleaseHot(220000 * scale);
+    benchPoolAcquireExhaust(4000 * scale);
+    benchPoolReleaseTyped(140000 * scale);
+
+    println("Pool stdlib benchmark complete!");
+}

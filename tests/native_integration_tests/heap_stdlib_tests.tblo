@@ -1,0 +1,245 @@
+import "fixtures/heap.tblo";
+
+func main(): void {
+    var opened = heapNew(3);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+    var store: HeapStore = opened.0;
+
+    println(heapIsEmpty(store));
+    println(heapLen(store) == 0);
+
+    var bad_open = heapNew(-1);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var seed_items: array<HeapEntry> = [
+        { priority: 5, value: "five" as any },
+        { priority: 1, value: "one" as any },
+        { priority: 3, value: "three" as any }
+    ];
+    var seeded = heapNewWithSeed(5, seed_items);
+    println(seeded.1 == nil);
+    if (seeded.1 == nil) {
+        println(heapLen(seeded.0) == 3);
+        var sp = heapPeek(seeded.0);
+        println(sp.1);
+        if (sp.1) {
+            println(sp.0.priority == 1);
+            println((sp.0.value as string) == "one");
+        }
+
+        var s1 = heapPop(seeded.0);
+        var seeded_store: HeapStore = s1.0;
+        println(s1.2);
+        if (s1.2) {
+            println(s1.1.priority == 1);
+        }
+
+        var s2 = heapPop(seeded_store);
+        seeded_store = s2.0;
+        println(s2.2);
+        if (s2.2) {
+            println(s2.1.priority == 3);
+        }
+
+        var s3 = heapPop(seeded_store);
+        seeded_store = s3.0;
+        println(s3.2);
+        if (s3.2) {
+            println(s3.1.priority == 5);
+        }
+    }
+
+    var over_seeded = heapNewWithSeed(2, seed_items);
+    println(over_seeded.1 != nil);
+    if (over_seeded.1 != nil) {
+        println(over_seeded.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var p1 = heapPush(store, 20, "twenty" as any);
+    store = p1.0;
+    println(p1.1 == nil);
+
+    var p2 = heapPush(store, 10, "ten" as any);
+    store = p2.0;
+    println(p2.1 == nil);
+
+    var p3 = heapPush(store, 30, "thirty" as any);
+    store = p3.0;
+    println(p3.1 == nil);
+    println(heapLen(store) == 3);
+
+    var p4 = heapPush(store, 5, "five" as any);
+    store = p4.0;
+    println(p4.1 != nil);
+    if (p4.1 != nil) {
+        println(p4.1.code == ERR_LIMIT);
+    }
+
+    var pp = heapPeekPriority(store);
+    println(pp.1);
+    if (pp.1) {
+        println(pp.0 == 10);
+    }
+
+    var hp1 = heapPop(store);
+    store = hp1.0;
+    println(hp1.2);
+    if (hp1.2) {
+        println(hp1.1.priority == 10);
+        println((hp1.1.value as string) == "ten");
+    }
+
+    var hp2 = heapPop(store);
+    store = hp2.0;
+    println(hp2.2);
+    if (hp2.2) {
+        println(hp2.1.priority == 20);
+    }
+
+    var hp3 = heapPop(store);
+    store = hp3.0;
+    println(hp3.2);
+    if (hp3.2) {
+        println(hp3.1.priority == 30);
+    }
+
+    println(heapIsEmpty(store));
+
+    var bounded_open = heapNew(2);
+    println(bounded_open.1 == nil);
+    if (bounded_open.1 == nil) {
+        var bounded: HeapStore = bounded_open.0;
+
+        var b1 = heapPush(bounded, 1, "a" as any);
+        bounded = b1.0;
+        println(b1.1 == nil);
+
+        var b2 = heapPush(bounded, 3, "c" as any);
+        bounded = b2.0;
+        println(b2.1 == nil);
+
+        var tb = heapTryPush(bounded, 2, "b" as any);
+        bounded = tb.0;
+        println(!tb.1);
+
+        var keep1 = heapPushKeepHighest(bounded, 2, "b2" as any);
+        bounded = keep1.0;
+        println(keep1.1);
+
+        var keep2 = heapPushKeepHighest(bounded, 1, "b1" as any);
+        bounded = keep2.0;
+        println(!keep2.1);
+
+        var bst = heapStats(bounded);
+        println(bst.size == 2);
+        println(bst.minPriority == 2);
+        println(bst.droppedCount == 3);
+
+        var bp1 = heapPop(bounded);
+        bounded = bp1.0;
+        println(bp1.2);
+        if (bp1.2) {
+            println(bp1.1.priority == 2);
+        }
+
+        var bp2 = heapPop(bounded);
+        bounded = bp2.0;
+        println(bp2.2);
+        if (bp2.2) {
+            println(bp2.1.priority == 3);
+        }
+    }
+
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+
+    var typed_open = heapNew(4);
+    println(typed_open.1 == nil);
+    if (typed_open.1 == nil) {
+        var typed: HeapStore = typed_open.0;
+
+        var tp1 = heapPushTyped(typed, 5, {"id": 1, "name": "alice"} as any, schema as any);
+        typed = tp1.0;
+        println(tp1.1 == nil);
+
+        var tp_bad = heapPushTyped(typed, 4, {"id": "oops", "name": "bad"} as any, schema as any);
+        typed = tp_bad.0;
+        println(tp_bad.1 != nil);
+        if (tp_bad.1 != nil) {
+            println(tp_bad.1.code == ERR_PARSE);
+        }
+
+        var raw_bad = heapPush(typed, 1, {"id": "x", "name": "raw"} as any);
+        typed = raw_bad.0;
+        println(raw_bad.1 == nil);
+
+        var pt_fail = heapPopTyped(typed, schema as any);
+        typed = pt_fail.0;
+        println(pt_fail.4 != nil);
+        if (pt_fail.4 != nil) {
+            println(pt_fail.4.code == ERR_PARSE);
+        }
+        println(!pt_fail.3);
+        println(heapLen(typed) == 2);
+
+        var raw_pop = heapPop(typed);
+        typed = raw_pop.0;
+        println(raw_pop.2);
+        if (raw_pop.2) {
+            println(raw_pop.1.priority == 1);
+            var raw_map: map<string, any> = raw_pop.1.value as map<string, any>;
+            println((mapGetString(raw_map, "id") as string) == "x");
+        }
+
+        var pt_ok = heapPopTyped(typed, schema as any);
+        typed = pt_ok.0;
+        println(pt_ok.4 == nil);
+        println(pt_ok.3);
+        if (pt_ok.3) {
+            println(pt_ok.2 == 5);
+            var row: map<string, any> = pt_ok.1 as map<string, any>;
+            println((mapGetString(row, "id") as int) == 1);
+        }
+
+        var cleared_t = heapClear(typed);
+        typed = cleared_t.0;
+        println(cleared_t.1 == 0);
+        println(heapIsEmpty(typed));
+    }
+
+    var items_open = heapNew(0);
+    println(items_open.1 == nil);
+    if (items_open.1 == nil) {
+        var i_store: HeapStore = items_open.0;
+
+        var i1 = heapPush(i_store, 7, "x" as any);
+        i_store = i1.0;
+        println(i1.1 == nil);
+
+        var i2 = heapPush(i_store, 2, "y" as any);
+        i_store = i2.0;
+        println(i2.1 == nil);
+
+        var i3 = heapPush(i_store, 9, "z" as any);
+        i_store = i3.0;
+        println(i3.1 == nil);
+
+        var entries: array<HeapEntry> = heapItems(i_store);
+        println(len(entries) == 3);
+        println(entries[0].priority == 2);
+
+        var st2: HeapStats = heapStats(i_store);
+        println(st2.size == 3);
+        println(st2.maxSize == 0);
+        println(st2.pushedCount == 3);
+        println(st2.poppedCount == 0);
+    }
+}

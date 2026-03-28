@@ -1,0 +1,143 @@
+func main(): void {
+    var r1 = httpRequest("GET", "https://nonexistent.invalid", nil, nil, 1000);
+    println(r1.1 != nil);
+    if (r1.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(r1.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(r1.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var r2 = httpRequest("GET", "http://example.com", nil, nil, 0);
+    println(r2.1 != nil);
+    if (r2.1 != nil) {
+        println(r2.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r3 = httpRequest("GE1", "http://example.com", nil, nil, 1000);
+    println(r3.1 != nil);
+    if (r3.1 != nil) {
+        println(r3.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var badBody: any = 123;
+    var r4 = httpRequest("POST", "http://example.com", badBody, nil, 1000);
+    println(r4.1 != nil);
+    if (r4.1 != nil) {
+        println(r4.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var badHeaders: any = [1, 2];
+    var r5 = httpRequest("GET", "http://example.com", nil, badHeaders, 1000);
+    println(r5.1 != nil);
+    if (r5.1 != nil) {
+        println(r5.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r6 = httpRequestHead("GET", "https://nonexistent.invalid", nil, nil, 1000);
+    println(r6.1 != nil);
+    if (r6.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(r6.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(r6.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var r7 = httpRequestWithOptions("GET",
+                                    "http://example.com",
+                                    nil,
+                                    nil,
+                                    1000,
+                                    {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(r7.1 != nil);
+    if (r7.1 != nil) {
+        println(r7.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r8 = httpRequestHeadWithOptions("GET",
+                                        "http://example.com",
+                                        nil,
+                                        nil,
+                                        1000,
+                                        {"tlsInsecureSkipVerify": "yes"} as map<string, any>);
+    println(r8.1 != nil);
+    if (r8.1 != nil) {
+        println(r8.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r11 = httpRequestWithOptions("GET",
+                                     "http://example.com",
+                                     nil,
+                                     nil,
+                                     1000,
+                                     {"keepAlive": "yes"} as map<string, any>);
+    println(r11.1 != nil);
+    if (r11.1 != nil) {
+        println(r11.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r12 = httpRequestWithOptions("GET",
+                                     "http://example.com",
+                                     nil,
+                                     nil,
+                                     1000,
+                                     {"connectionPool": "yes"} as map<string, any>);
+    println(r12.1 != nil);
+    if (r12.1 != nil) {
+        println(r12.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r13 = httpRequestWithOptions("GET",
+                                     "http://example.com",
+                                     nil,
+                                     nil,
+                                     1000,
+                                     {"keepAlive": true, "connectionPool": false} as map<string, any>);
+    println(r13.1 != nil);
+    if (r13.1 != nil) {
+        println(r13.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r14 = httpRequestHeadWithOptions("GET",
+                                         "http://example.com",
+                                         nil,
+                                         nil,
+                                         1000,
+                                         {"keepAlive": true, "connectionPool": false} as map<string, any>);
+    println(r14.1 != nil);
+    if (r14.1 != nil) {
+        println(r14.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var r9 = httpRequestWithOptions("GET",
+                                    "https://nonexistent.invalid",
+                                    nil,
+                                    nil,
+                                    1000,
+                                    {"tlsInsecureSkipVerify": true} as map<string, any>);
+    println(r9.1 != nil);
+    if (r9.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(r9.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(r9.1.code == ERR_UNSUPPORTED);
+        }
+    }
+
+    var r10 = httpRequestHeadWithOptions("GET",
+                                         "https://nonexistent.invalid",
+                                         nil,
+                                         nil,
+                                         1000,
+                                         {"tlsInsecureSkipVerify": true} as map<string, any>);
+    println(r10.1 != nil);
+    if (r10.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(r10.1.code != ERR_UNSUPPORTED);
+        } else {
+            println(r10.1.code == ERR_UNSUPPORTED);
+        }
+    }
+}

@@ -1,0 +1,545 @@
+async func waitForPostedCounter(counter: Counter): int {
+    await asyncSleep(25);
+    return counterGet(counter);
+}
+
+func testExtensionArithmetic(): void {
+    if (extAdd(4, 9) != 13) {
+        panic("extAdd failed");
+    }
+    if (!extStartsWith("tablo", "ta")) {
+        panic("extStartsWith failed");
+    }
+    if (extScale(2.0, 2.5) != 5.0) {
+        panic("extScale failed");
+    }
+}
+
+func testExtensionCounter(): void {
+    var counter: Counter = counterNew(10);
+    if (counterGet(counter) != 10) {
+        panic("counterNew failed");
+    }
+    if (counterAdd(counter, 5) != 15) {
+        panic("counterAdd failed");
+    }
+    if (counterLabel(counter, "value=") != "value=15") {
+        panic("counterLabel failed");
+    }
+}
+
+func testExtensionArrays(): void {
+    var numbers = [1, 2, 3, 4];
+    if (extSumInts(numbers) != 10) {
+        panic("extSumInts failed");
+    }
+
+    var range = extMakeIntRange(7, 3);
+    if (range[0] != 7 || range[1] != 8 || range[2] != 9) {
+        panic("extMakeIntRange failed");
+    }
+
+    var counters = [counterNew(2), counterNew(5), counterNew(7)];
+    if (extSumCounters(counters) != 14) {
+        panic("extSumCounters failed");
+    }
+    if (counterAdd(counters[1], 10) != 15) {
+        panic("counterAdd array element mutation failed");
+    }
+    if (extSumCounters(counters) != 24) {
+        panic("extSumCounters did not observe handle mutation");
+    }
+
+    var parts = ["vm", "lang", "ext"];
+    if (extJoinStrings(parts, "-") != "vm-lang-ext") {
+        panic("extJoinStrings failed");
+    }
+}
+
+func testExtensionTuples(): void {
+    var swapped = extSwapPair((9, "units"));
+    if (swapped.0 != "units" || swapped.1 != 9) {
+        panic("extSwapPair failed");
+    }
+
+    var counter: Counter = counterNew(21);
+    var snapshot = extCounterSnapshotTuple(counter);
+    if (counterGet(snapshot.0) != 21) {
+        panic("extCounterSnapshotTuple did not return a usable Counter handle");
+    }
+    if (snapshot.1 != 21) {
+        panic("extCounterSnapshotTuple did not return the counter value");
+    }
+    if (counterAdd(snapshot.0, 4) != 25) {
+        panic("extCounterSnapshotTuple returned a broken Counter clone");
+    }
+    if (counterGet(counter) != 21) {
+        panic("extCounterSnapshotTuple unexpectedly aliased the original Counter");
+    }
+}
+
+func testExtensionMaps(): void {
+    var counter: Counter = counterNew(21);
+    var event = extMakeEventMap(counter, 7, "spawn");
+    var coords = mapGet(event, "coords") as (int, int);
+    var tags = mapGet(event, "tags") as array<string>;
+    var meta = mapGet(event, "meta") as map<string, any>;
+    var phases = mapGet(meta, "phases") as array<string>;
+
+    if ((mapGet(event, "label") as string) != "spawn") {
+        panic("extMakeEventMap did not preserve the string field");
+    }
+    if ((mapGet(event, "delta") as int) != 7) {
+        panic("extMakeEventMap did not preserve the int field");
+    }
+    if (!(mapGet(event, "active") as bool)) {
+        panic("extMakeEventMap did not preserve the bool field");
+    }
+    if (counterGet(mapGet(event, "counter") as Counter) != 21) {
+        panic("extMakeEventMap did not return a usable Counter handle field");
+    }
+    if (counterAdd(mapGet(event, "counter") as Counter, 4) != 25) {
+        panic("extMakeEventMap returned a broken Counter handle field");
+    }
+    if (counterGet(counter) != 21) {
+        panic("extMakeEventMap unexpectedly aliased the original Counter handle");
+    }
+    if (coords.0 != 7 || coords.1 != 21) {
+        panic("extMakeEventMap did not preserve the tuple field");
+    }
+    if (len(tags) != 2 || tags[0] != "native" || tags[1] != "event") {
+        panic("extMakeEventMap did not preserve the array field");
+    }
+    if ((mapGet(meta, "source") as string) != "native-ext") {
+        panic("extMakeEventMap did not preserve the nested map string field");
+    }
+    if ((mapGet(meta, "priority") as int) != 3) {
+        panic("extMakeEventMap did not preserve the nested map int field");
+    }
+    if (len(phases) != 2 || phases[0] != "create" || phases[1] != "dispatch") {
+        panic("extMakeEventMap did not preserve the nested map array field");
+    }
+    if (extSummarizeEventMap(event) != "spawn:32:7:2:true:native-ext:3:2") {
+        panic("extSummarizeEventMap failed");
+    }
+
+    var input_event = extMakeInputEvent("keyboard", 32, true);
+    var input_meta = mapGet(input_event, "meta") as map<string, any>;
+    if ((mapGet(input_event, "kind") as string) != "input" ||
+        (mapGet(input_event, "device") as string) != "keyboard" ||
+        (mapGet(input_event, "code") as int) != 32 ||
+        !(mapGet(input_event, "pressed") as bool) ||
+        (mapGet(input_meta, "source") as string) != "input" ||
+        extSummarizeInputEvent(input_event) != "input:keyboard:32:true:input:1:2") {
+        panic("input event presets failed");
+    }
+
+    var window_event = extMakeWindowEvent("resize", 1280, 720, true);
+    var window_meta = mapGet(window_event, "meta") as map<string, any>;
+    if ((mapGet(window_event, "kind") as string) != "window" ||
+        (mapGet(window_event, "event") as string) != "resize" ||
+        (mapGet(window_event, "width") as int) != 1280 ||
+        (mapGet(window_event, "height") as int) != 720 ||
+        !(mapGet(window_event, "focused") as bool) ||
+        (mapGet(window_meta, "source") as string) != "window" ||
+        extSummarizeWindowEvent(window_event) != "window:resize:1280:720:true:window:4:2") {
+        panic("window event presets failed");
+    }
+
+    var frame_event = extMakeFrameEvent("update", 60, 0.25);
+    var frame_meta = mapGet(frame_event, "meta") as map<string, any>;
+    if ((mapGet(frame_event, "kind") as string) != "frame" ||
+        (mapGet(frame_event, "phase") as string) != "update" ||
+        (mapGet(frame_event, "frame") as int) != 60 ||
+        (mapGet(frame_event, "dt") as double) != 0.25 ||
+        (mapGet(frame_meta, "source") as string) != "frame" ||
+        extSummarizeFrameEvent(frame_event) != "frame:update:60:0.250:frame:5:2") {
+        panic("frame event presets failed");
+    }
+}
+
+func testExtensionEventBatches(): void {
+    var batch = extMakeEventBatch(8);
+    if (len(batch) != 2) {
+        panic("extMakeEventBatch did not return two events");
+    }
+
+    var first = batch[0];
+    var second = batch[1];
+    var first_meta = mapGet(first, "meta") as map<string, any>;
+    var second_meta = mapGet(second, "meta") as map<string, any>;
+    var first_phases = mapGet(first_meta, "phases") as array<string>;
+    var second_phases = mapGet(second_meta, "phases") as array<string>;
+
+    if ((mapGet(first, "name") as string) != "down") {
+        panic("extMakeEventBatch did not preserve the first event name");
+    }
+    if ((mapGet(first, "delta") as int) != 8 || (mapGet(second, "delta") as int) != 9) {
+        panic("extMakeEventBatch did not preserve the event delta fields");
+    }
+    if ((mapGet(first_meta, "source") as string) != "batch") {
+        panic("extMakeEventBatch did not preserve the nested meta source");
+    }
+    if ((mapGet(second_meta, "priority") as int) != 2) {
+        panic("extMakeEventBatch did not preserve the nested meta priority");
+    }
+    if (len(first_phases) != 2 || first_phases[0] != "input" || first_phases[1] != "frame") {
+        panic("extMakeEventBatch did not preserve the first event phase list");
+    }
+    if (len(second_phases) != 2 || second_phases[0] != "input" || second_phases[1] != "frame") {
+        panic("extMakeEventBatch did not preserve the second event phase list");
+    }
+    if (extSummarizeEventBatch(batch) != "2:17:down:batch:2") {
+        panic("extSummarizeEventBatch failed");
+    }
+}
+
+func testExtensionCallbacks(): void {
+    var direct_offset = 4;
+    if (extInvokeIntCallback((func(value: int): int {
+        return direct_offset + value;
+    }), 6) != 10) {
+        panic("extInvokeIntCallback failed");
+    }
+
+    var offset = 5;
+    var stored: StoredIntCallback = extStoreIntCallback((func(value: int): int {
+        return offset + value;
+    }));
+    if (extInvokeStoredIntCallback(stored, 7) != 12) {
+        panic("extStoreIntCallback/extInvokeStoredIntCallback failed");
+    }
+
+    var prefix = "value=";
+    var counter: Counter = counterNew(12);
+    if (extInvokeCounterLabelCallback((func(current: Counter): string {
+        return counterLabel(current, prefix);
+    }), counter) != "value=12") {
+        panic("extInvokeCounterLabelCallback failed");
+    }
+
+    if (extInvokeArrayArgCallback((func(items: array<int>): int {
+        return items[0] + items[1] + items[2];
+    }), 6) != 21) {
+        panic("extInvokeArrayArgCallback failed");
+    }
+
+    var posted_counter: Counter = counterNew(100);
+    var worker: PostedIntCallbackWorker = extStartPostedIntCallbackWorker((func(delta: int): void {
+        counterAdd(posted_counter, delta);
+    }), 23, 1);
+    var wait_future = waitForPostedCounter(posted_counter);
+    while (!futureIsReady(wait_future)) {
+    }
+    if (futureGet(wait_future) != 123) {
+        panic("extStartPostedIntCallbackWorker did not drain queued callback events on the VM thread");
+    }
+    if (!extJoinPostedIntCallbackWorker(worker)) {
+        panic("extJoinPostedIntCallbackWorker failed");
+    }
+}
+
+func testExtensionCallbackResults(): void {
+    if (extInvokeArrayResultCallback((func(value: int): array<int> {
+        return [value, value + 1, value + 2];
+    }), 6) != 21) {
+        panic("extInvokeArrayResultCallback failed");
+    }
+
+    if (extInvokeTupleResultCallback((func(value: int): (int, string) {
+        return (value * 2, "units");
+    }), 6) != "12:units") {
+        panic("extInvokeTupleResultCallback failed");
+    }
+
+    if (extInvokeMapResultCallback((func(value: int): map<string, any> {
+        return {
+            "label": "tick",
+            "total": value + 5,
+            "coords": (value, value + 1),
+            "tags": ["native", "callback"],
+            "meta": {
+                "source": "callback",
+                "priority": value + 2,
+                "phases": ["map", "result"]
+            }
+        };
+    }), 7) != "tick:12:7:2:callback:9:2") {
+        panic("extInvokeMapResultCallback failed");
+    }
+}
+
+func testExtensionManualPostedCallbackPump(): void {
+    var manual_counter: Counter = counterNew(200);
+    if (!extSetPostedCallbackAutoDrain(false)) {
+        panic("extSetPostedCallbackAutoDrain should report the previous auto-drain state");
+    }
+
+    var worker: PostedIntCallbackWorker = extStartPostedIntCallbackWorker((func(delta: int): void {
+        counterAdd(manual_counter, delta);
+    }), 17, 1);
+    if (!extJoinPostedIntCallbackWorker(worker)) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extJoinPostedIntCallbackWorker failed in manual pump mode");
+    }
+
+    var delayed_observation = waitForPostedCounter(manual_counter);
+    while (!futureIsReady(delayed_observation)) {
+    }
+    if (futureGet(delayed_observation) != 200) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Manual pump mode still auto-drained queued callbacks during timer waits");
+    }
+    if (counterGet(manual_counter) != 200) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued callback drained before explicit manual pump");
+    }
+    if (extPostedCallbackPendingCount() != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued callback was not visible to the manual pump");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extDrainPostedCallbacks did not drain exactly one queued callback");
+    }
+    if (counterGet(manual_counter) != 217) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Manual pump did not invoke the queued callback");
+    }
+    if (extPostedCallbackPendingCount() != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Manual pump left queued callbacks behind");
+    }
+    if (extSetPostedCallbackAutoDrain(true)) {
+        panic("extSetPostedCallbackAutoDrain should report false after manual mode was enabled");
+    }
+}
+
+func testExtensionQueuedTupleCallbacks(): void {
+    var tuple_counter: Counter = counterNew(300);
+    var tuple_hits: Counter = counterNew(0);
+    if (!extSetPostedCallbackAutoDrain(false)) {
+        panic("Queued tuple callback test expected auto-drain to be enabled before switching to manual mode");
+    }
+
+    var worker: PostedTupleCallbackWorker = extStartPostedTupleCallbackWorker((func(event: (int, string)): void {
+        if (event.1 == "queued") {
+            counterAdd(tuple_counter, event.0);
+            counterAdd(tuple_hits, 1);
+        } else {
+            panic("Queued tuple callback did not preserve the string payload");
+        }
+    }), 19, "queued", 1);
+
+    if (!extJoinPostedTupleCallbackWorker(worker)) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extJoinPostedTupleCallbackWorker failed");
+    }
+    if (extPostedCallbackPendingCount() != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued tuple callback was not visible to the manual pump");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extDrainPostedCallbacks did not drain the queued tuple callback");
+    }
+    if (counterGet(tuple_counter) != 319) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued tuple callback did not preserve the integer payload");
+    }
+    if (counterGet(tuple_hits) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued tuple callback did not execute exactly once");
+    }
+    if (extPostedCallbackPendingCount() != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued tuple callback drain left pending work behind");
+    }
+    if (extSetPostedCallbackAutoDrain(true)) {
+        panic("Queued tuple callback test expected manual mode to report false when restoring auto-drain");
+    }
+}
+
+func testExtensionQueuedArrayCallbacks(): void {
+    var array_counter: Counter = counterNew(500);
+    var array_hits: Counter = counterNew(0);
+    var array_errors: Counter = counterNew(0);
+    if (!extSetPostedCallbackAutoDrain(false)) {
+        panic("Queued array callback test expected auto-drain to be enabled before switching to manual mode");
+    }
+
+    var worker: PostedArrayCallbackWorker = extStartPostedArrayCallbackWorker((func(items: array<int>): void {
+        if (len(items) == 3 && items[0] == 31 && items[1] == 32 && items[2] == 33) {
+            counterAdd(array_counter, items[0] + items[1] + items[2]);
+            counterAdd(array_hits, 1);
+        } else {
+            counterAdd(array_errors, 1);
+        }
+    }), 31, 1);
+
+    if (!extJoinPostedArrayCallbackWorker(worker)) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extJoinPostedArrayCallbackWorker failed");
+    }
+    if (extPostedCallbackPendingCount() != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued array callback was not visible to the manual pump");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extDrainPostedCallbacks did not drain the queued array callback");
+    }
+    if (counterGet(array_counter) != 596) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued array callback did not preserve the integer payload");
+    }
+    if (counterGet(array_hits) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued array callback did not execute exactly once");
+    }
+    if (counterGet(array_errors) != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued array callback did not preserve the array payload");
+    }
+    if (extPostedCallbackPendingCount() != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued array callback drain left pending work behind");
+    }
+    if (extSetPostedCallbackAutoDrain(true)) {
+        panic("Queued array callback test expected manual mode to report false when restoring auto-drain");
+    }
+}
+
+func testExtensionQueuedMapCallbacks(): void {
+    var map_counter: Counter = counterNew(400);
+    var map_hits: Counter = counterNew(0);
+    if (!extSetPostedCallbackAutoDrain(false)) {
+        panic("Queued map callback test expected auto-drain to be enabled before switching to manual mode");
+    }
+
+    var worker: PostedMapCallbackWorker = extStartPostedMapCallbackWorker((func(event: map<string, any>): void {
+        var coords = mapGet(event, "coords") as (int, int);
+        var tags = mapGet(event, "tags") as array<string>;
+        var meta = mapGet(event, "meta") as map<string, any>;
+        var phases = mapGet(meta, "phases") as array<string>;
+        if ((mapGet(event, "label") as string) != "queued-map") {
+            panic("Queued map callback did not preserve the string field");
+        }
+        if (!(mapGet(event, "active") as bool)) {
+            panic("Queued map callback did not preserve the bool field");
+        }
+        if (coords.0 != 29 || coords.1 != 30) {
+            panic("Queued map callback did not preserve the tuple field");
+        }
+        if (len(tags) != 2 || tags[0] != "native" || tags[1] != "queued-map") {
+            panic("Queued map callback did not preserve the array field");
+        }
+        if ((mapGet(meta, "source") as string) != "worker") {
+            panic("Queued map callback did not preserve the nested map string field");
+        }
+        if ((mapGet(meta, "priority") as int) != 2) {
+            panic("Queued map callback did not preserve the nested map int field");
+        }
+        if (len(phases) != 2 || phases[0] != "thread" || phases[1] != "queue") {
+            panic("Queued map callback did not preserve the nested map array field");
+        }
+        counterAdd(map_counter, mapGet(event, "delta") as int);
+        counterAdd(map_hits, 1);
+    }), 29, "queued-map", 1);
+
+    if (!extJoinPostedMapCallbackWorker(worker)) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extJoinPostedMapCallbackWorker failed");
+    }
+    if (extPostedCallbackPendingCount() != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued map callback was not visible to the manual pump");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extDrainPostedCallbacks did not drain the queued map callback");
+    }
+    if (counterGet(map_counter) != 429) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued map callback did not preserve the integer payload");
+    }
+    if (counterGet(map_hits) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued map callback did not execute exactly once");
+    }
+    if (extPostedCallbackPendingCount() != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued map callback drain left pending work behind");
+    }
+    if (extSetPostedCallbackAutoDrain(true)) {
+        panic("Queued map callback test expected manual mode to report false when restoring auto-drain");
+    }
+}
+
+func testExtensionQueuedEventBatchCallbacks(): void {
+    var event_batch_counter: Counter = counterNew(600);
+    var event_batch_hits: Counter = counterNew(0);
+    var event_batch_errors: Counter = counterNew(0);
+    if (!extSetPostedCallbackAutoDrain(false)) {
+        panic("Queued event batch callback test expected auto-drain to be enabled before switching to manual mode");
+    }
+
+    var worker: PostedEventBatchCallbackWorker = extStartPostedEventBatchCallbackWorker((func(events: array<map<string, any>>): void {
+        if (len(events) == 2 &&
+            extSummarizeEventBatch(events) == "2:83:down:batch:2" &&
+            ((mapGet(mapGet(events[0], "meta") as map<string, any>, "source") as string) == "batch")) {
+            counterAdd(event_batch_counter, (mapGet(events[0], "delta") as int) + (mapGet(events[1], "delta") as int));
+            counterAdd(event_batch_hits, 1);
+        } else {
+            counterAdd(event_batch_errors, 1);
+        }
+    }), 41, 1);
+
+    if (!extJoinPostedEventBatchCallbackWorker(worker)) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extJoinPostedEventBatchCallbackWorker failed");
+    }
+    if (extPostedCallbackPendingCount() != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued event batch callback was not visible to the manual pump");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("extDrainPostedCallbacks did not drain the queued event batch callback");
+    }
+    if (counterGet(event_batch_counter) != 683) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued event batch callback did not preserve the batch totals");
+    }
+    if (counterGet(event_batch_hits) != 1) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued event batch callback did not execute exactly once");
+    }
+    if (counterGet(event_batch_errors) != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued event batch callback did not preserve the batch payload");
+    }
+    if (extPostedCallbackPendingCount() != 0) {
+        extSetPostedCallbackAutoDrain(true);
+        panic("Queued event batch callback drain left pending work behind");
+    }
+    if (extSetPostedCallbackAutoDrain(true)) {
+        panic("Queued event batch callback test expected manual mode to report false when restoring auto-drain");
+    }
+}
+
+func main(): void {
+    testExtensionArithmetic();
+    testExtensionCounter();
+    testExtensionArrays();
+    testExtensionTuples();
+    testExtensionMaps();
+    testExtensionEventBatches();
+    testExtensionCallbacks();
+    testExtensionCallbackResults();
+    testExtensionManualPostedCallbackPump();
+    testExtensionQueuedTupleCallbacks();
+    testExtensionQueuedArrayCallbacks();
+    testExtensionQueuedMapCallbacks();
+    testExtensionQueuedEventBatchCallbacks();
+}

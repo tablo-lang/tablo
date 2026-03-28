@@ -1,0 +1,224 @@
+import "fixtures/mathx.tblo";
+
+func approxEq(a: double, b: double, epsilon: double): bool {
+    return absDouble(a - b) <= epsilon;
+}
+
+func main(): void {
+    var samples: array<double> = [1.0, 2.0, 3.0, 4.0, 5.0];
+
+    println(approxEq(mathxSum(samples), 15.0, 0.000001));
+
+    var mn = mathxMin(samples);
+    println(mn.1 == nil);
+    if (mn.1 == nil) {
+        println(approxEq(mn.0, 1.0, 0.000001));
+    }
+
+    var mx = mathxMax(samples);
+    println(mx.1 == nil);
+    if (mx.1 == nil) {
+        println(approxEq(mx.0, 5.0, 0.000001));
+    }
+
+    var mean = mathxMean(samples);
+    println(mean.1 == nil);
+    if (mean.1 == nil) {
+        println(approxEq(mean.0, 3.0, 0.000001));
+    }
+
+    var summary = mathxSummary(samples);
+    println(summary.1 == nil);
+    if (summary.1 == nil) {
+        println(summary.0.count == 5);
+        println(approxEq(summary.0.sum, 15.0, 0.000001));
+        println(approxEq(summary.0.min, 1.0, 0.000001));
+        println(approxEq(summary.0.max, 5.0, 0.000001));
+        println(approxEq(summary.0.mean, 3.0, 0.000001));
+    }
+
+    var variance = mathxVariance(samples);
+    println(variance.1 == nil);
+    if (variance.1 == nil) {
+        println(approxEq(variance.0.population, 2.0, 0.000001));
+        println(approxEq(variance.0.sample, 2.5, 0.000001));
+    }
+
+    var stddev = mathxStdDev(samples);
+    println(stddev.1 == nil);
+    if (stddev.1 == nil) {
+        println(approxEq(stddev.0.population, 1.41421356, 0.00001));
+        println(approxEq(stddev.0.sample, 1.58113883, 0.00001));
+    }
+
+    var median = mathxMedian(samples);
+    println(median.1 == nil);
+    if (median.1 == nil) {
+        println(approxEq(median.0, 3.0, 0.000001));
+    }
+
+    var p0 = mathxPercentile(samples, 0.0);
+    println(p0.1 == nil);
+    if (p0.1 == nil) {
+        println(approxEq(p0.0, 1.0, 0.000001));
+    }
+
+    var p90 = mathxPercentile(samples, 90.0);
+    println(p90.1 == nil);
+    if (p90.1 == nil) {
+        println(approxEq(p90.0, 4.6, 0.000001));
+    }
+
+    var p100 = mathxPercentile(samples, 100.0);
+    println(p100.1 == nil);
+    if (p100.1 == nil) {
+        println(approxEq(p100.0, 5.0, 0.000001));
+    }
+
+    var p_bad = mathxPercentile(samples, 101.0);
+    println(p_bad.1 != nil);
+    if (p_bad.1 != nil) {
+        println(p_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var single: array<double> = [42.0];
+    var sv = mathxVariance(single);
+    println(sv.1 == nil);
+    if (sv.1 == nil) {
+        println(approxEq(sv.0.population, 0.0, 0.000001));
+        println(approxEq(sv.0.sample, 0.0, 0.000001));
+    }
+
+    var ss = mathxStdDev(single);
+    println(ss.1 == nil);
+    if (ss.1 == nil) {
+        println(approxEq(ss.0.population, 0.0, 0.000001));
+        println(approxEq(ss.0.sample, 0.0, 0.000001));
+    }
+
+    var empty: array<double> = [];
+    var empty_mean = mathxMean(empty);
+    println(empty_mean.1 != nil);
+    if (empty_mean.1 != nil) {
+        println(empty_mean.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var empty_summary = mathxSummary(empty);
+    println(empty_summary.1 != nil);
+    if (empty_summary.1 != nil) {
+        println(empty_summary.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var hist = mathxHistogram(samples, 4, 1.0, 5.0);
+    println(hist.1 == nil);
+    if (hist.1 == nil) {
+        println(len(hist.0) == 4);
+        println(hist.0[0] == 1);
+        println(hist.0[1] == 1);
+        println(hist.0[2] == 1);
+        println(hist.0[3] == 2);
+    }
+
+    var hist_bad_buckets = mathxHistogram(samples, 0, 0.0, 10.0);
+    println(hist_bad_buckets.1 != nil);
+    if (hist_bad_buckets.1 != nil) {
+        println(hist_bad_buckets.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var hist_bad_range = mathxHistogram(samples, 4, 3.0, 3.0);
+    println(hist_bad_range.1 != nil);
+    if (hist_bad_range.1 != nil) {
+        println(hist_bad_range.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var auto_values: array<double> = [2.0, 2.0, 2.0, 2.0];
+    var auto_hist = mathxHistogramAuto(auto_values, 3);
+    println(auto_hist.3 == nil);
+    if (auto_hist.3 == nil) {
+        println(len(auto_hist.0) == 3);
+        println(approxEq(auto_hist.1, 1.5, 0.000001));
+        println(approxEq(auto_hist.2, 2.5, 0.000001));
+        println((auto_hist.0[0] + auto_hist.0[1] + auto_hist.0[2]) == 4);
+    }
+
+    var rw_bad = mathxRollingNew(0);
+    println(rw_bad.1 != nil);
+    if (rw_bad.1 != nil) {
+        println(rw_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var rw_new = mathxRollingNew(3);
+    println(rw_new.1 == nil);
+    if (rw_new.1 == nil) {
+        var window: MathxRollingWindow = rw_new.0;
+
+        var empty_rm = mathxRollingMean(window);
+        println(empty_rm.1 != nil);
+        if (empty_rm.1 != nil) {
+            println(empty_rm.1.code == ERR_INVALID_ARGUMENT);
+        }
+
+        window = mathxRollingPush(window, 10.0);
+        window = mathxRollingPush(window, 20.0);
+        window = mathxRollingPush(window, 30.0);
+
+        println(mathxRollingCount(window) == 3);
+
+        var snap1: array<double> = mathxRollingSnapshot(window);
+        println(len(snap1) == 3);
+        println(approxEq(snap1[0], 10.0, 0.000001));
+        println(approxEq(snap1[1], 20.0, 0.000001));
+        println(approxEq(snap1[2], 30.0, 0.000001));
+
+        var mean1 = mathxRollingMean(window);
+        println(mean1.1 == nil);
+        if (mean1.1 == nil) {
+            println(approxEq(mean1.0, 20.0, 0.000001));
+        }
+
+        var minmax1 = mathxRollingMinMax(window);
+        println(minmax1.2 == nil);
+        if (minmax1.2 == nil) {
+            println(approxEq(minmax1.0, 10.0, 0.000001));
+            println(approxEq(minmax1.1, 30.0, 0.000001));
+        }
+
+        var stats1 = mathxRollingStats(window);
+        println(stats1.1 == nil);
+        if (stats1.1 == nil) {
+            println(stats1.0.count == 3);
+            println(stats1.0.maxSize == 3);
+            println(approxEq(stats1.0.sum, 60.0, 0.000001));
+            println(approxEq(stats1.0.mean, 20.0, 0.000001));
+            println(approxEq(stats1.0.min, 10.0, 0.000001));
+            println(approxEq(stats1.0.max, 30.0, 0.000001));
+        }
+
+        window = mathxRollingPush(window, 40.0);
+        var snap2: array<double> = mathxRollingSnapshot(window);
+        println(len(snap2) == 3);
+        println(approxEq(snap2[0], 20.0, 0.000001));
+        println(approxEq(snap2[1], 30.0, 0.000001));
+        println(approxEq(snap2[2], 40.0, 0.000001));
+
+        window = mathxRollingPush(window, -5.0);
+        var snap3: array<double> = mathxRollingSnapshot(window);
+        println(len(snap3) == 3);
+        println(approxEq(snap3[0], 30.0, 0.000001));
+        println(approxEq(snap3[1], 40.0, 0.000001));
+        println(approxEq(snap3[2], -5.0, 0.000001));
+
+        var mean3 = mathxRollingMean(window);
+        println(mean3.1 == nil);
+        if (mean3.1 == nil) {
+            println(approxEq(mean3.0, 21.666666, 0.00001));
+        }
+
+        var minmax3 = mathxRollingMinMax(window);
+        println(minmax3.2 == nil);
+        if (minmax3.2 == nil) {
+            println(approxEq(minmax3.0, -5.0, 0.000001));
+            println(approxEq(minmax3.1, 40.0, 0.000001));
+        }
+    }
+}

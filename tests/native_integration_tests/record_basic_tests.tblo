@@ -1,0 +1,51 @@
+// Record Basic Tests - Tests basic record declaration and usage
+
+record Point {
+    x: int;
+    y: int
+}
+
+record Person {
+    name: string;
+    age: int
+}
+
+func main() {
+    // Test 1: Record declaration with int fields
+    var p: Point = { x: 10, y: 20 };
+    println(p.x);
+    println(p.y);
+
+    // Test 2: Record declaration with string and int fields
+    var person: Person = { name: "Alice", age: 30 };
+    println(person.name);
+    println(person.age);
+
+    // Test 3: Record field reassignment
+    p.x = 100;
+    p.y = 200;
+    // Compound assignment on record fields (net zero)
+    p.x += 1;
+    p.x -= 1;
+    p.y *= 2;
+    p.y /= 2;
+    println(p.x);
+    println(p.y);
+
+    // Test 4: Multiple record instances
+    var p1: Point = { x: 1, y: 2 };
+    var p2: Point = { x: 3, y: 4 };
+    println(p1.x + p2.x);
+    println(p1.y + p2.y);
+
+    // Test 5: Record in conditional
+    var origin: Point = { x: 0, y: 0 };
+    if (origin.x == 0 && origin.y == 0) {
+        println("At origin");
+    }
+
+    // Test 6: Record fields in expressions
+    var a: Point = { x: 5, y: 10 };
+    var sum: int = a.x + a.y;
+    println(sum);
+}

@@ -1,0 +1,169 @@
+// SemVer stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_semver_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_semver_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/semver.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchSemverParse(iters: int): void {
+    var a: string = "1.2.3";
+    var b: string = "2.4.6-alpha.3+build.20260217";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = a;
+        if ((w % 2) == 1) {
+            src_w = b;
+        }
+        var p_w = semverParse(src_w);
+        if (p_w.1 != nil) {
+            panic("benchSemverParse warmup failed: " + p_w.1.message);
+        }
+        sink = sink + p_w.0.major + p_w.0.minor + p_w.0.patch + len(p_w.0.prerelease) + len(p_w.0.build);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = a;
+        if ((i % 2) == 1) {
+            src = b;
+        }
+        var p = semverParse(src);
+        if (p.1 != nil) {
+            panic("benchSemverParse failed: " + p.1.message);
+        }
+        sink = sink + p.0.major + p.0.minor + p.0.patch + len(p.0.prerelease) + len(p.0.build);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf semverParse", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchSemverCompare(iters: int): void {
+    var left_a: string = "1.2.3-alpha.1";
+    var right_a: string = "1.2.3";
+    var left_b: string = "2.1.0";
+    var right_b: string = "2.0.9";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var c_w = semverCompare(left_a, right_a);
+        if ((w % 2) == 1) {
+            c_w = semverCompare(left_b, right_b);
+        }
+        if (c_w.1 != nil) {
+            panic("benchSemverCompare warmup failed: " + c_w.1.message);
+        }
+        sink = sink + c_w.0 + 2;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var c = semverCompare(left_a, right_a);
+        if ((i % 2) == 1) {
+            c = semverCompare(left_b, right_b);
+        }
+        if (c.1 != nil) {
+            panic("benchSemverCompare failed: " + c.1.message);
+        }
+        sink = sink + c.0 + 2;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf semverCompare", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchSemverSatisfies(iters: int): void {
+    var version_a: string = "1.5.2";
+    var constraint_a: string = "^1.2.0";
+    var version_b: string = "2.0.1";
+    var constraint_b: string = "1.0.0 - 1.9.9 || ~2.0.0";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w = semverSatisfies(version_a, constraint_a);
+        if ((w % 2) == 1) {
+            s_w = semverSatisfies(version_b, constraint_b);
+        }
+        if (s_w.1 != nil) {
+            panic("benchSemverSatisfies warmup failed: " + s_w.1.message);
+        }
+        if (s_w.0) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s = semverSatisfies(version_a, constraint_a);
+        if ((i % 2) == 1) {
+            s = semverSatisfies(version_b, constraint_b);
+        }
+        if (s.1 != nil) {
+            panic("benchSemverSatisfies failed: " + s.1.message);
+        }
+        if (s.0) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf semverSatisfies", iters, start, end);
+    if (sink < 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang SemVer Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchSemverParse(120000 * scale);
+    benchSemverCompare(120000 * scale);
+    benchSemverSatisfies(90000 * scale);
+
+    println("SemVer stdlib benchmark complete!");
+}

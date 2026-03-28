@@ -1,0 +1,98 @@
+// Error handling tests: result tuples + postfix ? + must()
+
+func parseBigOrErr(text: string): (bigint, Error?) {
+    var n = toBigInt(text)?;
+    return (n, nil);
+}
+
+func deferOrder(): void {
+    println("defer-order-fn-start");
+    defer println("defer-1");
+    defer println("defer-2");
+    println("defer-order-fn-end");
+}
+
+func deferEval(): void {
+    var x = 1;
+    defer println(x);
+    x = 2;
+    defer println(x);
+}
+
+func deferTry(text: string): (bigint, Error?) {
+    defer println("defer-try-cleanup");
+    var n = toBigInt(text)?;
+    return (n, nil);
+}
+
+func main(): void {
+    println("try-ok");
+    var r1 = parseBigOrErr("123");
+    println(r1.0);
+    println(r1.1);
+
+    println("destructure-ok");
+    var (v1, e1) = parseBigOrErr("456");
+    println(v1);
+    println(e1 == nil);
+
+    println("destructure-err");
+    var (_, e2) = parseBigOrErr("12x");
+    println(e2 != nil);
+    if (e2 != nil) {
+        println(e2.code == ERR_PARSE);
+    }
+
+    println("try-err");
+    var r2 = parseBigOrErr("12x");
+    println(r2.1 != nil);
+    if (r2.1 != nil) {
+        println(r2.1.code);
+        println(r2.1.code == ERR_PARSE);
+        println(r2.1.data);
+    }
+
+    println("must-ok");
+    var n2 = must(toBigInt("7"));
+    println(n2);
+
+    println("json-err-data");
+    var jr = jsonParse("{\"a\":1");
+    println(jr.1.code == ERR_PARSE);
+    var jd = jr.1.data as map<string, any>;
+    println(mapGet(jd, "path"));
+    println(mapGet(jd, "offset"));
+    println(mapGet(jd, "line"));
+    println(mapGet(jd, "column"));
+    println(mapGet(jd, "near"));
+    var span = mapGet(jd, "span") as map<string, any>;
+    println(mapGet(span, "start"));
+    println(mapGet(span, "end"));
+
+    println("wrap-error");
+    var wnil = wrapError(nil, "ctx");
+    println(wnil == nil);
+
+    var r3 = toBigInt("12x");
+    var w = wrapError(r3.1, "parse input");
+    println(w != nil);
+    if (w != nil) {
+        println(w.code == ERR_PARSE);
+        println(w.message);
+        var cause = w.data as Error;
+        println(cause.code == w.code);
+        println(cause.message);
+    }
+
+    println("defer-order");
+    deferOrder();
+
+    println("defer-eval");
+    deferEval();
+
+    println("defer-try-ok");
+    deferTry("123");
+
+    println("defer-try-err");
+    deferTry("12x");
+}

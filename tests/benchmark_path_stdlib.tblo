@@ -1,0 +1,131 @@
+// Path stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_path_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_path_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/path.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchPathClean(iters: int): void {
+    var input: string = "C:\\srv\\app\\..\\logs\\.\\2026\\..\\service\\events.log";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w: string = pathClean(input);
+        sink = sink + len(out_w);
+        if (endsWith(out_w, "events.log")) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out: string = pathClean(input);
+        sink = sink + len(out);
+        if (endsWith(out, "events.log")) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf pathClean", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchPathJoin(iters: int): void {
+    var sink: int = 0;
+    var parts_a: array<string> = ["C:\\srv", "app", "bin", "..", "logs", "api.log"];
+    var parts_b: array<string> = ["var", "tmp", "vml", "..", "cache", "state.json"];
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w: string = pathJoin(parts_a);
+        if ((w % 2) == 1) {
+            out_w = pathJoin(parts_b);
+        }
+        sink = sink + len(out_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out: string = pathJoin(parts_a);
+        if ((i % 2) == 1) {
+            out = pathJoin(parts_b);
+        }
+        sink = sink + len(out);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf pathJoin", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchPathBaseDirExt(iters: int): void {
+    var input: string = "/srv/api/v1/archive/request.2026-02-16.json.gz";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        sink = sink + len(pathBase(input));
+        sink = sink + len(pathDir(input));
+        sink = sink + len(pathExt(input));
+        sink = sink + len(pathStem(input));
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        sink = sink + len(pathBase(input));
+        sink = sink + len(pathDir(input));
+        sink = sink + len(pathExt(input));
+        sink = sink + len(pathStem(input));
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf pathBaseDirExt", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Path Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchPathClean(120000 * scale);
+    benchPathJoin(100000 * scale);
+    benchPathBaseDirExt(60000 * scale);
+
+    println("Path stdlib benchmark complete!");
+}

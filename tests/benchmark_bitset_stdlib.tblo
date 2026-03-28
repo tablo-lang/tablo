@@ -1,0 +1,239 @@
+// Bitset stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_bitset_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_bitset_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/bitset.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func buildPattern(bit_length: int, step: int, offset: int): (BitsetStore, Error?) {
+    var opened = bitsetNew(bit_length);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    var store: BitsetStore = opened.0;
+    var i: int = offset;
+    while (i < bit_length) {
+        var set_r = bitsetSet(store, i);
+        store = set_r.0;
+        if (set_r.2 != nil) {
+            return (store, set_r.2);
+        }
+        i = i + step;
+    }
+
+    return (store, nil);
+}
+
+func benchBitsetSetHasHot(iters: int): void {
+    var opened = bitsetNew(200000);
+    if (opened.1 != nil) {
+        println("perf bitsetSetHasHot: setup failed");
+        return;
+    }
+    var store: BitsetStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var idx_w: int = (w * 13) % 200000;
+
+        var set_w = bitsetSet(store, idx_w);
+        store = set_w.0;
+        if (set_w.2 != nil) {
+            println("perf bitsetSetHasHot: warm set failed");
+            return;
+        }
+
+        var has_w = bitsetHas(store, idx_w);
+        if (has_w.1 != nil || !has_w.0) {
+            println("perf bitsetSetHasHot: warm has failed");
+            return;
+        }
+        sink = sink + 1;
+
+        var clear_w = bitsetClear(store, idx_w);
+        store = clear_w.0;
+        if (clear_w.2 != nil) {
+            println("perf bitsetSetHasHot: warm clear failed");
+            return;
+        }
+
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx_i: int = (i * 13) % 200000;
+
+        var set_i = bitsetSet(store, idx_i);
+        store = set_i.0;
+        if (set_i.2 != nil) {
+            println("perf bitsetSetHasHot: set failed");
+            return;
+        }
+
+        var has_i = bitsetHas(store, idx_i);
+        if (has_i.1 != nil || !has_i.0) {
+            println("perf bitsetSetHasHot: has failed");
+            return;
+        }
+        sink = sink + 1;
+
+        var clear_i = bitsetClear(store, idx_i);
+        store = clear_i.0;
+        if (clear_i.2 != nil) {
+            println("perf bitsetSetHasHot: clear failed");
+            return;
+        }
+
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bitsetSetHasHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchBitsetUnionCount(iters: int): void {
+    var left_r = buildPattern(120000, 3, 0);
+    var right_r = buildPattern(120000, 5, 1);
+    if (left_r.1 != nil || right_r.1 != nil) {
+        println("perf bitsetUnionCount: setup failed");
+        return;
+    }
+
+    var left: BitsetStore = left_r.0;
+    var right: BitsetStore = right_r.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var u_w = bitsetUnion(left, right);
+        if (u_w.1 != nil) {
+            println("perf bitsetUnionCount: warm union failed");
+            return;
+        }
+        sink = sink + bitsetCount(u_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var u_i = bitsetUnion(left, right);
+        if (u_i.1 != nil) {
+            println("perf bitsetUnionCount: union failed");
+            return;
+        }
+        sink = sink + bitsetCount(u_i.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bitsetUnionCount", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchBitsetRankSelect(iters: int): void {
+    var built = buildPattern(6000, 2, 0);
+    if (built.1 != nil) {
+        println("perf bitsetRankSelect: setup failed");
+        return;
+    }
+
+    var store: BitsetStore = built.0;
+    var total_set: int = bitsetCount(store);
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var idx_w: int = (w * 17) % 6001;
+        var rank_w = bitsetRank(store, idx_w);
+        if (rank_w.1 != nil) {
+            println("perf bitsetRankSelect: warm rank failed");
+            return;
+        }
+
+        var target_w: int = (w * 19) % total_set;
+        var sel_w = bitsetSelect(store, target_w);
+        if (sel_w.2 != nil || !sel_w.1) {
+            println("perf bitsetRankSelect: warm select failed");
+            return;
+        }
+
+        sink = sink + rank_w.0 + sel_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx_i: int = (i * 17) % 6001;
+        var rank_i = bitsetRank(store, idx_i);
+        if (rank_i.1 != nil) {
+            println("perf bitsetRankSelect: rank failed");
+            return;
+        }
+
+        var target_i: int = (i * 19) % total_set;
+        var sel_i = bitsetSelect(store, target_i);
+        if (sel_i.2 != nil || !sel_i.1) {
+            println("perf bitsetRankSelect: select failed");
+            return;
+        }
+
+        sink = sink + rank_i.0 + sel_i.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bitsetRankSelect", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Bitset Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchBitsetSetHasHot(260000 * scale);
+    benchBitsetUnionCount(2800 * scale);
+    benchBitsetRankSelect(170000 * scale);
+
+    println("Bitset stdlib benchmark complete!");
+}

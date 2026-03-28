@@ -1,0 +1,365 @@
+import "fixtures/bitset.tblo";
+
+func findInt(items: array<int>, target: int): int {
+    var i: int = 0;
+    while (i < len(items)) {
+        if (items[i] == target) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+func main(): void {
+    var opened = bitsetNew(65);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+
+    var store: BitsetStore = opened.0;
+    println(bitsetLen(store) == 65);
+    println(bitsetWordCount(store) == 3);
+    println(bitsetCount(store) == 0);
+    println(bitsetIsEmpty(store));
+
+    var bad_open = bitsetNew(0);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_has_neg = bitsetHas(store, -1);
+    println(bad_has_neg.1 != nil);
+    if (bad_has_neg.1 != nil) {
+        println(bad_has_neg.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var set_bits: array<int> = [0, 1, 2, 29, 30, 31, 32, 64];
+    foreach (idx in set_bits) {
+        var set_r = bitsetSet(store, idx);
+        store = set_r.0;
+        println(set_r.2 == nil);
+        println(set_r.1);
+    }
+
+    var dup_set = bitsetSet(store, 30);
+    store = dup_set.0;
+    println(dup_set.2 == nil);
+    println(!dup_set.1);
+    println(bitsetCount(store) == 8);
+
+    foreach (idx in set_bits) {
+        var has_r = bitsetHas(store, idx);
+        println(has_r.1 == nil);
+        if (has_r.1 == nil) {
+            println(has_r.0);
+        }
+    }
+
+    var rank0 = bitsetRank(store, 0);
+    println(rank0.1 == nil);
+    if (rank0.1 == nil) {
+        println(rank0.0 == 0);
+    }
+
+    var rank3 = bitsetRank(store, 3);
+    println(rank3.1 == nil);
+    if (rank3.1 == nil) {
+        println(rank3.0 == 3);
+    }
+
+    var rank30 = bitsetRank(store, 30);
+    println(rank30.1 == nil);
+    if (rank30.1 == nil) {
+        println(rank30.0 == 4);
+    }
+
+    var rank33 = bitsetRank(store, 33);
+    println(rank33.1 == nil);
+    if (rank33.1 == nil) {
+        println(rank33.0 == 7);
+    }
+
+    var rank65 = bitsetRank(store, 65);
+    println(rank65.1 == nil);
+    if (rank65.1 == nil) {
+        println(rank65.0 == 8);
+    }
+
+    var rank_bad = bitsetRank(store, 66);
+    println(rank_bad.1 != nil);
+    if (rank_bad.1 != nil) {
+        println(rank_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var select0 = bitsetSelect(store, 0);
+    println(select0.2 == nil);
+    println(select0.1);
+    if (select0.1) {
+        println(select0.0 == 0);
+    }
+
+    var select3 = bitsetSelect(store, 3);
+    println(select3.2 == nil);
+    println(select3.1);
+    if (select3.1) {
+        println(select3.0 == 29);
+    }
+
+    var select4 = bitsetSelect(store, 4);
+    println(select4.2 == nil);
+    println(select4.1);
+    if (select4.1) {
+        println(select4.0 == 30);
+    }
+
+    var select7 = bitsetSelect(store, 7);
+    println(select7.2 == nil);
+    println(select7.1);
+    if (select7.1) {
+        println(select7.0 == 64);
+    }
+
+    var select8 = bitsetSelect(store, 8);
+    println(select8.2 == nil);
+    println(!select8.1);
+
+    var select_neg = bitsetSelect(store, -1);
+    println(select_neg.2 != nil);
+    if (select_neg.2 != nil) {
+        println(select_neg.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var idx_all = bitsetToIndices(store, 20);
+    println(idx_all.2 == nil);
+    println(!idx_all.1);
+    if (idx_all.2 == nil) {
+        println(len(idx_all.0) == 8);
+        println(idx_all.0[0] == 0);
+        println(idx_all.0[1] == 1);
+        println(idx_all.0[7] == 64);
+    }
+
+    var idx_trunc = bitsetToIndices(store, 3);
+    println(idx_trunc.2 == nil);
+    println(idx_trunc.1);
+    if (idx_trunc.2 == nil) {
+        println(len(idx_trunc.0) == 3);
+        println(idx_trunc.0[0] == 0);
+        println(idx_trunc.0[1] == 1);
+        println(idx_trunc.0[2] == 2);
+    }
+
+    var clear31 = bitsetClear(store, 31);
+    store = clear31.0;
+    println(clear31.2 == nil);
+    println(clear31.1);
+    println(bitsetCount(store) == 7);
+
+    var toggle31_on = bitsetToggle(store, 31);
+    store = toggle31_on.0;
+    println(toggle31_on.2 == nil);
+    if (toggle31_on.2 == nil) {
+        println(toggle31_on.1);
+    }
+    println(bitsetCount(store) == 8);
+
+    var toggle31_off = bitsetToggle(store, 31);
+    store = toggle31_off.0;
+    println(toggle31_off.2 == nil);
+    if (toggle31_off.2 == nil) {
+        println(!toggle31_off.1);
+    }
+    println(bitsetCount(store) == 7);
+
+    var set_range = bitsetSetRange(store, 10, 15);
+    store = set_range.0;
+    println(set_range.2 == nil);
+    if (set_range.2 == nil) {
+        println(set_range.1 == 5);
+    }
+
+    var set_range_dup = bitsetSetRange(store, 10, 15);
+    store = set_range_dup.0;
+    println(set_range_dup.2 == nil);
+    if (set_range_dup.2 == nil) {
+        println(set_range_dup.1 == 0);
+    }
+
+    var clear_range = bitsetClearRange(store, 10, 13);
+    store = clear_range.0;
+    println(clear_range.2 == nil);
+    if (clear_range.2 == nil) {
+        println(clear_range.1 == 3);
+    }
+
+    var bad_range = bitsetSetRange(store, 20, 10);
+    println(bad_range.2 != nil);
+    if (bad_range.2 != nil) {
+        println(bad_range.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var set_many = bitsetSetMany(store, [5, 6, 7, 40]);
+    store = set_many.0;
+    println(set_many.2 == nil);
+    if (set_many.2 == nil) {
+        println(set_many.1 == 4);
+    }
+
+    var clear_many = bitsetClearMany(store, [0, 6, 100]);
+    store = clear_many.0;
+    println(clear_many.2 != nil);
+    if (clear_many.2 != nil) {
+        println(clear_many.2.code == ERR_INVALID_ARGUMENT);
+        println(clear_many.1 == 2);
+    }
+
+    var bad_to_indices = bitsetToIndices(store, 0);
+    println(bad_to_indices.2 != nil);
+    if (bad_to_indices.2 != nil) {
+        println(bad_to_indices.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var cleared = bitsetClearAll(store);
+    store = cleared.0;
+    println(cleared.1 >= 0);
+    println(bitsetCount(store) == 0);
+    println(bitsetIsEmpty(store));
+
+    var from_good = bitsetFromIndices(35, [1, 2, 3, 31, 34]);
+    println(from_good.1 == nil);
+    if (from_good.1 == nil) {
+        var fg: BitsetStore = from_good.0;
+        println(bitsetCount(fg) == 5);
+
+        var fg_idx = bitsetToIndices(fg, 10);
+        println(fg_idx.2 == nil);
+        if (fg_idx.2 == nil) {
+            println(len(fg_idx.0) == 5);
+            println(fg_idx.0[0] == 1);
+            println(fg_idx.0[4] == 34);
+        }
+
+        var fg_comp: BitsetStore = bitsetComplement(fg);
+        println(bitsetCount(fg_comp) == 30);
+
+        var comp_idx = bitsetHas(fg_comp, 0);
+        println(comp_idx.1 == nil);
+        if (comp_idx.1 == nil) {
+            println(comp_idx.0);
+        }
+
+        var comp_missing = bitsetHas(fg_comp, 34);
+        println(comp_missing.1 == nil);
+        if (comp_missing.1 == nil) {
+            println(!comp_missing.0);
+        }
+    }
+
+    var from_bad = bitsetFromIndices(10, [0, 10]);
+    println(from_bad.1 != nil);
+    if (from_bad.1 != nil) {
+        println(from_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var a_r = bitsetFromIndices(16, [1, 3, 5, 7, 9]);
+    var b_r = bitsetFromIndices(16, [3, 4, 5, 10]);
+    println(a_r.1 == nil);
+    println(b_r.1 == nil);
+    if (a_r.1 == nil && b_r.1 == nil) {
+        var a: BitsetStore = a_r.0;
+        var b: BitsetStore = b_r.0;
+
+        var u = bitsetUnion(a, b);
+        println(u.1 == nil);
+        if (u.1 == nil) {
+            println(bitsetCount(u.0) == 7);
+            var ui = bitsetToIndices(u.0, 16);
+            println(ui.2 == nil);
+            if (ui.2 == nil) {
+                println(len(ui.0) == 7);
+                println(findInt(ui.0, 1) >= 0);
+                println(findInt(ui.0, 10) >= 0);
+            }
+        }
+
+        var i = bitsetIntersect(a, b);
+        println(i.1 == nil);
+        if (i.1 == nil) {
+            println(bitsetCount(i.0) == 2);
+            var ii = bitsetToIndices(i.0, 16);
+            println(ii.2 == nil);
+            if (ii.2 == nil) {
+                println(len(ii.0) == 2);
+                println(ii.0[0] == 3);
+                println(ii.0[1] == 5);
+            }
+        }
+
+        var d = bitsetDifference(a, b);
+        println(d.1 == nil);
+        if (d.1 == nil) {
+            println(bitsetCount(d.0) == 3);
+            var di = bitsetToIndices(d.0, 16);
+            println(di.2 == nil);
+            if (di.2 == nil) {
+                println(len(di.0) == 3);
+                println(di.0[0] == 1);
+                println(di.0[1] == 7);
+                println(di.0[2] == 9);
+            }
+        }
+
+        var x = bitsetXor(a, b);
+        println(x.1 == nil);
+        if (x.1 == nil) {
+            println(bitsetCount(x.0) == 5);
+            var xi = bitsetToIndices(x.0, 16);
+            println(xi.2 == nil);
+            if (xi.2 == nil) {
+                println(len(xi.0) == 5);
+                println(findInt(xi.0, 1) >= 0);
+                println(findInt(xi.0, 4) >= 0);
+                println(findInt(xi.0, 10) >= 0);
+            }
+        }
+
+        var eq_ab = bitsetEquals(a, b);
+        println(eq_ab.1 == nil);
+        if (eq_ab.1 == nil) {
+            println(!eq_ab.0);
+        }
+
+        var eq_aa = bitsetEquals(a, a);
+        println(eq_aa.1 == nil);
+        if (eq_aa.1 == nil) {
+            println(eq_aa.0);
+        }
+
+        var a_stats: BitsetStats = bitsetStats(a);
+        println(a_stats.bitLength == 16);
+        println(a_stats.wordCount == 1);
+        println(a_stats.setCount == 5);
+        println(a_stats.densityPermille == 312);
+    }
+
+    var short_open = bitsetNew(8);
+    println(short_open.1 == nil);
+    if (short_open.1 == nil) {
+        var short_bs: BitsetStore = short_open.0;
+
+        var mismatch_union = bitsetUnion(store, short_bs);
+        println(mismatch_union.1 != nil);
+        if (mismatch_union.1 != nil) {
+            println(mismatch_union.1.code == ERR_INVALID_ARGUMENT);
+        }
+
+        var mismatch_eq = bitsetEquals(store, short_bs);
+        println(mismatch_eq.1 != nil);
+        if (mismatch_eq.1 != nil) {
+            println(mismatch_eq.1.code == ERR_INVALID_ARGUMENT);
+        }
+    }
+}

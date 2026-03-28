@@ -1,0 +1,17 @@
+var x: int = 2 + 3;
+println(x);
+
+var y: int = 10 * 5 + 3;
+println(y);
+
+var z: int = -10;
+println(z);
+
+var a: bool = !true;
+println(a);
+
+var b: int = 5 + 10 - 3;
+println(b);
+
+var c: int = 20 / 4;
+println(c);

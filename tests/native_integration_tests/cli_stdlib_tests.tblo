@@ -1,0 +1,107 @@
+import "fixtures/cli.tblo";
+
+func main(): void {
+    var parsed = cliParse(["--host=localhost", "--port", "8080", "-v", "--debug", "true", "input.txt", "--", "--literal", "-x"]);
+    println(parsed.1 == nil);
+    if (parsed.1 == nil) {
+        println(cliHas(parsed.0, "host"));
+        println(cliHas(parsed.0, "port"));
+        println(cliHas(parsed.0, "v"));
+        println(cliHas(parsed.0, "debug"));
+        println(cliGet(parsed.0, "host", "") == "localhost");
+        println(cliGet(parsed.0, "port", "") == "8080");
+        println(cliGet(parsed.0, "v", "") == "true");
+
+        var port = cliGetInt(parsed.0, "port", 80);
+        println(port.1 == nil);
+        if (port.1 == nil) {
+            println(port.0 == 8080);
+        }
+
+        var debug = cliGetBool(parsed.0, "debug", false);
+        println(debug.1 == nil);
+        if (debug.1 == nil) {
+            println(debug.0 == true);
+        }
+
+        println(len(parsed.0.positionals) == 3);
+        println(parsed.0.positionals[0] == "input.txt");
+        println(parsed.0.positionals[1] == "--literal");
+        println(parsed.0.positionals[2] == "-x");
+    }
+
+    var parsed_cluster = cliParse(["-abc", "-p", "9000"]);
+    println(parsed_cluster.1 == nil);
+    if (parsed_cluster.1 == nil) {
+        println(cliHas(parsed_cluster.0, "a"));
+        println(cliHas(parsed_cluster.0, "b"));
+        println(cliHas(parsed_cluster.0, "c"));
+        println(cliGet(parsed_cluster.0, "p", "") == "9000");
+    }
+
+    var req_ok = cliGetRequired(parsed_cluster.0, "p");
+    println(req_ok.1 == nil);
+    if (req_ok.1 == nil) {
+        println(req_ok.0 == "9000");
+    }
+
+    var req_missing = cliGetRequired(parsed_cluster.0, "missing");
+    println(req_missing.1 != nil);
+    if (req_missing.1 != nil) {
+        println(req_missing.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_int_parse = cliParseInt("12x");
+    println(bad_int_parse.1 != nil);
+    if (bad_int_parse.1 != nil) {
+        println(bad_int_parse.1.code == ERR_PARSE);
+    }
+
+    var bool_true = cliParseBool("YES");
+    println(bool_true.1 == nil);
+    if (bool_true.1 == nil) {
+        println(bool_true.0 == true);
+    }
+
+    var bool_false = cliParseBool("off");
+    println(bool_false.1 == nil);
+    if (bool_false.1 == nil) {
+        println(bool_false.0 == false);
+    }
+
+    var bool_bad = cliParseBool("maybe");
+    println(bool_bad.1 != nil);
+    if (bool_bad.1 != nil) {
+        println(bool_bad.1.code == ERR_PARSE);
+    }
+
+    var pos0 = cliPositionalAt(parsed.0, 0);
+    println(pos0.1 == nil);
+    if (pos0.1 == nil && pos0.0 != nil) {
+        println((pos0.0 as string) == "input.txt");
+    }
+
+    var pos_missing = cliPositionalAt(parsed.0, 99);
+    println(pos_missing.1 == nil);
+    if (pos_missing.1 == nil) {
+        println(pos_missing.0 == nil);
+    }
+
+    var pos_bad_index = cliPositionalAt(parsed.0, -1);
+    println(pos_bad_index.1 != nil);
+    if (pos_bad_index.1 != nil) {
+        println(pos_bad_index.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_long = cliParse(["--bad$name=1"]);
+    println(bad_long.1 != nil);
+    if (bad_long.1 != nil) {
+        println(bad_long.1.code == ERR_PARSE);
+    }
+
+    var bad_short_with_value = cliParse(["-ab=1"]);
+    println(bad_short_with_value.1 != nil);
+    if (bad_short_with_value.1 != nil) {
+        println(bad_short_with_value.1.code == ERR_PARSE);
+    }
+}

@@ -1,0 +1,46 @@
+// Map Basic Tests - Tests map creation, access, and operations
+
+func main(): void {
+    // Test 1: Map literal creation
+    var scores: map<string, int> = {"Alice": 95, "Bob": 87, "Carol": 92};
+    println("Map created");
+    
+    // Test 2: Map access (nullable)
+    var alice_score: int? = scores["Alice"];
+    if (alice_score != nil) {
+        println(alice_score);
+    }
+    
+    // Test 3: Map insertion/update
+    scores["Dave"] = 88;
+    scores["Alice"] = 98;  // Update existing
+    
+    var updated: int? = scores["Alice"];
+    if (updated != nil) {
+        println(updated);
+    }
+    
+    var dave: int? = scores["Dave"];
+    if (dave != nil) {
+        println(dave);
+    }
+    
+    // Test 4: Empty map
+    var empty: map<string, int> = {};
+    println("Empty map created");
+    
+    // Test 5: Int keys
+    var id_map: map<int, string> = {1: "one", 2: "two", 3: "three"};
+    var one: string? = id_map[1];
+    if (one != nil) {
+        println(one);
+    }
+    
+    // Test 6: Nested values via any
+    var cache: map<string, any> = {"number": 42, "text": "hello"};
+    println("Heterogeneous map created");
+    
+    // Test 7: Map size
+    var count: int = len(scores);
+    println(count);
+}

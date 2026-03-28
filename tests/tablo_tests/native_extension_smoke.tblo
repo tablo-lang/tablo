@@ -1,0 +1,235 @@
+async func waitForPostedCounter(counter: Counter): int {
+    await asyncSleep(25);
+    return counterGet(counter);
+}
+
+func main(): void {
+    println(extAdd(2, 5));
+    println(extHello("tablo"));
+    println(extStartsWith("tablo", "ta"));
+    println(extScale(1.5, 2.5));
+
+    var raw = stringToBytes("abc");
+    println(raw.1 == nil);
+    if (raw.1 == nil) {
+        var echoed = extEchoBytes(raw.0);
+        var echoed_text = bytesToString(echoed);
+        println(echoed_text.1 == nil);
+        if (echoed_text.1 == nil) {
+            println("bytes=" + echoed_text.0);
+        }
+    }
+
+    var counter: Counter = counterNew(41);
+    println(counterGet(counter));
+    println(counterAdd(counter, 9));
+    println(counterLabel(counter, "count="));
+    println(counter);
+
+    var swapped = extSwapPair((9, "units"));
+    println(swapped.0);
+    println(swapped.1);
+
+    var snapshot = extCounterSnapshotTuple(counter);
+    println(counterLabel(snapshot.0, "snapshot="));
+    println(snapshot.1);
+
+    var event = extMakeEventMap(counter, 7, "spawn");
+    println(mapGet(event, "label"));
+    println(mapGet(event, "delta"));
+    println(mapGet(event, "active"));
+    println(counterLabel(mapGet(event, "counter") as Counter, "event="));
+    var coords = mapGet(event, "coords") as (int, int);
+    println(coords.0);
+    println(coords.1);
+    var tags = mapGet(event, "tags") as array<string>;
+    var meta = mapGet(event, "meta") as map<string, any>;
+    println(tags[0]);
+    println(tags[1]);
+    println(mapGet(meta, "source"));
+    println(mapGet(meta, "priority"));
+    println((mapGet(meta, "phases") as array<string>)[0]);
+    println((mapGet(meta, "phases") as array<string>)[1]);
+    println(extSummarizeEventMap(event));
+
+    var input_event = extMakeInputEvent("keyboard", 32, true);
+    println(mapGet(input_event, "kind"));
+    println(mapGet(input_event, "device"));
+    println(mapGet(input_event, "code"));
+    println(extSummarizeInputEvent(input_event));
+
+    var window_event = extMakeWindowEvent("resize", 1280, 720, true);
+    println(mapGet(window_event, "kind"));
+    println(mapGet(window_event, "event"));
+    println(mapGet(window_event, "width"));
+    println(extSummarizeWindowEvent(window_event));
+
+    var frame_event = extMakeFrameEvent("update", 60, 0.25);
+    println(mapGet(frame_event, "kind"));
+    println(mapGet(frame_event, "phase"));
+    println(mapGet(frame_event, "frame"));
+    println(extSummarizeFrameEvent(frame_event));
+
+    var batch = extMakeEventBatch(8);
+    println(len(batch));
+    var first_batch_event = batch[0];
+    var first_batch_meta = mapGet(first_batch_event, "meta") as map<string, any>;
+    println(mapGet(first_batch_event, "name"));
+    println(mapGet(first_batch_meta, "source"));
+    println((mapGet(first_batch_meta, "phases") as array<string>)[0]);
+    println(extSummarizeEventBatch(batch));
+
+    var direct_offset = 10;
+    println(extInvokeIntCallback((func(value: int): int {
+        return direct_offset + value;
+    }), 5));
+
+    var stored_offset = 11;
+    var stored: StoredIntCallback = extStoreIntCallback((func(value: int): int {
+        return stored_offset + value;
+    }));
+    println(extInvokeStoredIntCallback(stored, 7));
+
+    var callback_prefix = "cb=";
+    println(extInvokeCounterLabelCallback((func(current: Counter): string {
+        return counterLabel(current, callback_prefix);
+    }), counter));
+    println("array_arg=" + str(extInvokeArrayArgCallback((func(items: array<int>): int {
+        return items[0] + items[1] + items[2];
+    }), 6)));
+    println("array_result=" + str(extInvokeArrayResultCallback((func(value: int): array<int> {
+        return [value, value + 1, value + 2];
+    }), 6)));
+    println(extInvokeTupleResultCallback((func(value: int): (int, string) {
+        return (value * 2, "units");
+    }), 6));
+    println(extInvokeMapResultCallback((func(value: int): map<string, any> {
+        return {
+            "label": "tick",
+            "total": value + 5,
+            "coords": (value, value + 1),
+            "tags": ["native", "callback"],
+            "meta": {
+                "source": "callback",
+                "priority": value + 2,
+                "phases": ["map", "result"]
+            }
+        };
+    }), 7));
+
+    var numbers = [1, 2, 3, 4];
+    println(extSumInts(numbers));
+
+    var range = extMakeIntRange(3, 4);
+    println(range[0]);
+    println(range[3]);
+
+    var counters = [counterNew(2), counterNew(5), counterNew(7)];
+    println(extSumCounters(counters));
+    println(counterAdd(counters[1], 10));
+    println(extSumCounters(counters));
+
+    var parts = ["vm", "lang", "ext"];
+    println(extJoinStrings(parts, "-"));
+
+    var posted_counter: Counter = counterNew(100);
+    var worker: PostedIntCallbackWorker = extStartPostedIntCallbackWorker((func(delta: int): void {
+        counterAdd(posted_counter, delta);
+    }), 23, 1);
+    var wait_future = waitForPostedCounter(posted_counter);
+    while (!futureIsReady(wait_future)) {
+    }
+    println(futureGet(wait_future));
+    println(extJoinPostedIntCallbackWorker(worker));
+
+    var previous_auto_drain = extSetPostedCallbackAutoDrain(false);
+    println(previous_auto_drain);
+    var manual_counter: Counter = counterNew(200);
+    var manual_worker: PostedIntCallbackWorker = extStartPostedIntCallbackWorker((func(delta: int): void {
+        counterAdd(manual_counter, delta);
+    }), 17, 1);
+    println(extJoinPostedIntCallbackWorker(manual_worker));
+    println(counterLabel(manual_counter, "manual_before="));
+    println("manual_pending=" + str(extPostedCallbackPendingCount()));
+    println("manual_drained=" + str(extDrainPostedCallbacks(1)));
+    println(counterLabel(manual_counter, "manual_after="));
+    println("manual_pending=" + str(extPostedCallbackPendingCount()));
+    println(extSetPostedCallbackAutoDrain(true));
+
+    println(extSetPostedCallbackAutoDrain(false));
+    var tuple_counter: Counter = counterNew(300);
+    var tuple_hits: Counter = counterNew(0);
+    var tuple_worker: PostedTupleCallbackWorker = extStartPostedTupleCallbackWorker((func(event: (int, string)): void {
+        if (event.1 == "queued") {
+            counterAdd(tuple_counter, event.0);
+            counterAdd(tuple_hits, 1);
+        }
+    }), 19, "queued", 1);
+    println(extJoinPostedTupleCallbackWorker(tuple_worker));
+    println("tuple_pending=" + str(extPostedCallbackPendingCount()));
+    println("tuple_drained=" + str(extDrainPostedCallbacks(1)));
+    println(counterLabel(tuple_counter, "tuple_after="));
+    println(counterLabel(tuple_hits, "tuple_hits="));
+    println(extSetPostedCallbackAutoDrain(true));
+
+    println(extSetPostedCallbackAutoDrain(false));
+    var array_post_counter: Counter = counterNew(500);
+    var array_post_hits: Counter = counterNew(0);
+    var array_worker: PostedArrayCallbackWorker = extStartPostedArrayCallbackWorker((func(items: array<int>): void {
+        if (len(items) == 3 && items[0] == 31 && items[1] == 32 && items[2] == 33) {
+            counterAdd(array_post_counter, items[0] + items[1] + items[2]);
+            counterAdd(array_post_hits, 1);
+        }
+    }), 31, 1);
+    println(extJoinPostedArrayCallbackWorker(array_worker));
+    println("array_post_pending=" + str(extPostedCallbackPendingCount()));
+    println("array_post_drained=" + str(extDrainPostedCallbacks(1)));
+    println(counterLabel(array_post_counter, "array_post_after="));
+    println(counterLabel(array_post_hits, "array_post_hits="));
+    println(extSetPostedCallbackAutoDrain(true));
+
+    println(extSetPostedCallbackAutoDrain(false));
+    var map_counter: Counter = counterNew(400);
+    var map_hits: Counter = counterNew(0);
+    var map_worker: PostedMapCallbackWorker = extStartPostedMapCallbackWorker((func(event: map<string, any>): void {
+        var coords = mapGet(event, "coords") as (int, int);
+        var tags = mapGet(event, "tags") as array<string>;
+        var meta = mapGet(event, "meta") as map<string, any>;
+        var phases = mapGet(meta, "phases") as array<string>;
+        if ((mapGet(event, "label") as string) == "queued-map" &&
+            (mapGet(event, "active") as bool) &&
+            coords.0 == 29 &&
+            coords.1 == 30 &&
+            tags[0] == "native" &&
+            tags[1] == "queued-map" &&
+            (mapGet(meta, "source") as string) == "worker" &&
+            (mapGet(meta, "priority") as int) == 2 &&
+            phases[0] == "thread" &&
+            phases[1] == "queue") {
+            counterAdd(map_counter, mapGet(event, "delta") as int);
+            counterAdd(map_hits, 1);
+        }
+    }), 29, "queued-map", 1);
+    println(extJoinPostedMapCallbackWorker(map_worker));
+    println("map_pending=" + str(extPostedCallbackPendingCount()));
+    println("map_drained=" + str(extDrainPostedCallbacks(1)));
+    println(counterLabel(map_counter, "map_after="));
+    println(counterLabel(map_hits, "map_hits="));
+    println(extSetPostedCallbackAutoDrain(true));
+
+    println(extSetPostedCallbackAutoDrain(false));
+    var event_batch_counter: Counter = counterNew(600);
+    var event_batch_hits: Counter = counterNew(0);
+    var event_batch_worker: PostedEventBatchCallbackWorker = extStartPostedEventBatchCallbackWorker((func(events: array<map<string, any>>): void {
+        if (len(events) == 2 && extSummarizeEventBatch(events) == "2:83:down:batch:2") {
+            counterAdd(event_batch_counter, (mapGet(events[0], "delta") as int) + (mapGet(events[1], "delta") as int));
+            counterAdd(event_batch_hits, 1);
+        }
+    }), 41, 1);
+    println(extJoinPostedEventBatchCallbackWorker(event_batch_worker));
+    println("event_batch_pending=" + str(extPostedCallbackPendingCount()));
+    println("event_batch_drained=" + str(extDrainPostedCallbacks(1)));
+    println(counterLabel(event_batch_counter, "event_batch_after="));
+    println(counterLabel(event_batch_hits, "event_batch_hits="));
+    println(extSetPostedCallbackAutoDrain(true));
+}

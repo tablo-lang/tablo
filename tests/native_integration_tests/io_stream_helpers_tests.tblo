@@ -1,0 +1,256 @@
+func main(): void {
+    delete("io_stream_src.txt");
+    delete("io_stream_out.txt");
+    delete("io_stream_bytes.bin");
+    delete("io_stream_copy.txt");
+    delete("io_stream_socket_copy.txt");
+
+    var seed = write_all("io_stream_src.txt", "alpha\nbeta\n");
+    println(seed.1 == nil);
+
+    var rf = file_open("io_stream_src.txt", "rb");
+    println(rf.1 == nil);
+    if (rf.1 == nil) {
+        var f: any = rf.0;
+        var l1 = ioReadLine(f);
+        println(l1.1 == nil);
+        if (l1.1 == nil) println(l1.0 == "alpha");
+
+        var l2 = ioReadLine(f);
+        println(l2.1 == nil);
+        if (l2.1 == nil) println(l2.0 == "beta");
+
+        var l3 = ioReadLine(f);
+        println(l3.0 == nil && l3.1 == nil);
+        file_close(f);
+    }
+
+    var ra = file_open("io_stream_src.txt", "rb");
+    println(ra.1 == nil);
+    if (ra.1 == nil) {
+        var all = ioReadAll(ra.0);
+        println(all.1 == nil);
+        if (all.1 == nil) println(all.0 == "alpha\nbeta\n");
+        file_close(ra.0);
+    }
+
+    var rc = file_open("io_stream_src.txt", "rb");
+    println(rc.1 == nil);
+    if (rc.1 == nil) {
+        var c1 = ioReadChunk(rc.0, 4);
+        println(c1.1 == nil);
+        if (c1.1 == nil) println(c1.0 == "alph");
+
+        var c2 = ioReadChunk(rc.0, 4);
+        println(c2.1 == nil);
+        if (c2.1 == nil) println(c2.0 == "a\nbe");
+
+        var c3 = ioReadChunk(rc.0, 4);
+        println(c3.1 == nil);
+        if (c3.1 == nil) println(c3.0 == "ta\n");
+
+        var c4 = ioReadChunk(rc.0, 4);
+        println(c4.0 == nil && c4.1 == nil);
+        file_close(rc.0);
+    }
+
+    var rcb = file_open("io_stream_src.txt", "rb");
+    println(rcb.1 == nil);
+    if (rcb.1 == nil) {
+        var b1 = ioReadChunkBytes(rcb.0, 5);
+        println(b1.1 == nil);
+        if (b1.1 == nil) println(bytesToHex(b1.0 as bytes).0 == "616c706861");
+
+        var b2 = ioReadChunkBytes(rcb.0, 5);
+        println(b2.1 == nil);
+        if (b2.1 == nil) println(bytesToHex(b2.0 as bytes).0 == "0a62657461");
+
+        var b3 = ioReadChunkBytes(rcb.0, 5);
+        println(b3.1 == nil);
+        if (b3.1 == nil) println(bytesToHex(b3.0 as bytes).0 == "0a");
+
+        var b4 = ioReadChunkBytes(rcb.0, 5);
+        println(b4.0 == nil && b4.1 == nil);
+        file_close(rcb.0);
+    }
+
+    var rex = file_open("io_stream_src.txt", "rb");
+    println(rex.1 == nil);
+    if (rex.1 == nil) {
+        var ex1 = ioReadExactlyBytes(rex.0, 5);
+        println(ex1.1 == nil);
+        if (ex1.1 == nil) println(bytesToHex(ex1.0).0 == "616c706861");
+
+        var ex2 = ioReadExactlyBytes(rex.0, 6);
+        println(ex2.1 == nil);
+        if (ex2.1 == nil) println(bytesToHex(ex2.0).0 == "0a626574610a");
+
+        var ex3 = ioReadExactlyBytes(rex.0, 1);
+        println(ex3.1 != nil);
+        if (ex3.1 != nil) println(ex3.1.code == ERR_IO);
+        file_close(rex.0);
+    }
+
+    var joined = bytesJoin([hexToBytes("00 01").0, hexToBytes("aa ff").0]);
+    println(joined.1 == nil);
+    if (joined.1 == nil) println(bytesToHex(joined.0).0 == "0001aaff");
+
+    var joined_empty = bytesJoin([]);
+    println(joined_empty.1 == nil);
+    if (joined_empty.1 == nil) println(len(joined_empty.0) == 0);
+
+    var joined_bad = bytesJoin([1 as any]);
+    println(joined_bad.1 != nil);
+    if (joined_bad.1 != nil) println(joined_bad.1.code == ERR_INVALID_ARGUMENT);
+
+    var wf = file_open("io_stream_out.txt", "wb");
+    println(wf.1 == nil);
+    if (wf.1 == nil) {
+        var wr = ioWriteAll(wf.0, "hello-stream");
+        println(wr.1 == nil);
+        if (wr.1 == nil) println(wr.0 == 12);
+        file_close(wf.0);
+    }
+
+    var out_read = read_all("io_stream_out.txt");
+    println(out_read.1 == nil);
+    if (out_read.1 == nil) println(out_read.0 == "hello-stream");
+
+    var wfb = file_open("io_stream_bytes.bin", "wb");
+    println(wfb.1 == nil);
+    if (wfb.1 == nil) {
+        var wrb = ioWriteBytesAll(wfb.0, hexToBytes("00 01 02 ff").0);
+        println(wrb.1 == nil);
+        if (wrb.1 == nil) println(wrb.0 == 4);
+        file_close(wfb.0);
+    }
+
+    var out_bytes = readBytes("io_stream_bytes.bin");
+    println(out_bytes.1 == nil);
+    if (out_bytes.1 == nil) println(bytesToHex(out_bytes.0).0 == "000102ff");
+
+    var csrc = file_open("io_stream_src.txt", "rb");
+    var cdst = file_open("io_stream_copy.txt", "wb");
+    println(csrc.1 == nil && cdst.1 == nil);
+    if (csrc.1 == nil && cdst.1 == nil) {
+        var cp = ioCopy(csrc.0, cdst.0, 3);
+        println(cp.1 == nil);
+        if (cp.1 == nil) println(cp.0 == 11);
+        file_close(csrc.0);
+        file_close(cdst.0);
+    }
+
+    var copied = read_all("io_stream_copy.txt");
+    println(copied.1 == nil);
+    if (copied.1 == nil) println(copied.0 == "alpha\nbeta\n");
+
+    var listener: any = nil;
+    var selected_port: int = 0;
+    var ports: array<int> = [18991, 18992, 18993, 18994, 18995];
+    foreach (p in ports) {
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            listener = lr.0;
+            selected_port = p;
+            break;
+        }
+    }
+    println(listener != nil);
+
+    if (listener != nil) {
+        var c1 = tcpConnect("127.0.0.1", selected_port);
+        println(c1.1 == nil);
+        if (c1.1 == nil) {
+            var wc = ioWriteAll(c1.0, "one\ntwo\n");
+            println(wc.1 == nil);
+            if (wc.1 == nil) println(wc.0 == 8);
+            tcpClose(c1.0);
+
+            var a1 = tcpAccept(listener, 2000);
+            println(a1.1 == nil);
+            if (a1.1 == nil) {
+            var rl1 = ioReadLine(a1.0);
+            println(rl1.1 == nil);
+            if (rl1.1 == nil) println(rl1.0 == "one");
+
+            var rl2 = ioReadLine(a1.0);
+            println(rl2.1 == nil);
+            if (rl2.1 == nil) println(rl2.0 == "two");
+
+            var rl3 = ioReadLine(a1.0);
+            println(rl3.0 == nil);
+            println(rl3.1 == nil || rl3.1.code == ERR_NETWORK);
+
+            tcpClose(a1.0);
+            }
+        }
+
+        var c2 = tcpConnect("127.0.0.1", selected_port);
+        println(c2.1 == nil);
+        if (c2.1 == nil) {
+            var w = ioWriteAll(c2.0, "xyz-copy-data");
+            println(w.1 == nil);
+            if (w.1 == nil) println(w.0 == 13);
+            tcpClose(c2.0);
+
+            var a2 = tcpAccept(listener, 2000);
+            println(a2.1 == nil);
+            if (a2.1 == nil) {
+                var out_f = file_open("io_stream_socket_copy.txt", "wb");
+                println(out_f.1 == nil);
+                if (out_f.1 == nil) {
+                    var cp2 = ioCopy(a2.0, out_f.0, 2);
+                    println(cp2.0 == 13);
+                    println(cp2.1 == nil || cp2.1.code == ERR_NETWORK);
+                    file_close(out_f.0);
+                }
+                tcpClose(a2.0);
+            }
+        }
+
+        var socket_copy = read_all("io_stream_socket_copy.txt");
+        println(socket_copy.1 == nil);
+        if (socket_copy.1 == nil) println(socket_copy.0 == "xyz-copy-data");
+
+        var bad1 = ioReadAll(123 as any);
+        println(bad1.1 != nil);
+        if (bad1.1 != nil) println(bad1.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad1b = ioReadChunk(123 as any, 4);
+        println(bad1b.1 != nil);
+        if (bad1b.1 != nil) println(bad1b.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad1c = ioReadChunkBytes(123 as any, 4);
+        println(bad1c.1 != nil);
+        if (bad1c.1 != nil) println(bad1c.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad1d = ioReadExactlyBytes(123 as any, 4);
+        println(bad1d.1 != nil);
+        if (bad1d.1 != nil) println(bad1d.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad1e = ioReadExactlyBytes(listener, -1);
+        println(bad1e.1 != nil);
+        if (bad1e.1 != nil) println(bad1e.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad_data: any = 123;
+        var bad2 = ioWriteAll(listener, bad_data);
+        println(bad2.1 != nil);
+        if (bad2.1 != nil) println(bad2.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad2b = ioWriteBytesAll(listener, bad_data);
+        println(bad2b.1 != nil);
+        if (bad2b.1 != nil) println(bad2b.1.code == ERR_INVALID_ARGUMENT);
+
+        var bad3 = ioCopy(listener, listener, 0);
+        println(bad3.1 != nil);
+        if (bad3.1 != nil) println(bad3.1.code == ERR_INVALID_ARGUMENT);
+
+        tcpClose(listener);
+    }
+
+    println(delete("io_stream_src.txt").0);
+    println(delete("io_stream_out.txt").0);
+    println(delete("io_stream_bytes.bin").0);
+    println(delete("io_stream_copy.txt").0);
+    println(delete("io_stream_socket_copy.txt").0);
+}

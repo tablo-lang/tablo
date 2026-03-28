@@ -1,0 +1,91 @@
+import "fixtures/glob.tblo";
+
+func assertMatch(pattern: string, path_value: string, expected: bool): void {
+    var matched = globMatch(pattern, path_value);
+    println(matched.1 == nil);
+    if (matched.1 == nil) {
+        println(matched.0 == expected);
+    }
+}
+
+func main(): void {
+    assertMatch("*.txt", "notes.txt", true);
+    assertMatch("*.txt", "notes.csv", false);
+    assertMatch("src/*.tblo", "src/main.tblo", true);
+    assertMatch("src/*.tblo", "src/nested/main.tblo", false);
+    assertMatch("src/**/main.tblo", "src/main.tblo", true);
+    assertMatch("src/**/main.tblo", "src/nested/main.tblo", true);
+    assertMatch("src/**/main.tblo", "src/a/b/main.tblo", true);
+    assertMatch("**/*.tblo", "lib/msgpack.tblo", true);
+    assertMatch("C:\\tmp\\**\\*.log", "C:/tmp/app/system.log", true);
+    assertMatch("/var/**", "/var/log/app.log", true);
+    assertMatch("/var/**", "/etc/hosts", false);
+    assertMatch("**", "any/path/here", true);
+    assertMatch("a/**/b/*.txt", "a/b/readme.txt", true);
+    assertMatch("a/**/b/*.txt", "a/x/y/b/readme.txt", true);
+    assertMatch("a/**/b/*.txt", "a/x/y/c/readme.txt", false);
+
+    var any_1 = globMatchAny(["*.md", "*.txt"], "README.md");
+    println(any_1.1 == nil);
+    if (any_1.1 == nil) {
+        println(any_1.0);
+    }
+
+    var any_2 = globMatchAny(["*.md", "*.txt"], "build.log");
+    println(any_2.1 == nil);
+    if (any_2.1 == nil) {
+        println(!any_2.0);
+    }
+
+    var any_empty = globMatchAny([], "README.md");
+    println(any_empty.1 != nil);
+    if (any_empty.1 != nil) {
+        println(any_empty.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var any_bad_pattern = globMatchAny([""], "README.md");
+    println(any_bad_pattern.1 != nil);
+    if (any_bad_pattern.1 != nil) {
+        println(any_bad_pattern.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var paths: array<string> = [
+        "src/main.tblo",
+        "src/http/server.tblo",
+        "src/http/router.tblo",
+        "README.md",
+        "docs/design.txt",
+        "tests/test_config.tblo",
+        "bin/tablo.exe"
+    ];
+
+    var filtered = globFilter("src/**/*.tblo", paths);
+    println(filtered.1 == nil);
+    if (filtered.1 == nil) {
+        println(len(filtered.0) == 3);
+        if (len(filtered.0) == 3) {
+            println(filtered.0[0] == "src/main.tblo");
+            println(filtered.0[1] == "src/http/server.tblo");
+            println(filtered.0[2] == "src/http/router.tblo");
+        }
+    }
+
+    var filtered_any = globFilterAny(["**/*.tblo", "**/*.md"], paths);
+    println(filtered_any.1 == nil);
+    if (filtered_any.1 == nil) {
+        println(len(filtered_any.0) == 5);
+        if (len(filtered_any.0) == 5) {
+            println(filtered_any.0[0] == "src/main.tblo");
+            println(filtered_any.0[1] == "src/http/server.tblo");
+            println(filtered_any.0[2] == "src/http/router.tblo");
+            println(filtered_any.0[3] == "README.md");
+            println(filtered_any.0[4] == "tests/test_config.tblo");
+        }
+    }
+
+    var filtered_bad = globFilter("", paths);
+    println(filtered_bad.1 != nil);
+    if (filtered_bad.1 != nil) {
+        println(filtered_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+}

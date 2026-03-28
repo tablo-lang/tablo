@@ -1,0 +1,18 @@
+func main(): void {
+    var pending = futurePending<int>();
+    println(typeOf(pending));
+    println(str(!futureIsReady(pending)));
+    println(str(futureComplete(pending, 7)));
+    println(str(futureIsReady(pending)));
+    println(str(futureGet(pending)));
+    println(str(!futureComplete(pending, 8)));
+
+    var ready = futureResolved("ok");
+    println(typeOf(ready));
+    println(str(futureIsReady(ready)));
+    println(futureGet(ready));
+
+    var pairFuture = futureResolved((3, "z"));
+    var pair: (int, string) = futureGet(pairFuture);
+    println(str(pair.0) + pair.1);
+}

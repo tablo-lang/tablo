@@ -1,0 +1,35 @@
+=== RSA Library Tests ===
+
+Test 1: Key Generation (2048-bit)
+  PASS: Key pair generated successfully
+Test 2: Key Validation
+  PASS: Key pair is valid
+Test 3: Basic Encryption/Decryption
+  PASS: Message encrypted and decrypted correctly
+Test 4: Large Message Encryption
+  PASS: Large message encrypted and decrypted correctly
+Test 5: Digital Signature
+  PASS: Signature verified correctly
+Test 6: Hash Recovery
+  PASS: Hash recovered correctly from signature
+Test 7: Invalid Signature Detection
+  PASS: Invalid signature correctly rejected
+Test 8: Public Key Export
+  PASS: Public key exported successfully
+Test 9: Private Key Export
+  PASS: Private key exported successfully
+Test 10: Key Creation from Values
+  PASS: Key pair created from values is valid
+Test 11: Cross-key Operations
+  PASS: Created keys work for encryption/decryption
+Test 12: Derive Public Key from Private
+  PASS: Public key derived correctly from private key
+Test 13: Custom Exponent Key Generation
+  PASS: Custom exponent (e=3) key pair generated and valid
+Test 14: rsaCanEncrypt Boundary Check
+  PASS: Boundary checks work correctly
+Test 15: rsaCreateKeyPair Helper
+  PASS: rsaCreateKeyPair works correctly
+
+=== Test Summary ===
+All tests PASSED!

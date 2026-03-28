@@ -1,0 +1,569 @@
+var resizeHits: int = 0;
+var lastWindowWidth: int = 0;
+var lastWindowHeight: int = 0;
+var scrollHits: int = 0;
+var lastScrollX: double = 0.0;
+var lastScrollY: double = 0.0;
+var enterHits: int = 0;
+var lastEntered: bool = false;
+var charHits: int = 0;
+var lastChar: string = "";
+var keyHits: int = 0;
+var lastKeyCode: int = -1;
+var lastKeyPressed: bool = false;
+var mouseButtonHits: int = 0;
+var lastMouseButtonCode: int = -1;
+var lastMouseButtonPressed: bool = false;
+
+func onWindowEvent(event: map<string, any>): void {
+    var event_name = mapGet(event, "event") as string;
+    var width = mapGet(event, "width") as int;
+    var height = mapGet(event, "height") as int;
+    var meta = mapGet(event, "meta") as map<string, any>;
+    if (event_name == "resize" &&
+        width == 360 &&
+        height == 240 &&
+        (mapGet(meta, "source") as string) == "glfw") {
+        resizeHits = resizeHits + 1;
+        lastWindowWidth = width;
+        lastWindowHeight = height;
+    }
+}
+
+func onScrollEvent(event: map<string, any>): void {
+    if ((mapGet(event, "device") as string) == "mouse" &&
+        (mapGet(event, "event") as string) == "scroll") {
+        scrollHits = scrollHits + 1;
+        lastScrollX = mapGet(event, "xoffset") as double;
+        lastScrollY = mapGet(event, "yoffset") as double;
+    }
+}
+
+func onEnterEvent(event: map<string, any>): void {
+    if ((mapGet(event, "device") as string) == "cursor") {
+        enterHits = enterHits + 1;
+        lastEntered = mapGet(event, "entered") as bool;
+    }
+}
+
+func onCharEvent(event: map<string, any>): void {
+    if ((mapGet(event, "device") as string) == "text" &&
+        (mapGet(event, "event") as string) == "char") {
+        charHits = charHits + 1;
+        lastChar = mapGet(event, "text") as string;
+    }
+}
+
+func onKeyEvent(event: map<string, any>): void {
+    if ((mapGet(event, "device") as string) == "keyboard") {
+        keyHits = keyHits + 1;
+        lastKeyCode = mapGet(event, "code") as int;
+        lastKeyPressed = mapGet(event, "pressed") as bool;
+    }
+}
+
+func onMouseButtonEvent(event: map<string, any>): void {
+    if ((mapGet(event, "device") as string) == "mouse" &&
+        mapHas(event, "code")) {
+        mouseButtonHits = mouseButtonHits + 1;
+        lastMouseButtonCode = mapGet(event, "code") as int;
+        lastMouseButtonPressed = mapGet(event, "pressed") as bool;
+    }
+}
+
+func main(): void {
+    if (glfwIsInitialized()) {
+        panic("GLFW should start uninitialized");
+    }
+    if (glfwGetLiveWindowCount() != 0) {
+        panic("GLFW live window count should start at zero");
+    }
+    if (!glfwCanTerminate()) {
+        panic("GLFW should be terminable with no live windows");
+    }
+    println("glfw_version=" + glfwGetVersionString());
+    if (!glfwInit()) {
+        println("glfw_unavailable=" + glfwGetLastError());
+        return;
+    }
+    if (!glfwIsInitialized()) {
+        panic("GLFW should report initialized after glfwInit");
+    }
+    var primaryWorkarea = glfwGetPrimaryMonitorWorkarea();
+    if (primaryWorkarea.2 <= 0 || primaryWorkarea.3 <= 0) {
+        panic("glfwGetPrimaryMonitorWorkarea returned an invalid tuple");
+    }
+    var primaryScale = glfwGetPrimaryMonitorContentScale();
+    if (primaryScale.0 <= 0.0 || primaryScale.1 <= 0.0) {
+        panic("glfwGetPrimaryMonitorContentScale returned an invalid tuple");
+    }
+
+    var window: GlfwWindow = glfwCreateWindow(320, 200, "TabloLang GLFW smoke", false);
+    if (glfwGetLiveWindowCount() != 1) {
+        panic("GLFW live window count should track the first window");
+    }
+    if (glfwCanTerminate()) {
+        panic("GLFW should not be terminable while a window is live");
+    }
+    if (glfwHasWindowCallback(window)) {
+        panic("GLFW window callback should start cleared");
+    }
+    if (!glfwSetWindowCallback(window, onWindowEvent)) {
+        panic("glfwSetWindowCallback failed");
+    }
+    if (!glfwHasWindowCallback(window)) {
+        panic("GLFW window callback should be registered");
+    }
+    extSetPostedCallbackAutoDrain(false);
+    if (!glfwShowWindow(window)) {
+        panic("glfwShowWindow failed");
+    }
+    if (glfwGetWindowAttrib(window, glfwWindowAttribVisible()) == 0) {
+        panic("glfwGetWindowAttrib visible should report true after show");
+    }
+    if (!glfwSetWindowTitle(window, "TabloLang GLFW smoke ready")) {
+        panic("glfwSetWindowTitle failed");
+    }
+    if (!glfwSetWindowSize(window, 360, 240)) {
+        panic("glfwSetWindowSize failed");
+    }
+    if (!glfwSetWindowPos(window, 112, 124)) {
+        panic("glfwSetWindowPos failed");
+    }
+    if (!glfwSetCursorPos(window, 12.5, 34.5)) {
+        panic("glfwSetCursorPos failed");
+    }
+    if (!glfwSetCursorMode(window, glfwCursorModeHidden())) {
+        panic("glfwSetCursorMode hidden failed");
+    }
+    if (!glfwPollEvents()) {
+        panic("glfwPollEvents failed");
+    }
+    if (extDrainPostedCallbacks(8) < 1) {
+        panic("GLFW window callback did not reach the VM queue");
+    }
+
+    var size = glfwGetWindowSize(window);
+    if (size.0 != 360 || size.1 != 240) {
+        panic("glfwGetWindowSize returned an unexpected tuple");
+    }
+    var framebuffer = glfwGetFramebufferSize(window);
+    if (framebuffer.0 <= 0 || framebuffer.1 <= 0) {
+        panic("glfwGetFramebufferSize returned an invalid tuple");
+    }
+    var windowPos = glfwGetWindowPos(window);
+    if (windowPos.0 < 104 || windowPos.0 > 132 || windowPos.1 < 116 || windowPos.1 > 144) {
+        panic("glfwGetWindowPos returned an unexpected tuple");
+    }
+    if (resizeHits < 1 || lastWindowWidth != 360 || lastWindowHeight != 240) {
+        panic("GLFW resize callback did not deliver the expected event");
+    }
+    var cursor = glfwGetCursorPos(window);
+    if (cursor.0 != cursor.0 || cursor.1 != cursor.1 ||
+        cursor.0 < -1000000.0 || cursor.0 > 1000000.0 ||
+        cursor.1 < -1000000.0 || cursor.1 > 1000000.0) {
+        panic("glfwGetCursorPos returned an invalid tuple");
+    }
+    var contentScale = glfwGetWindowContentScale(window);
+    if (contentScale.0 <= 0.0 || contentScale.1 <= 0.0) {
+        panic("glfwGetWindowContentScale returned an invalid tuple");
+    }
+    if (!glfwFocusWindow(window)) {
+        panic("glfwFocusWindow failed");
+    }
+    if (!glfwMaximizeWindow(window)) {
+        panic("glfwMaximizeWindow failed");
+    }
+    if (!glfwPollEvents()) {
+        panic("glfwPollEvents after maximize failed");
+    }
+    var maximizedAttr = glfwGetWindowAttrib(window, glfwWindowAttribMaximized());
+    if (maximizedAttr != 0 && maximizedAttr != 1) {
+        panic("glfwGetWindowAttrib maximized should return a boolean-like value");
+    }
+    if (!glfwIconifyWindow(window)) {
+        panic("glfwIconifyWindow failed");
+    }
+    if (!glfwPollEvents()) {
+        panic("glfwPollEvents after iconify failed");
+    }
+    var iconifiedAttr = glfwGetWindowAttrib(window, glfwWindowAttribIconified());
+    if (iconifiedAttr != 0 && iconifiedAttr != 1) {
+        panic("glfwGetWindowAttrib iconified should return a boolean-like value");
+    }
+    if (!glfwRestoreWindow(window)) {
+        panic("glfwRestoreWindow failed");
+    }
+    if (!glfwPollEvents()) {
+        panic("glfwPollEvents after restore failed");
+    }
+    var focusedAttr = glfwGetWindowAttrib(window, glfwWindowAttribFocused());
+    if (focusedAttr != 0 && focusedAttr != 1) {
+        panic("glfwGetWindowAttrib focused should return a boolean-like value");
+    }
+    if (glfwGetCursorMode(window) != glfwCursorModeHidden()) {
+        panic("glfwGetCursorMode should report GLFW_CURSOR_HIDDEN after hide");
+    }
+    if (!glfwSetCursorMode(window, glfwCursorModeNormal())) {
+        panic("glfwSetCursorMode normal failed");
+    }
+    if (glfwGetCursorMode(window) != glfwCursorModeNormal()) {
+        panic("glfwGetCursorMode should report GLFW_CURSOR_NORMAL after restore");
+    }
+    if (glfwGetKey(window, 65) != 0) {
+        panic("glfwGetKey should report GLFW_RELEASE for an untouched key");
+    }
+    if (glfwGetMouseButton(window, 0) != 0) {
+        panic("glfwGetMouseButton should report GLFW_RELEASE for an untouched button");
+    }
+    if (!glfwClearWindowCallback(window)) {
+        panic("glfwClearWindowCallback failed");
+    }
+    if (glfwHasWindowCallback(window)) {
+        panic("GLFW window callback should be cleared");
+    }
+    if (!glfwHideWindow(window)) {
+        panic("glfwHideWindow failed");
+    }
+    if (glfwGetWindowAttrib(window, glfwWindowAttribVisible()) != 0) {
+        panic("glfwGetWindowAttrib visible should report false after hide");
+    }
+    if (!glfwDestroyWindow(window)) {
+        panic("glfwDestroyWindow failed");
+    }
+    if (glfwGetLiveWindowCount() != 0) {
+        panic("GLFW live window count should drop after destroying the first window");
+    }
+    if (!glfwCanTerminate()) {
+        panic("GLFW should be terminable after destroying the first window");
+    }
+    extDrainPostedCallbacks(8);
+
+    var contextWindowA: GlfwWindow = glfwCreateWindowWithContext(96, 64, "TabloLang GLFW context A", false);
+    var contextWindowB: GlfwWindow = glfwCreateWindowWithContext(96, 64, "TabloLang GLFW context B", false);
+    if (glfwHasAnyCurrentContext()) {
+        panic("glfwHasAnyCurrentContext should start false before making a window current");
+    }
+    if (!glfwMakeContextCurrent(contextWindowA)) {
+        panic("glfwMakeContextCurrent for context window A failed");
+    }
+    if (!glfwHasCurrentContext(contextWindowA)) {
+        panic("glfwHasCurrentContext should report true for context window A");
+    }
+    if (!glfwHasAnyCurrentContext()) {
+        panic("glfwHasAnyCurrentContext should report true after make current");
+    }
+    if (!glfwSwapInterval(0)) {
+        panic("glfwSwapInterval failed");
+    }
+    if (!glfwSwapBuffers(contextWindowA)) {
+        panic("glfwSwapBuffers for context window A failed");
+    }
+    var rawSupported = glfwRawMouseMotionSupported();
+    if (rawSupported) {
+        if (!glfwSetCursorMode(contextWindowA, glfwCursorModeDisabled())) {
+            panic("glfwSetCursorMode disabled for context window A failed");
+        }
+        if (!glfwSetRawMouseMotion(contextWindowA, true)) {
+            panic("glfwSetRawMouseMotion enable for context window A failed");
+        }
+        if (!glfwGetRawMouseMotion(contextWindowA)) {
+            panic("glfwGetRawMouseMotion should report true for context window A after enable");
+        }
+        if (!glfwSetRawMouseMotion(contextWindowA, false)) {
+            panic("glfwSetRawMouseMotion disable for context window A failed");
+        }
+        if (glfwGetRawMouseMotion(contextWindowA)) {
+            panic("glfwGetRawMouseMotion should report false for context window A after disable");
+        }
+        if (!glfwSetCursorMode(contextWindowA, glfwCursorModeNormal())) {
+            panic("glfwSetCursorMode normal for context window A after raw mouse motion failed");
+        }
+    }
+    if (!glfwMakeContextCurrent(contextWindowB)) {
+        panic("glfwMakeContextCurrent for context window B failed");
+    }
+    if (!glfwHasCurrentContext(contextWindowB) || glfwHasCurrentContext(contextWindowA)) {
+        panic("Current context should move from context window A to B");
+    }
+    if (!glfwSwapBuffers(contextWindowB)) {
+        panic("glfwSwapBuffers for context window B failed");
+    }
+    if (!glfwClearCurrentContext()) {
+        panic("glfwClearCurrentContext failed");
+    }
+    if (glfwHasAnyCurrentContext()) {
+        panic("glfwHasAnyCurrentContext should report false after clear");
+    }
+    if (glfwHasCurrentContext(contextWindowA) || glfwHasCurrentContext(contextWindowB)) {
+        panic("No window should report current context after clear");
+    }
+    if (!glfwDestroyWindow(contextWindowB) || !glfwDestroyWindow(contextWindowA)) {
+        panic("glfwDestroyWindow failed for context windows");
+    }
+
+    var input_window: GlfwWindow = glfwCreateWindow(64, 64, "TabloLang GLFW input smoke", false);
+    if (glfwGetLiveWindowCount() != 1) {
+        panic("GLFW live window count should track the input window");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should start cleared");
+    }
+    if (!glfwSetInputCallback(input_window, onScrollEvent)) {
+        panic("glfwSetInputCallback for scroll failed");
+    }
+    if (!glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be registered");
+    }
+    if (!glfwTestEmitScroll(input_window, 1.5, -2.0)) {
+        panic("glfwTestEmitScroll failed");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        panic("GLFW synthetic scroll callback did not reach the VM queue");
+    }
+    if (!glfwSetInputCallback(input_window, onEnterEvent)) {
+        panic("glfwSetInputCallback for cursor enter failed");
+    }
+    if (!glfwTestEmitCursorEnter(input_window, true)) {
+        panic("glfwTestEmitCursorEnter failed");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        panic("GLFW synthetic cursor enter callback did not reach the VM queue");
+    }
+    if (!glfwSetInputCallback(input_window, onCharEvent)) {
+        panic("glfwSetInputCallback for char failed");
+    }
+    if (!glfwTestEmitChar(input_window, 65)) {
+        panic("glfwTestEmitChar failed");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        panic("GLFW synthetic char callback did not reach the VM queue");
+    }
+    if (scrollHits < 1 || lastScrollX != 1.5 || lastScrollY != -2.0) {
+        panic("GLFW scroll callback did not deliver the expected event");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after scroll failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after scroll");
+    }
+    if (enterHits < 1 || !lastEntered) {
+        panic("GLFW cursor enter callback did not deliver the expected event");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after cursor enter failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after cursor enter");
+    }
+    if (charHits < 1 || lastChar != "A") {
+        panic("GLFW character callback did not deliver the expected event");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after char failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after char");
+    }
+    if (!glfwSetInputCallback(input_window, onKeyEvent)) {
+        panic("glfwSetInputCallback for key failed");
+    }
+    if (!glfwTestEmitKey(input_window, 65, true)) {
+        panic("glfwTestEmitKey failed");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        panic("GLFW synthetic key callback did not reach the VM queue");
+    }
+    if (keyHits < 1 || lastKeyCode != 65 || !lastKeyPressed) {
+        panic("GLFW key callback did not deliver the expected event");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after key failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after key");
+    }
+    if (!glfwSetInputCallback(input_window, onMouseButtonEvent)) {
+        panic("glfwSetInputCallback for mouse button failed");
+    }
+    if (!glfwTestEmitMouseButton(input_window, 0, true)) {
+        panic("glfwTestEmitMouseButton failed");
+    }
+    if (extDrainPostedCallbacks(1) != 1) {
+        panic("GLFW synthetic mouse button callback did not reach the VM queue");
+    }
+    if (mouseButtonHits < 1 || lastMouseButtonCode != 0 || !lastMouseButtonPressed) {
+        panic("GLFW mouse button callback did not deliver the expected event");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after mouse button failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after mouse button");
+    }
+    if (!glfwSetInputCallback(input_window, onScrollEvent)) {
+        panic("glfwSetInputCallback for backpressure failed");
+    }
+    if (!glfwCanPostCallbacks(input_window)) {
+        panic("GLFW callback queue should accept posts while the input callback is active");
+    }
+    if (!glfwSetCallbackQueueLimit(input_window, 1)) {
+        panic("glfwSetCallbackQueueLimit failed");
+    }
+    if (glfwGetCallbackQueueLimit(input_window) != 1) {
+        panic("glfwGetCallbackQueueLimit returned an unexpected value");
+    }
+    if (glfwGetDroppedCallbackCount(input_window) != 0) {
+        panic("GLFW dropped callback count should start at zero");
+    }
+    if (glfwGetInvalidatedCallbackCount(input_window) != 0) {
+        panic("GLFW invalidated callback count should start at zero");
+    }
+    if (glfwGetRejectedCallbackCount(input_window) != 0) {
+        panic("GLFW rejected callback count should start at zero");
+    }
+    var scrollHitsBeforeBackpressure = scrollHits;
+    if (!glfwTestEmitScroll(input_window, 4.0, 5.0)) {
+        panic("first backpressure scroll emit failed");
+    }
+    if (!glfwTestEmitScroll(input_window, 6.0, 7.0)) {
+        panic("second backpressure scroll emit failed");
+    }
+    if (glfwGetCallbackQueuePendingCount(input_window) != 1) {
+        panic("GLFW callback queue pending count should stay capped at one");
+    }
+    if (glfwGetDroppedCallbackCount(input_window) != 1) {
+        panic("GLFW dropped callback count should report the dropped event");
+    }
+    if (extDrainPostedCallbacks(8) != 1) {
+        panic("GLFW backpressure drain should deliver exactly one event");
+    }
+    if (scrollHits != scrollHitsBeforeBackpressure + 1 || lastScrollX != 4.0 || lastScrollY != 5.0) {
+        panic("GLFW backpressure should preserve the first queued scroll event");
+    }
+    if (glfwGetCallbackQueuePendingCount(input_window) != 0) {
+        panic("GLFW callback queue pending count should be zero after drain");
+    }
+    if (glfwResetDroppedCallbackCount(input_window) != 1) {
+        panic("glfwResetDroppedCallbackCount should return the dropped count");
+    }
+    if (glfwGetDroppedCallbackCount(input_window) != 0) {
+        panic("GLFW dropped callback count should reset to zero");
+    }
+    if (!glfwSetCallbackQueueLimit(input_window, 0)) {
+        panic("glfwSetCallbackQueueLimit reset failed");
+    }
+    if (glfwGetCallbackQueueLimit(input_window) != 0) {
+        panic("GLFW callback queue limit should reset to zero");
+    }
+    var scrollHitsBeforeClearDrop = scrollHits;
+    if (!glfwTestEmitScroll(input_window, 8.0, 9.0)) {
+        panic("clear-drop scroll emit failed");
+    }
+    if (!glfwClearInputCallback(input_window)) {
+        panic("glfwClearInputCallback after backpressure failed");
+    }
+    if (glfwHasInputCallback(input_window)) {
+        panic("GLFW input callback should be cleared after backpressure");
+    }
+    if (glfwCanPostCallbacks(input_window)) {
+        panic("GLFW should not report callback posting after the input callback is cleared");
+    }
+    if (extDrainPostedCallbacks(8) != 1) {
+        panic("GLFW clear-drop drain should process exactly one queued event");
+    }
+    if (scrollHits != scrollHitsBeforeClearDrop) {
+        panic("GLFW cleared callback should drop already queued events");
+    }
+    if (glfwGetInvalidatedCallbackCount(input_window) != 1) {
+        panic("GLFW invalidated callback count should report cleared queued events");
+    }
+    if (glfwResetInvalidatedCallbackCount(input_window) != 1) {
+        panic("glfwResetInvalidatedCallbackCount should return the invalidated count");
+    }
+    if (glfwGetInvalidatedCallbackCount(input_window) != 0) {
+        panic("GLFW invalidated callback count should reset to zero");
+    }
+    if (glfwGetRejectedCallbackCount(input_window) != 0) {
+        panic("GLFW rejected callback count should remain zero during normal operation");
+    }
+    extSetPostedCallbackAutoDrain(true);
+
+    if (!glfwSetWindowShouldClose(input_window, true)) {
+        panic("glfwSetWindowShouldClose failed");
+    }
+    if (!glfwWindowShouldClose(input_window)) {
+        panic("glfwWindowShouldClose did not report the updated state");
+    }
+    if (!glfwDestroyWindow(input_window)) {
+        panic("glfwDestroyWindow failed");
+    }
+    if (glfwGetLiveWindowCount() != 0) {
+        panic("GLFW live window count should drop after destroying the input window");
+    }
+    if (!glfwCanTerminate()) {
+        panic("GLFW should be terminable after destroying all windows");
+    }
+    if (!glfwTerminate()) {
+        panic("glfwTerminate failed");
+    }
+    if (glfwIsInitialized()) {
+        panic("GLFW should report uninitialized after glfwTerminate");
+    }
+
+    if (!glfwInit()) {
+        panic("GLFW should reinitialize for forced shutdown coverage");
+    }
+    extSetPostedCallbackAutoDrain(false);
+    var forced_window: GlfwWindow = glfwCreateWindow(80, 50, "TabloLang GLFW forced shutdown", false);
+    if (glfwGetLiveWindowCount() != 1) {
+        panic("GLFW live window count should track the forced-shutdown window");
+    }
+    if (!glfwSetInputCallback(forced_window, onScrollEvent)) {
+        panic("glfwSetInputCallback for forced shutdown failed");
+    }
+    if (!glfwCanPostCallbacks(forced_window)) {
+        panic("GLFW should report callback posting while the forced-shutdown callback is active");
+    }
+    var scrollHitsBeforeForceTerminate = scrollHits;
+    if (!glfwTestEmitScroll(forced_window, 10.0, 11.0)) {
+        panic("forced shutdown scroll emit failed");
+    }
+    if (glfwForceTerminate() != 1) {
+        panic("glfwForceTerminate should destroy exactly one live window");
+    }
+    if (glfwIsInitialized()) {
+        panic("GLFW should report uninitialized after glfwForceTerminate");
+    }
+    if (glfwGetLiveWindowCount() != 0) {
+        panic("GLFW live window count should be zero after glfwForceTerminate");
+    }
+    if (!glfwCanTerminate()) {
+        panic("GLFW should be terminable after glfwForceTerminate");
+    }
+    if (glfwCanPostCallbacks(forced_window)) {
+        panic("GLFW should stop reporting callback posting after glfwForceTerminate");
+    }
+    if (extDrainPostedCallbacks(8) != 1) {
+        panic("GLFW forced shutdown should leave one queued callback to drain");
+    }
+    if (scrollHits != scrollHitsBeforeForceTerminate) {
+        panic("GLFW forced shutdown should invalidate queued callback delivery");
+    }
+    if (glfwGetInvalidatedCallbackCount(forced_window) != 1) {
+        panic("GLFW forced shutdown should report one invalidated queued callback");
+    }
+    if (glfwResetInvalidatedCallbackCount(forced_window) != 1) {
+        panic("glfwResetInvalidatedCallbackCount should report the forced-shutdown invalidation");
+    }
+    if (glfwGetRejectedCallbackCount(forced_window) != 0) {
+        panic("GLFW rejected callback count should remain zero before queue shutdown");
+    }
+    if (!glfwDestroyWindow(forced_window)) {
+        panic("glfwDestroyWindow should be a no-op after glfwForceTerminate");
+    }
+    extSetPostedCallbackAutoDrain(true);
+
+    println("glfw_ok");
+}

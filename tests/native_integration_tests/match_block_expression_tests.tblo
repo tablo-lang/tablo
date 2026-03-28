@@ -1,0 +1,36 @@
+func choose(flag: bool): int {
+    return match (flag) {
+        true: {
+            var base: int = 10;
+            base = base + 2;
+            base
+        },
+        false: {
+            var base: int = 3;
+            if (base < 5) {
+                base = base * 4;
+            }
+            base
+        }
+    };
+}
+
+func label(kind: int): string {
+    return match (kind) {
+        1: {
+            var prefix: string = "hot";
+            prefix + "-path"
+        },
+        else: {
+            var suffix: string = "fallback";
+            "cold-" + suffix
+        }
+    };
+}
+
+func main() {
+    println(choose(true));
+    println(choose(false));
+    println(label(1));
+    println(label(2));
+}

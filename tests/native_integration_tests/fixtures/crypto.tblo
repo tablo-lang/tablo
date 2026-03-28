@@ -1,0 +1,3620 @@
+// Cryptographic hash, MAC, key-derivation, and authenticated-encryption helpers.
+// Focused on practical application workflows rather than full protocol suites.
+
+import "encoding.tblo";
+import "random.tblo";
+import "uuid.tblo";
+
+const CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION: string = "v1";
+const CRYPTO_PASSWORD_AES_GCM_SALT_BYTES: int = 16;
+const CRYPTO_PASSWORD_AES_GCM_NONCE_BYTES: int = 12;
+const CRYPTO_PASSWORD_AES_GCM_KEY_BYTES: int = 32;
+const CRYPTO_PASSWORD_AES_GCM_DEFAULT_ITERATIONS: int = 600000;
+const CRYPTO_PASSWORD_HASH_SCHEME: string = "pbkdf2-sha256";
+const CRYPTO_PASSWORD_HASH_VERSION: string = "v1";
+const CRYPTO_PASSWORD_HASH_SALT_BYTES: int = 16;
+const CRYPTO_PASSWORD_HASH_BYTES: int = 32;
+const CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS: int = 600000;
+const CRYPTO_SIGNED_TOKEN_VERSION: string = "v1";
+const CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM: string = "sid";
+const CRYPTO_SESSION_TOKEN_KIND_CLAIM: string = "tokenKind";
+const CRYPTO_SESSION_TOKEN_KIND_ACCESS: string = "access";
+const CRYPTO_SESSION_TOKEN_KIND_REFRESH: string = "refresh";
+
+record CryptoPasswordAesGcmEnvelope {
+    version: string,
+    iterations: int,
+    salt: bytes,
+    nonce: bytes,
+    sealed: bytes
+}
+
+record CryptoPasswordHash {
+    scheme: string,
+    version: string,
+    iterations: int,
+    salt: bytes,
+    digest: bytes
+}
+
+record CryptoSignedTokenEnvelope {
+    version: string,
+    issuedAtMillis: int,
+    expiresAtMillis: int,
+    payload: bytes
+}
+
+record CryptoSignedJsonClaimsEnvelope {
+    version: string,
+    issuedAtMillis: int,
+    expiresAtMillis: int,
+    keyId: string?,
+    claims: map<string, any>
+}
+
+record CryptoSignedJsonClaimsValidationPolicy {
+    issuer: string?,
+    audience: string?,
+    requireIssuer: bool,
+    requireAudience: bool,
+    requireNotBefore: bool,
+    requireJti: bool,
+    clockSkewMillis: int
+}
+
+record CryptoSignedJsonClaimsRevocationStore {
+    entries: map<string, any>,
+    nextExpiryMillis: int
+}
+
+record CryptoSessionTokenConfig {
+    issuer: string?,
+    audience: string?,
+    keyId: string?,
+    ttlMillis: int,
+    clockSkewMillis: int,
+    includeNotBefore: bool
+}
+
+record CryptoSessionTokenIssueResult {
+    token: string,
+    jwtId: string,
+    subject: string,
+    issuedAtMillis: int,
+    expiresAtMillis: int,
+    keyId: string?
+}
+
+record CryptoSessionTokenVerifyResult {
+    ok: bool,
+    expired: bool,
+    revoked: bool,
+    keyId: string?,
+    jwtId: string?,
+    subject: string?,
+    sessionId: string?,
+    tokenKind: string?,
+    claims: CryptoSignedJsonClaimsEnvelope,
+    revocations: CryptoSignedJsonClaimsRevocationStore
+}
+
+record CryptoSessionTokenPairConfig {
+    access: CryptoSessionTokenConfig,
+    refresh: CryptoSessionTokenConfig
+}
+
+record CryptoSessionTokenPairIssueResult {
+    sessionId: string,
+    access: CryptoSessionTokenIssueResult,
+    refresh: CryptoSessionTokenIssueResult
+}
+
+record CryptoSessionTokenPairRotateResult {
+    ok: bool,
+    expired: bool,
+    revoked: bool,
+    sessionId: string?,
+    previousRefreshJwtId: string?,
+    pair: CryptoSessionTokenPairIssueResult,
+    revocations: CryptoSignedJsonClaimsRevocationStore
+}
+
+func cryptoEmptyBytes(): bytes {
+    return bytesWithSize(0, 0).0;
+}
+
+func cryptoEmptyPasswordAesGcmEnvelope(): CryptoPasswordAesGcmEnvelope {
+    return {
+        version: "",
+        iterations: 0,
+        salt: cryptoEmptyBytes(),
+        nonce: cryptoEmptyBytes(),
+        sealed: cryptoEmptyBytes()
+    };
+}
+
+func cryptoEmptyPasswordHash(): CryptoPasswordHash {
+    return {
+        scheme: "",
+        version: "",
+        iterations: 0,
+        salt: cryptoEmptyBytes(),
+        digest: cryptoEmptyBytes()
+    };
+}
+
+func cryptoEmptySignedTokenEnvelope(): CryptoSignedTokenEnvelope {
+    return {
+        version: "",
+        issuedAtMillis: 0,
+        expiresAtMillis: 0,
+        payload: cryptoEmptyBytes()
+    };
+}
+
+func cryptoEmptySignedJsonClaimsEnvelope(): CryptoSignedJsonClaimsEnvelope {
+    return {
+        version: "",
+        issuedAtMillis: 0,
+        expiresAtMillis: 0,
+        keyId: nil,
+        claims: {}
+    };
+}
+
+func cryptoSignedJsonClaimsDefaultValidationPolicy(): CryptoSignedJsonClaimsValidationPolicy {
+    return {
+        issuer: nil,
+        audience: nil,
+        requireIssuer: false,
+        requireAudience: false,
+        requireNotBefore: false,
+        requireJti: false,
+        clockSkewMillis: 0
+    };
+}
+
+func cryptoSignedJsonClaimsRevocationStoreNew(): CryptoSignedJsonClaimsRevocationStore {
+    return {
+        entries: {},
+        nextExpiryMillis: 0
+    };
+}
+
+func cryptoSessionTokenDefaultConfig(): CryptoSessionTokenConfig {
+    return {
+        issuer: nil,
+        audience: nil,
+        keyId: nil,
+        ttlMillis: 900000,
+        clockSkewMillis: 30000,
+        includeNotBefore: true
+    };
+}
+
+func cryptoEmptySessionTokenIssueResult(): CryptoSessionTokenIssueResult {
+    return {
+        token: "",
+        jwtId: "",
+        subject: "",
+        issuedAtMillis: 0,
+        expiresAtMillis: 0,
+        keyId: nil
+    };
+}
+
+func cryptoEmptySessionTokenVerifyResult(revocations: CryptoSignedJsonClaimsRevocationStore): CryptoSessionTokenVerifyResult {
+    return {
+        ok: false,
+        expired: false,
+        revoked: false,
+        keyId: nil,
+        jwtId: nil,
+        subject: nil,
+        sessionId: nil,
+        tokenKind: nil,
+        claims: cryptoEmptySignedJsonClaimsEnvelope(),
+        revocations: revocations
+    };
+}
+
+func cryptoSessionTokenPairDefaultConfig(): CryptoSessionTokenPairConfig {
+    var access: CryptoSessionTokenConfig = cryptoSessionTokenDefaultConfig();
+    var refresh: CryptoSessionTokenConfig = cryptoSessionTokenDefaultConfig();
+    refresh.ttlMillis = 2592000000;
+    return {
+        access: access,
+        refresh: refresh
+    };
+}
+
+func cryptoEmptySessionTokenPairIssueResult(): CryptoSessionTokenPairIssueResult {
+    return {
+        sessionId: "",
+        access: cryptoEmptySessionTokenIssueResult(),
+        refresh: cryptoEmptySessionTokenIssueResult()
+    };
+}
+
+func cryptoEmptySessionTokenPairRotateResult(revocations: CryptoSignedJsonClaimsRevocationStore): CryptoSessionTokenPairRotateResult {
+    return {
+        ok: false,
+        expired: false,
+        revoked: false,
+        sessionId: nil,
+        previousRefreshJwtId: nil,
+        pair: cryptoEmptySessionTokenPairIssueResult(),
+        revocations: revocations
+    };
+}
+
+func cryptoStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func cryptoError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return cryptoStdError(code, message, data);
+}
+
+func cryptoIsAsciiDigits(text: string): bool {
+    if (len(text) == 0) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(text)) {
+        if (find("0123456789", substring(text, i, 1)) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func cryptoValidatePasswordEnvelopeIterations(iterations: int, context: string): Error? {
+    if (iterations < 1) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "iterations must be >= 1",
+                           context,
+                           iterations);
+    }
+    return nil;
+}
+
+func cryptoValidatePasswordEnvelopeShape(envelope: CryptoPasswordAesGcmEnvelope,
+                                         context: string): Error? {
+    if (envelope.version != CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "unsupported envelope version",
+                           context,
+                           envelope.version);
+    }
+
+    var iterations_err = cryptoValidatePasswordEnvelopeIterations(envelope.iterations, context);
+    if (iterations_err != nil) {
+        return iterations_err;
+    }
+
+    if (len(envelope.salt) != CRYPTO_PASSWORD_AES_GCM_SALT_BYTES) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "AES-GCM password envelope salt must be 16 bytes",
+                           context,
+                           len(envelope.salt));
+    }
+
+    if (len(envelope.nonce) != CRYPTO_PASSWORD_AES_GCM_NONCE_BYTES) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "AES-GCM password envelope nonce must be 12 bytes",
+                           context,
+                           len(envelope.nonce));
+    }
+
+    if (len(envelope.sealed) < 16) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "AES-GCM password envelope sealed payload must include a 16-byte tag",
+                           context,
+                           len(envelope.sealed));
+    }
+
+    return nil;
+}
+
+func cryptoValidatePasswordHashIterations(iterations: int, context: string): Error? {
+    if (iterations < 1) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "iterations must be >= 1",
+                           context,
+                           iterations);
+    }
+    return nil;
+}
+
+func cryptoValidatePasswordHashShape(hash: CryptoPasswordHash, context: string): Error? {
+    if (hash.scheme != CRYPTO_PASSWORD_HASH_SCHEME) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "unsupported password hash scheme",
+                           context,
+                           hash.scheme);
+    }
+
+    if (hash.version != CRYPTO_PASSWORD_HASH_VERSION) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "unsupported password hash version",
+                           context,
+                           hash.version);
+    }
+
+    var iterations_err = cryptoValidatePasswordHashIterations(hash.iterations, context);
+    if (iterations_err != nil) {
+        return iterations_err;
+    }
+
+    if (len(hash.salt) != CRYPTO_PASSWORD_HASH_SALT_BYTES) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "password hash salt must be 16 bytes",
+                           context,
+                           len(hash.salt));
+    }
+
+    if (len(hash.digest) != CRYPTO_PASSWORD_HASH_BYTES) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "password hash digest must be 32 bytes",
+                           context,
+                           len(hash.digest));
+    }
+
+    return nil;
+}
+
+func cryptoValidateSignedTokenTimes(issued_at_ms: int, expires_at_ms: int, context: string): Error? {
+    if (issued_at_ms < 0) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "issuedAtMillis must be >= 0",
+                           context,
+                           issued_at_ms);
+    }
+
+    if (expires_at_ms <= issued_at_ms) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "expiresAtMillis must be greater than issuedAtMillis",
+                           context,
+                           {
+                               "issuedAtMillis": issued_at_ms,
+                               "expiresAtMillis": expires_at_ms
+                           });
+    }
+
+    return nil;
+}
+
+func cryptoValidateSignedTokenTtl(ttl_ms: int, context: string): Error? {
+    if (ttl_ms < 1) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "ttlMs must be >= 1",
+                           context,
+                           ttl_ms);
+    }
+    return nil;
+}
+
+func cryptoValidateSignedTokenShape(token: CryptoSignedTokenEnvelope, context: string): Error? {
+    if (token.version != CRYPTO_SIGNED_TOKEN_VERSION) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "unsupported signed token version",
+                           context,
+                           token.version);
+    }
+    return cryptoValidateSignedTokenTimes(token.issuedAtMillis, token.expiresAtMillis, context);
+}
+
+func cryptoValidateSignedJsonClaimsKeyId(key_id: string, context: string): Error? {
+    if (key_id == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "keyId must not be empty",
+                           context,
+                           key_id);
+    }
+    return nil;
+}
+
+func cryptoValidateSignedJsonClaimsValidationPolicy(policy: CryptoSignedJsonClaimsValidationPolicy,
+                                                    context: string): Error? {
+    if (policy.issuer != nil && (policy.issuer as string) == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "policy issuer must not be empty",
+                           context,
+                           policy.issuer);
+    }
+
+    if (policy.audience != nil && (policy.audience as string) == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "policy audience must not be empty",
+                           context,
+                           policy.audience);
+    }
+
+    if (policy.clockSkewMillis < 0) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "policy clockSkewMillis must be >= 0",
+                           context,
+                           policy.clockSkewMillis);
+    }
+
+    return nil;
+}
+
+func cryptoValidateSessionTokenConfig(config: CryptoSessionTokenConfig,
+                                      context: string): Error? {
+    if (config.issuer != nil && (config.issuer as string) == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "session issuer must not be empty",
+                           context,
+                           config.issuer);
+    }
+
+    if (config.audience != nil && (config.audience as string) == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "session audience must not be empty",
+                           context,
+                           config.audience);
+    }
+
+    if (config.keyId != nil) {
+        var key_id_err = cryptoValidateSignedJsonClaimsKeyId(config.keyId as string, context);
+        if (key_id_err != nil) {
+            return key_id_err;
+        }
+    }
+
+    if (config.ttlMillis < 1) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "session ttlMillis must be >= 1",
+                           context,
+                           config.ttlMillis);
+    }
+
+    if (config.clockSkewMillis < 0) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "session clockSkewMillis must be >= 0",
+                           context,
+                           config.clockSkewMillis);
+    }
+
+    return nil;
+}
+
+func cryptoCloneAnyMap(values: map<string, any>): map<string, any> {
+    var out: map<string, any> = {};
+    foreach (key_any in keys(values)) {
+        if (key_any != nil && typeOf(key_any) == "string") {
+            var key: string = key_any as string;
+            mapSetString(out, key, mapGetString(values, key));
+        }
+    }
+    return out;
+}
+
+func cryptoSignedJsonClaimsNew(): map<string, any> {
+    return {};
+}
+
+func cryptoValidateSignedJsonClaimNonEmptyString(value: string,
+                                                 claim_name: string,
+                                                 context: string): Error? {
+    if (value == "") {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           claim_name + " claim must not be empty",
+                           context,
+                           value);
+    }
+    return nil;
+}
+
+func cryptoValidateSignedJsonClaimNotBefore(not_before_ms: int, context: string): Error? {
+    if (not_before_ms < 0) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "nbf claim must be >= 0",
+                           context,
+                           not_before_ms);
+    }
+    return nil;
+}
+
+func cryptoValidateSignedJsonClaimAudiences(audiences: array<string>,
+                                            context: string): Error? {
+    if (len(audiences) == 0) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "aud claim array must not be empty",
+                           context,
+                           audiences);
+    }
+
+    var i: int = 0;
+    while (i < len(audiences)) {
+        var audience: string = audiences[i];
+        var audience_err = cryptoValidateSignedJsonClaimNonEmptyString(audience, "aud", context);
+        if (audience_err != nil) {
+            return audience_err;
+        }
+        i = i + 1;
+    }
+
+    return nil;
+}
+
+func cryptoValidateSignedJsonClaimExpiryMillis(expires_at_ms: int,
+                                               context: string): Error? {
+    if (expires_at_ms < 1) {
+        return cryptoError(ERR_INVALID_ARGUMENT,
+                           "expiresAtMillis must be >= 1",
+                           context,
+                           expires_at_ms);
+    }
+    return nil;
+}
+
+func cryptoNormalizeWallTimeMillis(now_ms: int): int {
+    if (now_ms < 0) {
+        return 0;
+    }
+    return now_ms;
+}
+
+func cryptoSignedJsonClaimsExtractJwtId(claims: CryptoSignedJsonClaimsEnvelope,
+                                        require_present: bool,
+                                        context: string): (string?, Error?) {
+    var jwt_id_any: any = mapGetString(claims.claims, "jti");
+    if (jwt_id_any == nil) {
+        if (require_present) {
+            return (nil,
+                    cryptoError(ERR_INVALID_ARGUMENT,
+                                "claims must contain string field 'jti'",
+                                context,
+                                nil));
+        }
+        return (nil, nil);
+    }
+
+    if (typeOf(jwt_id_any) != "string") {
+        return (nil,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "claims field 'jti' must be string",
+                            context,
+                            typeOf(jwt_id_any)));
+    }
+
+    var jwt_id: string = jwt_id_any as string;
+    var jwt_id_err = cryptoValidateSignedJsonClaimNonEmptyString(jwt_id, "jti", context);
+    if (jwt_id_err != nil) {
+        return (nil, jwt_id_err);
+    }
+
+    return (jwt_id, nil);
+}
+
+func cryptoSignedJsonClaimsSetSubject(claims: map<string, any>,
+                                      subject: string): (map<string, any>, Error?) {
+    var subject_err = cryptoValidateSignedJsonClaimNonEmptyString(subject,
+                                                                  "sub",
+                                                                  "cryptoSignedJsonClaimsSetSubject");
+    if (subject_err != nil) {
+        return (claims, subject_err);
+    }
+
+    mapSetString(claims, "sub", subject as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsSetIssuer(claims: map<string, any>,
+                                     issuer: string): (map<string, any>, Error?) {
+    var issuer_err = cryptoValidateSignedJsonClaimNonEmptyString(issuer,
+                                                                 "iss",
+                                                                 "cryptoSignedJsonClaimsSetIssuer");
+    if (issuer_err != nil) {
+        return (claims, issuer_err);
+    }
+
+    mapSetString(claims, "iss", issuer as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsSetAudience(claims: map<string, any>,
+                                       audience: string): (map<string, any>, Error?) {
+    var audience_err = cryptoValidateSignedJsonClaimNonEmptyString(audience,
+                                                                   "aud",
+                                                                   "cryptoSignedJsonClaimsSetAudience");
+    if (audience_err != nil) {
+        return (claims, audience_err);
+    }
+
+    mapSetString(claims, "aud", audience as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsSetAudiences(claims: map<string, any>,
+                                        audiences: array<string>): (map<string, any>, Error?) {
+    var audience_err = cryptoValidateSignedJsonClaimAudiences(audiences,
+                                                              "cryptoSignedJsonClaimsSetAudiences");
+    if (audience_err != nil) {
+        return (claims, audience_err);
+    }
+
+    var audience_values: array<any> = [];
+    var i: int = 0;
+    while (i < len(audiences)) {
+        push(audience_values, audiences[i] as any);
+        i = i + 1;
+    }
+
+    mapSetString(claims, "aud", audience_values as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsSetNotBefore(claims: map<string, any>,
+                                        not_before_ms: int): (map<string, any>, Error?) {
+    var not_before_err = cryptoValidateSignedJsonClaimNotBefore(not_before_ms,
+                                                                "cryptoSignedJsonClaimsSetNotBefore");
+    if (not_before_err != nil) {
+        return (claims, not_before_err);
+    }
+
+    mapSetString(claims, "nbf", not_before_ms as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsSetJwtId(claims: map<string, any>,
+                                    jwt_id: string): (map<string, any>, Error?) {
+    var jwt_id_err = cryptoValidateSignedJsonClaimNonEmptyString(jwt_id,
+                                                                 "jti",
+                                                                 "cryptoSignedJsonClaimsSetJwtId");
+    if (jwt_id_err != nil) {
+        return (claims, jwt_id_err);
+    }
+
+    mapSetString(claims, "jti", jwt_id as any);
+    return (claims, nil);
+}
+
+func cryptoSignedJsonClaimsEnsureJwtId(claims: map<string, any>): (map<string, any>, string, Error?) {
+    var existing_any: any = mapGetString(claims, "jti");
+    if (existing_any != nil) {
+        if (typeOf(existing_any) != "string") {
+            return (claims,
+                    "",
+                    cryptoError(ERR_INVALID_ARGUMENT,
+                                "claims field 'jti' must be string",
+                                "cryptoSignedJsonClaimsEnsureJwtId",
+                                typeOf(existing_any)));
+        }
+
+        var existing_jti: string = existing_any as string;
+        var existing_err = cryptoValidateSignedJsonClaimNonEmptyString(existing_jti,
+                                                                       "jti",
+                                                                       "cryptoSignedJsonClaimsEnsureJwtId");
+        if (existing_err != nil) {
+            return (claims, "", existing_err);
+        }
+
+        return (claims, existing_jti, nil);
+    }
+
+    var generated = uuidV4();
+    if (generated.1 != nil) {
+        return (claims,
+                "",
+                wrapError(generated.1, "cryptoSignedJsonClaimsEnsureJwtId"));
+    }
+
+    mapSetString(claims, "jti", generated.0 as any);
+    return (claims, generated.0, nil);
+}
+
+func cryptoSessionTokenOptionalStringClaim(claims: CryptoSignedJsonClaimsEnvelope,
+                                           claim_name: string): string? {
+    var value_any: any = mapGetString(claims.claims, claim_name);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return nil;
+    }
+
+    var value: string = value_any as string;
+    if (value == "") {
+        return nil;
+    }
+    return value;
+}
+
+func cryptoSessionTokenExtractSubject(claims: CryptoSignedJsonClaimsEnvelope,
+                                      context: string): (string, Error?) {
+    var subject_any: any = mapGetString(claims.claims, "sub");
+    if (subject_any == nil || typeOf(subject_any) != "string") {
+        return ("",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "claims must contain string field 'sub'",
+                            context,
+                            subject_any));
+    }
+
+    var subject: string = subject_any as string;
+    var subject_err = cryptoValidateSignedJsonClaimNonEmptyString(subject, "sub", context);
+    if (subject_err != nil) {
+        return ("", subject_err);
+    }
+    return (subject, nil);
+}
+
+func cryptoSessionTokenValidationPolicy(config: CryptoSessionTokenConfig,
+                                        context: string): (CryptoSignedJsonClaimsValidationPolicy, Error?) {
+    var policy: CryptoSignedJsonClaimsValidationPolicy = cryptoSignedJsonClaimsDefaultValidationPolicy();
+
+    var config_err = cryptoValidateSessionTokenConfig(config, context);
+    if (config_err != nil) {
+        return (policy, config_err);
+    }
+
+    policy.issuer = config.issuer;
+    policy.audience = config.audience;
+    policy.requireIssuer = config.issuer != nil;
+    policy.requireAudience = config.audience != nil;
+    policy.requireNotBefore = config.includeNotBefore;
+    policy.requireJti = true;
+    policy.clockSkewMillis = config.clockSkewMillis;
+    return (policy, nil);
+}
+
+func cryptoValidateSessionTokenPairConfig(config: CryptoSessionTokenPairConfig,
+                                          context: string): Error? {
+    var access_err = cryptoValidateSessionTokenConfig(config.access, context + ".access");
+    if (access_err != nil) {
+        return access_err;
+    }
+
+    var refresh_err = cryptoValidateSessionTokenConfig(config.refresh, context + ".refresh");
+    if (refresh_err != nil) {
+        return refresh_err;
+    }
+
+    return nil;
+}
+
+func cryptoSessionTokenBuildClaims(config: CryptoSessionTokenConfig,
+                                   subject: string,
+                                   extra_claims: map<string, any>,
+                                   issued_at_ms: int,
+                                   context: string): (map<string, any>, Error?) {
+    var config_err = cryptoValidateSessionTokenConfig(config, context);
+    if (config_err != nil) {
+        return ({}, config_err);
+    }
+
+    var next_claims: map<string, any> = cryptoCloneAnyMap(extra_claims);
+
+    var subject_claims = cryptoSignedJsonClaimsSetSubject(next_claims, subject);
+    if (subject_claims.1 != nil) {
+        return ({}, subject_claims.1);
+    }
+    next_claims = subject_claims.0;
+
+    if (config.issuer != nil) {
+        var issuer_claims = cryptoSignedJsonClaimsSetIssuer(next_claims, config.issuer as string);
+        if (issuer_claims.1 != nil) {
+            return ({}, issuer_claims.1);
+        }
+        next_claims = issuer_claims.0;
+    }
+
+    if (config.audience != nil) {
+        var audience_claims = cryptoSignedJsonClaimsSetAudience(next_claims, config.audience as string);
+        if (audience_claims.1 != nil) {
+            return ({}, audience_claims.1);
+        }
+        next_claims = audience_claims.0;
+    }
+
+    if (config.includeNotBefore) {
+        var nbf_claims = cryptoSignedJsonClaimsSetNotBefore(next_claims, issued_at_ms);
+        if (nbf_claims.1 != nil) {
+            return ({}, nbf_claims.1);
+        }
+        next_claims = nbf_claims.0;
+    }
+
+    return (next_claims, nil);
+}
+
+func cryptoSessionTokenPairBuildClaims(base_claims: map<string, any>,
+                                       session_id: string,
+                                       token_kind: string): map<string, any> {
+    var next_claims: map<string, any> = cryptoCloneAnyMap(base_claims);
+    mapSetString(next_claims, CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM, session_id as any);
+    mapSetString(next_claims, CRYPTO_SESSION_TOKEN_KIND_CLAIM, token_kind as any);
+    return next_claims;
+}
+
+func cryptoSessionTokenExtractSessionId(claims: CryptoSignedJsonClaimsEnvelope,
+                                        context: string): (string, Error?) {
+    var session_id_any: any = mapGetString(claims.claims, CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM);
+    if (session_id_any == nil || typeOf(session_id_any) != "string") {
+        return ("",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "claims must contain string field '" + CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM + "'",
+                            context,
+                            session_id_any));
+    }
+
+    var session_id: string = session_id_any as string;
+    if (!uuidIsValid(session_id)) {
+        return ("",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "session token sid must be a valid UUID",
+                            context,
+                            session_id));
+    }
+
+    return (session_id, nil);
+}
+
+func cryptoSessionTokenExtractTokenKind(claims: CryptoSignedJsonClaimsEnvelope,
+                                        context: string): (string, Error?) {
+    var token_kind_any: any = mapGetString(claims.claims, CRYPTO_SESSION_TOKEN_KIND_CLAIM);
+    if (token_kind_any == nil || typeOf(token_kind_any) != "string") {
+        return ("",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "claims must contain string field '" + CRYPTO_SESSION_TOKEN_KIND_CLAIM + "'",
+                            context,
+                            token_kind_any));
+    }
+
+    var token_kind: string = token_kind_any as string;
+    if (token_kind != CRYPTO_SESSION_TOKEN_KIND_ACCESS &&
+        token_kind != CRYPTO_SESSION_TOKEN_KIND_REFRESH) {
+        return ("",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "tokenKind must be 'access' or 'refresh'",
+                            context,
+                            token_kind));
+    }
+
+    return (token_kind, nil);
+}
+
+func cryptoSessionTokenPairValidateVerifiedKind(verified: CryptoSessionTokenVerifyResult,
+                                                expected_kind: string,
+                                                context: string): CryptoSessionTokenVerifyResult {
+    var next: CryptoSessionTokenVerifyResult = verified;
+    next.sessionId = cryptoSessionTokenOptionalStringClaim(verified.claims,
+                                                           CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM);
+    next.tokenKind = cryptoSessionTokenOptionalStringClaim(verified.claims,
+                                                           CRYPTO_SESSION_TOKEN_KIND_CLAIM);
+
+    if (!verified.ok || verified.expired || verified.revoked) {
+        return next;
+    }
+
+    var session_id_r = cryptoSessionTokenExtractSessionId(verified.claims, context);
+    if (session_id_r.1 != nil) {
+        next.ok = false;
+        next.sessionId = nil;
+        return next;
+    }
+    next.sessionId = session_id_r.0;
+
+    var token_kind_r = cryptoSessionTokenExtractTokenKind(verified.claims, context);
+    if (token_kind_r.1 != nil) {
+        next.ok = false;
+        next.tokenKind = nil;
+        return next;
+    }
+
+    next.tokenKind = token_kind_r.0;
+    if (token_kind_r.0 != expected_kind) {
+        next.ok = false;
+    }
+
+    return next;
+}
+
+func cryptoSessionTokenPairStripManagedClaims(claims: map<string, any>): map<string, any> {
+    var next_claims: map<string, any> = cryptoCloneAnyMap(claims);
+    mapDeleteString(next_claims, "sub");
+    mapDeleteString(next_claims, "iss");
+    mapDeleteString(next_claims, "aud");
+    mapDeleteString(next_claims, "nbf");
+    mapDeleteString(next_claims, "jti");
+    mapDeleteString(next_claims, CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM);
+    mapDeleteString(next_claims, CRYPTO_SESSION_TOKEN_KIND_CLAIM);
+    return next_claims;
+}
+
+func cryptoSessionTokenPairMergeClaims(base_claims: map<string, any>,
+                                       override_claims: map<string, any>): map<string, any> {
+    var next_claims: map<string, any> = cryptoCloneAnyMap(base_claims);
+    foreach (key_any in keys(override_claims)) {
+        if (key_any != nil && typeOf(key_any) == "string") {
+            var key: string = key_any as string;
+            mapSetString(next_claims, key, mapGetString(override_claims, key));
+        }
+    }
+    return next_claims;
+}
+
+func cryptoSessionTokenPairIssueWithSessionIdText(access_secret_text: string,
+                                                  refresh_secret_text: string,
+                                                  config: CryptoSessionTokenPairConfig,
+                                                  session_id: string,
+                                                  subject: string,
+                                                  access_claims: map<string, any>,
+                                                  refresh_claims: map<string, any>,
+                                                  now_ms: int,
+                                                  context: string): (CryptoSessionTokenPairIssueResult, Error?) {
+    var empty = cryptoEmptySessionTokenPairIssueResult();
+    if (!uuidIsValid(session_id)) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "session token pair sid must be a valid UUID",
+                            context,
+                            session_id));
+    }
+
+    var access_next_claims = cryptoSessionTokenPairBuildClaims(access_claims,
+                                                               session_id,
+                                                               CRYPTO_SESSION_TOKEN_KIND_ACCESS);
+    var refresh_next_claims = cryptoSessionTokenPairBuildClaims(refresh_claims,
+                                                                session_id,
+                                                                CRYPTO_SESSION_TOKEN_KIND_REFRESH);
+
+    var access_issued = cryptoSessionTokenIssueText(access_secret_text,
+                                                    config.access,
+                                                    subject,
+                                                    access_next_claims,
+                                                    now_ms);
+    if (access_issued.1 != nil) {
+        return (empty, wrapError(access_issued.1, context));
+    }
+
+    var refresh_issued = cryptoSessionTokenIssueText(refresh_secret_text,
+                                                     config.refresh,
+                                                     subject,
+                                                     refresh_next_claims,
+                                                     now_ms);
+    if (refresh_issued.1 != nil) {
+        return (empty, wrapError(refresh_issued.1, context));
+    }
+
+    var issued: CryptoSessionTokenPairIssueResult = {
+        sessionId: session_id,
+        access: access_issued.0,
+        refresh: refresh_issued.0
+    };
+    return (issued, nil);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreCount(store: CryptoSignedJsonClaimsRevocationStore): int {
+    return mapCount(store.entries);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreComputeNextExpiry(store: CryptoSignedJsonClaimsRevocationStore): int {
+    var next_expiry_ms: int = 0;
+    var key_items: array<any> = keys(store.entries);
+    foreach (key_any in key_items) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+
+        var expires_any: any = mapGetString(store.entries, key_any as string);
+        if (expires_any == nil || typeOf(expires_any) != "int") {
+            continue;
+        }
+
+        var expires_at_ms: int = expires_any as int;
+        if (expires_at_ms > 0 && (next_expiry_ms == 0 || expires_at_ms < next_expiry_ms)) {
+            next_expiry_ms = expires_at_ms;
+        }
+    }
+    return next_expiry_ms;
+}
+
+func cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(store: CryptoSignedJsonClaimsRevocationStore,
+                                                         now_ms: int): (CryptoSignedJsonClaimsRevocationStore, int) {
+    var normalized_now: int = cryptoNormalizeWallTimeMillis(now_ms);
+    if (mapCount(store.entries) == 0) {
+        store.nextExpiryMillis = 0;
+        return (store, 0);
+    }
+
+    if (store.nextExpiryMillis <= 0 || normalized_now < store.nextExpiryMillis) {
+        return (store, 0);
+    }
+
+    var removed: int = 0;
+    var next_expiry_ms: int = 0;
+    var key_items: array<any> = keys(store.entries);
+    foreach (key_any in key_items) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+
+        var key: string = key_any as string;
+        var expires_any: any = mapGetString(store.entries, key);
+        if (expires_any == nil || typeOf(expires_any) != "int") {
+            mapDeleteString(store.entries, key);
+            removed = removed + 1;
+            continue;
+        }
+
+        var expires_at_ms: int = expires_any as int;
+        if (expires_at_ms <= normalized_now) {
+            mapDeleteString(store.entries, key);
+            removed = removed + 1;
+            continue;
+        }
+
+        if (next_expiry_ms == 0 || expires_at_ms < next_expiry_ms) {
+            next_expiry_ms = expires_at_ms;
+        }
+    }
+
+    store.nextExpiryMillis = next_expiry_ms;
+    return (store, removed);
+}
+
+func cryptoSignedJsonClaimsRevocationStorePurgeExpired(store: CryptoSignedJsonClaimsRevocationStore): (CryptoSignedJsonClaimsRevocationStore, int) {
+    return cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(store, timeNowMillis());
+}
+
+func cryptoSignedJsonClaimsRevocationStoreRevokeId(store: CryptoSignedJsonClaimsRevocationStore,
+                                                   jwt_id: string,
+                                                   expires_at_ms: int): (CryptoSignedJsonClaimsRevocationStore, Error?) {
+    var jwt_id_err = cryptoValidateSignedJsonClaimNonEmptyString(jwt_id,
+                                                                 "jti",
+                                                                 "cryptoSignedJsonClaimsRevocationStoreRevokeId");
+    if (jwt_id_err != nil) {
+        return (store, jwt_id_err);
+    }
+
+    var expires_err = cryptoValidateSignedJsonClaimExpiryMillis(expires_at_ms,
+                                                                "cryptoSignedJsonClaimsRevocationStoreRevokeId");
+    if (expires_err != nil) {
+        return (store, expires_err);
+    }
+
+    mapSetString(store.entries, jwt_id, expires_at_ms as any);
+    if (store.nextExpiryMillis == 0 || expires_at_ms < store.nextExpiryMillis) {
+        store.nextExpiryMillis = expires_at_ms;
+    }
+    return (store, nil);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreRevoke(store: CryptoSignedJsonClaimsRevocationStore,
+                                                 claims: CryptoSignedJsonClaimsEnvelope): (CryptoSignedJsonClaimsRevocationStore, Error?) {
+    var jwt_id = cryptoSignedJsonClaimsExtractJwtId(claims,
+                                                    true,
+                                                    "cryptoSignedJsonClaimsRevocationStoreRevoke");
+    if (jwt_id.1 != nil) {
+        return (store, wrapError(jwt_id.1, "cryptoSignedJsonClaimsRevocationStoreRevoke"));
+    }
+
+    return cryptoSignedJsonClaimsRevocationStoreRevokeId(store,
+                                                         jwt_id.0 as string,
+                                                         claims.expiresAtMillis);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreHasJwtIdAt(store: CryptoSignedJsonClaimsRevocationStore,
+                                                     jwt_id: string,
+                                                     now_ms: int): (CryptoSignedJsonClaimsRevocationStore, bool, Error?) {
+    var purged = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(store, now_ms);
+    var next: CryptoSignedJsonClaimsRevocationStore = purged.0;
+
+    var jwt_id_err = cryptoValidateSignedJsonClaimNonEmptyString(jwt_id,
+                                                                 "jti",
+                                                                 "cryptoSignedJsonClaimsRevocationStoreHasJwtIdAt");
+    if (jwt_id_err != nil) {
+        return (next, false, jwt_id_err);
+    }
+
+    return (next, mapHasString(next.entries, jwt_id), nil);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreHasJwtId(store: CryptoSignedJsonClaimsRevocationStore,
+                                                   jwt_id: string): (CryptoSignedJsonClaimsRevocationStore, bool, Error?) {
+    return cryptoSignedJsonClaimsRevocationStoreHasJwtIdAt(store, jwt_id, timeNowMillis());
+}
+
+func cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(store: CryptoSignedJsonClaimsRevocationStore,
+                                                      claims: CryptoSignedJsonClaimsEnvelope,
+                                                      now_ms: int): (CryptoSignedJsonClaimsRevocationStore, bool, Error?) {
+    var purged = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(store, now_ms);
+    var next: CryptoSignedJsonClaimsRevocationStore = purged.0;
+
+    var jwt_id = cryptoSignedJsonClaimsExtractJwtId(claims,
+                                                    false,
+                                                    "cryptoSignedJsonClaimsRevocationStoreIsRevokedAt");
+    if (jwt_id.1 != nil) {
+        return (next, false, wrapError(jwt_id.1, "cryptoSignedJsonClaimsRevocationStoreIsRevokedAt"));
+    }
+
+    if (jwt_id.0 == nil) {
+        return (next, false, nil);
+    }
+
+    return (next, mapHasString(next.entries, jwt_id.0 as string), nil);
+}
+
+func cryptoSignedJsonClaimsRevocationStoreIsRevoked(store: CryptoSignedJsonClaimsRevocationStore,
+                                                    claims: CryptoSignedJsonClaimsEnvelope): (CryptoSignedJsonClaimsRevocationStore, bool, Error?) {
+    return cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(store, claims, timeNowMillis());
+}
+
+func cryptoSignedJsonClaimsRevocationStoreDelete(store: CryptoSignedJsonClaimsRevocationStore,
+                                                 jwt_id: string): (CryptoSignedJsonClaimsRevocationStore, bool, Error?) {
+    var jwt_id_err = cryptoValidateSignedJsonClaimNonEmptyString(jwt_id,
+                                                                 "jti",
+                                                                 "cryptoSignedJsonClaimsRevocationStoreDelete");
+    if (jwt_id_err != nil) {
+        return (store, false, jwt_id_err);
+    }
+
+    if (!mapHasString(store.entries, jwt_id)) {
+        return (store, false, nil);
+    }
+
+    mapDeleteString(store.entries, jwt_id);
+    store.nextExpiryMillis = cryptoSignedJsonClaimsRevocationStoreComputeNextExpiry(store);
+    return (store, true, nil);
+}
+
+func cryptoSignedJsonClaimsAudienceMatches(value_any: any,
+                                           expected_audience: string?): bool {
+    if (value_any == nil) {
+        return false;
+    }
+
+    if (typeOf(value_any) == "string") {
+        var audience_one: string = value_any as string;
+        if (audience_one == "") {
+            return false;
+        }
+
+        if (expected_audience == nil) {
+            return true;
+        }
+        return audience_one == (expected_audience as string);
+    }
+
+    if (typeOf(value_any) != "array") {
+        return false;
+    }
+
+    var audience_many: array<any> = value_any as array<any>;
+    if (len(audience_many) == 0) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(audience_many)) {
+        var item: any = audience_many[i];
+        if (item == nil || typeOf(item) != "string") {
+            return false;
+        }
+
+        var audience_item: string = item as string;
+        if (audience_item == "") {
+            return false;
+        }
+
+        i = i + 1;
+    }
+
+    if (expected_audience == nil) {
+        return true;
+    }
+    return contains(audience_many, expected_audience as any);
+}
+
+func cryptoCopyBytesRange(data: bytes, start: int, count: int): (bytes, Error?) {
+    if (start < 0 || count < 0 || start > len(data) || count > (len(data) - start)) {
+        return (cryptoEmptyBytes(),
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "byte range is out of bounds",
+                            "cryptoCopyBytesRange",
+                            {"start": start, "count": count, "length": len(data)}));
+    }
+
+    var out: bytes = bytesWithSize(count, 0).0;
+    var i: int = 0;
+    while (i < count) {
+        out[i] = data[start + i];
+        i = i + 1;
+    }
+    return (out, nil);
+}
+
+func cryptoSplitAesGcmSealed(sealed: bytes): (bytes, bytes, Error?) {
+    if (len(sealed) < 16) {
+        return (cryptoEmptyBytes(),
+                cryptoEmptyBytes(),
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "AES-GCM sealed payload must include a 16-byte tag",
+                            "cryptoSplitAesGcmSealed",
+                            len(sealed)));
+    }
+
+    var ciphertext_len: int = len(sealed) - 16;
+    var ciphertext = cryptoCopyBytesRange(sealed, 0, ciphertext_len);
+    if (ciphertext.1 != nil) {
+        return (cryptoEmptyBytes(),
+                cryptoEmptyBytes(),
+                wrapError(ciphertext.1, "cryptoSplitAesGcmSealed"));
+    }
+
+    var tag = cryptoCopyBytesRange(sealed, ciphertext_len, 16);
+    if (tag.1 != nil) {
+        return (cryptoEmptyBytes(),
+                cryptoEmptyBytes(),
+                wrapError(tag.1, "cryptoSplitAesGcmSealed"));
+    }
+
+    return (ciphertext.0, tag.0, nil);
+}
+
+func cryptoJoinAesGcmDetached(ciphertext: bytes, tag: bytes): (bytes, Error?) {
+    if (len(tag) != 16) {
+        return (cryptoEmptyBytes(),
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "AES-GCM tag must be 16 bytes",
+                            "cryptoJoinAesGcmDetached",
+                            len(tag)));
+    }
+
+    var joined = bytesJoin([ciphertext, tag]);
+    if (joined.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(joined.1, "cryptoJoinAesGcmDetached"));
+    }
+    return (joined.0, nil);
+}
+
+func cryptoSha256Bytes(data: bytes): (bytes, Error?) {
+    var hashed = sha256Bytes(data);
+    if (hashed.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(hashed.1, "cryptoSha256Bytes"));
+    }
+    return (hashed.0, nil);
+}
+
+func cryptoSha256Hex(data: bytes): (string, Error?) {
+    var hashed = cryptoSha256Bytes(data);
+    if (hashed.1 != nil) {
+        return ("", wrapError(hashed.1, "cryptoSha256Hex"));
+    }
+
+    var encoded = bytesToHex(hashed.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoSha256Hex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoSha256Text(text: string): (bytes, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(bytes_r.1, "cryptoSha256Text"));
+    }
+    return cryptoSha256Bytes(bytes_r.0);
+}
+
+func cryptoSha256TextHex(text: string): (string, Error?) {
+    var hashed = cryptoSha256Text(text);
+    if (hashed.1 != nil) {
+        return ("", wrapError(hashed.1, "cryptoSha256TextHex"));
+    }
+
+    var encoded = bytesToHex(hashed.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoSha256TextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoHmacSha256Bytes(key: bytes, data: bytes): (bytes, Error?) {
+    var mac = hmacSha256Bytes(key, data);
+    if (mac.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(mac.1, "cryptoHmacSha256Bytes"));
+    }
+    return (mac.0, nil);
+}
+
+func cryptoHmacSha256Hex(key: bytes, data: bytes): (string, Error?) {
+    var mac = cryptoHmacSha256Bytes(key, data);
+    if (mac.1 != nil) {
+        return ("", wrapError(mac.1, "cryptoHmacSha256Hex"));
+    }
+
+    var encoded = bytesToHex(mac.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoHmacSha256Hex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoHmacSha256Text(key_text: string, data_text: string): (bytes, Error?) {
+    var key_r = stringToBytes(key_text);
+    if (key_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(key_r.1, "cryptoHmacSha256Text"));
+    }
+
+    var data_r = stringToBytes(data_text);
+    if (data_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(data_r.1, "cryptoHmacSha256Text"));
+    }
+
+    return cryptoHmacSha256Bytes(key_r.0, data_r.0);
+}
+
+func cryptoHmacSha256TextHex(key_text: string, data_text: string): (string, Error?) {
+    var mac = cryptoHmacSha256Text(key_text, data_text);
+    if (mac.1 != nil) {
+        return ("", wrapError(mac.1, "cryptoHmacSha256TextHex"));
+    }
+
+    var encoded = bytesToHex(mac.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoHmacSha256TextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoPbkdf2HmacSha256Bytes(password: bytes,
+                                 salt: bytes,
+                                 iterations: int,
+                                 derived_key_bytes: int): (bytes, Error?) {
+    var derived = pbkdf2HmacSha256Bytes(password, salt, iterations, derived_key_bytes);
+    if (derived.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(derived.1, "cryptoPbkdf2HmacSha256Bytes"));
+    }
+    return (derived.0, nil);
+}
+
+func cryptoPbkdf2HmacSha256Hex(password: bytes,
+                               salt: bytes,
+                               iterations: int,
+                               derived_key_bytes: int): (string, Error?) {
+    var derived = cryptoPbkdf2HmacSha256Bytes(password, salt, iterations, derived_key_bytes);
+    if (derived.1 != nil) {
+        return ("", wrapError(derived.1, "cryptoPbkdf2HmacSha256Hex"));
+    }
+
+    var encoded = bytesToHex(derived.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoPbkdf2HmacSha256Hex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoPbkdf2HmacSha256Text(password: string,
+                                salt: string,
+                                iterations: int,
+                                derived_key_bytes: int): (bytes, Error?) {
+    var password_r = stringToBytes(password);
+    if (password_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(password_r.1, "cryptoPbkdf2HmacSha256Text"));
+    }
+
+    var salt_r = stringToBytes(salt);
+    if (salt_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(salt_r.1, "cryptoPbkdf2HmacSha256Text"));
+    }
+
+    return cryptoPbkdf2HmacSha256Bytes(password_r.0, salt_r.0, iterations, derived_key_bytes);
+}
+
+func cryptoPbkdf2HmacSha256TextHex(password: string,
+                                   salt: string,
+                                   iterations: int,
+                                   derived_key_bytes: int): (string, Error?) {
+    var derived = cryptoPbkdf2HmacSha256Text(password, salt, iterations, derived_key_bytes);
+    if (derived.1 != nil) {
+        return ("", wrapError(derived.1, "cryptoPbkdf2HmacSha256TextHex"));
+    }
+
+    var encoded = bytesToHex(derived.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoPbkdf2HmacSha256TextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoHkdfHmacSha256Bytes(ikm: bytes,
+                               salt: bytes,
+                               info: bytes,
+                               derived_key_bytes: int): (bytes, Error?) {
+    var derived = hkdfHmacSha256Bytes(ikm, salt, info, derived_key_bytes);
+    if (derived.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(derived.1, "cryptoHkdfHmacSha256Bytes"));
+    }
+    return (derived.0, nil);
+}
+
+func cryptoHkdfHmacSha256Hex(ikm: bytes,
+                             salt: bytes,
+                             info: bytes,
+                             derived_key_bytes: int): (string, Error?) {
+    var derived = cryptoHkdfHmacSha256Bytes(ikm, salt, info, derived_key_bytes);
+    if (derived.1 != nil) {
+        return ("", wrapError(derived.1, "cryptoHkdfHmacSha256Hex"));
+    }
+
+    var encoded = bytesToHex(derived.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoHkdfHmacSha256Hex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoHkdfHmacSha256Text(ikm: string,
+                              salt: string,
+                              info: string,
+                              derived_key_bytes: int): (bytes, Error?) {
+    var ikm_r = stringToBytes(ikm);
+    if (ikm_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(ikm_r.1, "cryptoHkdfHmacSha256Text"));
+    }
+
+    var salt_r = stringToBytes(salt);
+    if (salt_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(salt_r.1, "cryptoHkdfHmacSha256Text"));
+    }
+
+    var info_r = stringToBytes(info);
+    if (info_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(info_r.1, "cryptoHkdfHmacSha256Text"));
+    }
+
+    return cryptoHkdfHmacSha256Bytes(ikm_r.0, salt_r.0, info_r.0, derived_key_bytes);
+}
+
+func cryptoHkdfHmacSha256TextHex(ikm: string,
+                                 salt: string,
+                                 info: string,
+                                 derived_key_bytes: int): (string, Error?) {
+    var derived = cryptoHkdfHmacSha256Text(ikm, salt, info, derived_key_bytes);
+    if (derived.1 != nil) {
+        return ("", wrapError(derived.1, "cryptoHkdfHmacSha256TextHex"));
+    }
+
+    var encoded = bytesToHex(derived.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoHkdfHmacSha256TextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoConstantTimeBytesEqual(left: bytes, right: bytes): (bool, Error?) {
+    var equal = constantTimeBytesEqual(left, right);
+    if (equal.1 != nil) {
+        return (false, wrapError(equal.1, "cryptoConstantTimeBytesEqual"));
+    }
+    return (equal.0, nil);
+}
+
+func cryptoConstantTimeTextEqual(left: string, right: string): (bool, Error?) {
+    var left_r = stringToBytes(left);
+    if (left_r.1 != nil) {
+        return (false, wrapError(left_r.1, "cryptoConstantTimeTextEqual"));
+    }
+
+    var right_r = stringToBytes(right);
+    if (right_r.1 != nil) {
+        return (false, wrapError(right_r.1, "cryptoConstantTimeTextEqual"));
+    }
+
+    return cryptoConstantTimeBytesEqual(left_r.0, right_r.0);
+}
+
+func cryptoHmacSha256VerifyBytes(key: bytes, data: bytes, expected_tag: bytes): (bool, Error?) {
+    var actual = cryptoHmacSha256Bytes(key, data);
+    if (actual.1 != nil) {
+        return (false, wrapError(actual.1, "cryptoHmacSha256VerifyBytes"));
+    }
+    return cryptoConstantTimeBytesEqual(actual.0, expected_tag);
+}
+
+func cryptoHmacSha256VerifyHex(key: bytes, data: bytes, expected_hex: string): (bool, Error?) {
+    var expected = hexToBytes(expected_hex);
+    if (expected.1 != nil) {
+        return (false, wrapError(expected.1, "cryptoHmacSha256VerifyHex"));
+    }
+    return cryptoHmacSha256VerifyBytes(key, data, expected.0);
+}
+
+func cryptoHmacSha256VerifyTextHex(key_text: string, data_text: string, expected_hex: string): (bool, Error?) {
+    var actual = cryptoHmacSha256Text(key_text, data_text);
+    if (actual.1 != nil) {
+        return (false, wrapError(actual.1, "cryptoHmacSha256VerifyTextHex"));
+    }
+
+    var expected = hexToBytes(expected_hex);
+    if (expected.1 != nil) {
+        return (false, wrapError(expected.1, "cryptoHmacSha256VerifyTextHex"));
+    }
+
+    return cryptoConstantTimeBytesEqual(actual.0, expected.0);
+}
+
+func cryptoAesCtrTransform(key: bytes, counter: bytes, input: bytes): (bytes, Error?) {
+    var transformed = aesCtrBytes(key, counter, input);
+    if (transformed.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(transformed.1, "cryptoAesCtrTransform"));
+    }
+    return (transformed.0, nil);
+}
+
+func cryptoAesCtrEncrypt(key: bytes, counter: bytes, plaintext: bytes): (bytes, Error?) {
+    return cryptoAesCtrTransform(key, counter, plaintext);
+}
+
+func cryptoAesCtrDecrypt(key: bytes, counter: bytes, ciphertext: bytes): (bytes, Error?) {
+    return cryptoAesCtrTransform(key, counter, ciphertext);
+}
+
+func cryptoAesCtrEncryptText(key: bytes, counter: bytes, plaintext: string): (bytes, Error?) {
+    var plaintext_r = stringToBytes(plaintext);
+    if (plaintext_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(plaintext_r.1, "cryptoAesCtrEncryptText"));
+    }
+
+    return cryptoAesCtrEncrypt(key, counter, plaintext_r.0);
+}
+
+func cryptoAesCtrEncryptTextHex(key: bytes, counter: bytes, plaintext: string): (string, Error?) {
+    var ciphertext = cryptoAesCtrEncryptText(key, counter, plaintext);
+    if (ciphertext.1 != nil) {
+        return ("", wrapError(ciphertext.1, "cryptoAesCtrEncryptTextHex"));
+    }
+
+    var encoded = bytesToHex(ciphertext.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesCtrEncryptTextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoAesGcmSeal(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes): (bytes, Error?) {
+    var sealed = aesGcmSealBytes(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(sealed.1, "cryptoAesGcmSeal"));
+    }
+    return (sealed.0, nil);
+}
+
+func cryptoAesGcmOpen(key: bytes, nonce: bytes, sealed: bytes, aad: bytes): (bytes, Error?) {
+    var opened = aesGcmOpenBytes(key, nonce, sealed, aad);
+    if (opened.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(opened.1, "cryptoAesGcmOpen"));
+    }
+    return (opened.0, nil);
+}
+
+func cryptoAesGcmSealDetached(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes): (bytes, bytes, Error?) {
+    var sealed = cryptoAesGcmSeal(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return (cryptoEmptyBytes(), cryptoEmptyBytes(), wrapError(sealed.1, "cryptoAesGcmSealDetached"));
+    }
+
+    var detached_parts = cryptoSplitAesGcmSealed(sealed.0);
+    if (detached_parts.2 != nil) {
+        return (cryptoEmptyBytes(), cryptoEmptyBytes(), wrapError(detached_parts.2, "cryptoAesGcmSealDetached"));
+    }
+    return (detached_parts.0, detached_parts.1, nil);
+}
+
+func cryptoAesGcmOpenDetached(key: bytes, nonce: bytes, ciphertext: bytes, tag: bytes, aad: bytes): (bytes, Error?) {
+    var sealed = cryptoJoinAesGcmDetached(ciphertext, tag);
+    if (sealed.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(sealed.1, "cryptoAesGcmOpenDetached"));
+    }
+    return cryptoAesGcmOpen(key, nonce, sealed.0, aad);
+}
+
+func cryptoAesGcmSealDetachedHex(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes): (string, string, Error?) {
+    var detached = cryptoAesGcmSealDetached(key, nonce, plaintext, aad);
+    if (detached.2 != nil) {
+        return ("", "", wrapError(detached.2, "cryptoAesGcmSealDetachedHex"));
+    }
+
+    var ciphertext_hex = bytesToHex(detached.0);
+    if (ciphertext_hex.1 != nil) {
+        return ("", "", wrapError(ciphertext_hex.1, "cryptoAesGcmSealDetachedHex"));
+    }
+
+    var tag_hex = bytesToHex(detached.1);
+    if (tag_hex.1 != nil) {
+        return ("", "", wrapError(tag_hex.1, "cryptoAesGcmSealDetachedHex"));
+    }
+
+    return (ciphertext_hex.0, tag_hex.0, nil);
+}
+
+func cryptoAesGcmSealText(key: bytes, nonce: bytes, plaintext: string, aad: bytes): (bytes, Error?) {
+    var plaintext_r = stringToBytes(plaintext);
+    if (plaintext_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(plaintext_r.1, "cryptoAesGcmSealText"));
+    }
+
+    return cryptoAesGcmSeal(key, nonce, plaintext_r.0, aad);
+}
+
+func cryptoAesGcmSealTextHex(key: bytes, nonce: bytes, plaintext: string, aad: bytes): (string, Error?) {
+    var sealed = cryptoAesGcmSealText(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoAesGcmSealTextHex"));
+    }
+
+    var encoded = bytesToHex(sealed.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesGcmSealTextHex"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoAesGcmSealBase64(key: bytes, nonce: bytes, plaintext: bytes, aad: bytes): (string, Error?) {
+    var sealed = cryptoAesGcmSeal(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoAesGcmSealBase64"));
+    }
+
+    var encoded = encodingBase64EncodeBytes(sealed.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesGcmSealBase64"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoAesGcmOpenBase64(key: bytes, nonce: bytes, sealed_b64: string, aad: bytes): (bytes, Error?) {
+    var decoded = encodingBase64DecodeToBytes(sealed_b64);
+    if (decoded.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(decoded.1, "cryptoAesGcmOpenBase64"));
+    }
+    return cryptoAesGcmOpen(key, nonce, decoded.0, aad);
+}
+
+func cryptoAesGcmSealTextBase64(key: bytes, nonce: bytes, plaintext: string, aad: bytes): (string, Error?) {
+    var sealed = cryptoAesGcmSealText(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoAesGcmSealTextBase64"));
+    }
+
+    var encoded = encodingBase64EncodeBytes(sealed.0);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesGcmSealTextBase64"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoAesGcmSealBase64Url(key: bytes,
+                               nonce: bytes,
+                               plaintext: bytes,
+                               aad: bytes,
+                               with_padding: bool): (string, Error?) {
+    var sealed = cryptoAesGcmSeal(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoAesGcmSealBase64Url"));
+    }
+
+    var encoded = encodingBase64UrlEncodeBytes(sealed.0, with_padding);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesGcmSealBase64Url"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoAesGcmOpenBase64Url(key: bytes, nonce: bytes, sealed_b64url: string, aad: bytes): (bytes, Error?) {
+    var decoded = encodingBase64UrlDecodeToBytes(sealed_b64url);
+    if (decoded.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(decoded.1, "cryptoAesGcmOpenBase64Url"));
+    }
+    return cryptoAesGcmOpen(key, nonce, decoded.0, aad);
+}
+
+func cryptoAesGcmSealTextBase64Url(key: bytes,
+                                   nonce: bytes,
+                                   plaintext: string,
+                                   aad: bytes,
+                                   with_padding: bool): (string, Error?) {
+    var sealed = cryptoAesGcmSealText(key, nonce, plaintext, aad);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoAesGcmSealTextBase64Url"));
+    }
+
+    var encoded = encodingBase64UrlEncodeBytes(sealed.0, with_padding);
+    if (encoded.1 != nil) {
+        return ("", wrapError(encoded.1, "cryptoAesGcmSealTextBase64Url"));
+    }
+    return (encoded.0, nil);
+}
+
+func cryptoPasswordAesGcmDeriveKey(password: string,
+                                   salt: bytes,
+                                   iterations: int,
+                                   context: string): (bytes, Error?) {
+    var password_r = stringToBytes(password);
+    if (password_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(password_r.1, context));
+    }
+
+    var derived = cryptoPbkdf2HmacSha256Bytes(password_r.0,
+                                              salt,
+                                              iterations,
+                                              CRYPTO_PASSWORD_AES_GCM_KEY_BYTES);
+    if (derived.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(derived.1, context));
+    }
+    return (derived.0, nil);
+}
+
+func cryptoPasswordAesGcmEncodeEnvelope(envelope: CryptoPasswordAesGcmEnvelope,
+                                        with_padding: bool): (string, Error?) {
+    var shape_err = cryptoValidatePasswordEnvelopeShape(envelope, "cryptoPasswordAesGcmEncodeEnvelope");
+    if (shape_err != nil) {
+        return ("", shape_err);
+    }
+
+    var salt = encodingBase64UrlEncodeBytes(envelope.salt, with_padding);
+    if (salt.1 != nil) {
+        return ("", wrapError(salt.1, "cryptoPasswordAesGcmEncodeEnvelope"));
+    }
+
+    var nonce = encodingBase64UrlEncodeBytes(envelope.nonce, with_padding);
+    if (nonce.1 != nil) {
+        return ("", wrapError(nonce.1, "cryptoPasswordAesGcmEncodeEnvelope"));
+    }
+
+    var sealed = encodingBase64UrlEncodeBytes(envelope.sealed, with_padding);
+    if (sealed.1 != nil) {
+        return ("", wrapError(sealed.1, "cryptoPasswordAesGcmEncodeEnvelope"));
+    }
+
+    return (envelope.version +
+            "." +
+            str(envelope.iterations) +
+            "." +
+            salt.0 +
+            "." +
+            nonce.0 +
+            "." +
+            sealed.0,
+            nil);
+}
+
+func cryptoPasswordAesGcmDecodeEnvelope(encoded: string): (CryptoPasswordAesGcmEnvelope, Error?) {
+    var empty = cryptoEmptyPasswordAesGcmEnvelope();
+    var parts: array<string> = split(encoded, ".");
+    if (len(parts) != 5) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "password AES-GCM envelope must have 5 dot-separated parts",
+                            "cryptoPasswordAesGcmDecodeEnvelope",
+                            len(parts)));
+    }
+
+    if (parts[0] != CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "unsupported envelope version",
+                            "cryptoPasswordAesGcmDecodeEnvelope",
+                            parts[0]));
+    }
+
+    if (!cryptoIsAsciiDigits(parts[1])) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "password AES-GCM envelope iterations must be decimal digits",
+                            "cryptoPasswordAesGcmDecodeEnvelope",
+                            parts[1]));
+    }
+
+    var iterations: int = toInt(parts[1]);
+    var iterations_err = cryptoValidatePasswordEnvelopeIterations(iterations,
+                                                                  "cryptoPasswordAesGcmDecodeEnvelope");
+    if (iterations_err != nil) {
+        return (empty, iterations_err);
+    }
+
+    var salt = encodingBase64UrlDecodeToBytes(parts[2]);
+    if (salt.1 != nil) {
+        return (empty, wrapError(salt.1, "cryptoPasswordAesGcmDecodeEnvelope"));
+    }
+
+    var nonce = encodingBase64UrlDecodeToBytes(parts[3]);
+    if (nonce.1 != nil) {
+        return (empty, wrapError(nonce.1, "cryptoPasswordAesGcmDecodeEnvelope"));
+    }
+
+    var sealed = encodingBase64UrlDecodeToBytes(parts[4]);
+    if (sealed.1 != nil) {
+        return (empty, wrapError(sealed.1, "cryptoPasswordAesGcmDecodeEnvelope"));
+    }
+
+    var envelope: CryptoPasswordAesGcmEnvelope = {
+        version: parts[0],
+        iterations: iterations,
+        salt: salt.0,
+        nonce: nonce.0,
+        sealed: sealed.0
+    };
+
+    var shape_err = cryptoValidatePasswordEnvelopeShape(envelope, "cryptoPasswordAesGcmDecodeEnvelope");
+    if (shape_err != nil) {
+        return (empty, shape_err);
+    }
+    return (envelope, nil);
+}
+
+func cryptoPasswordAesGcmSeal(password: string,
+                              plaintext: bytes,
+                              aad: bytes,
+                              iterations: int): (CryptoPasswordAesGcmEnvelope, Error?) {
+    var empty = cryptoEmptyPasswordAesGcmEnvelope();
+    var iterations_err = cryptoValidatePasswordEnvelopeIterations(iterations, "cryptoPasswordAesGcmSeal");
+    if (iterations_err != nil) {
+        return (empty, iterations_err);
+    }
+
+    var salt = randomSecureBytes(CRYPTO_PASSWORD_AES_GCM_SALT_BYTES);
+    if (salt.1 != nil) {
+        return (empty, wrapError(salt.1, "cryptoPasswordAesGcmSeal"));
+    }
+
+    var nonce = randomSecureBytes(CRYPTO_PASSWORD_AES_GCM_NONCE_BYTES);
+    if (nonce.1 != nil) {
+        return (empty, wrapError(nonce.1, "cryptoPasswordAesGcmSeal"));
+    }
+
+    var key = cryptoPasswordAesGcmDeriveKey(password,
+                                            salt.0,
+                                            iterations,
+                                            "cryptoPasswordAesGcmSeal");
+    if (key.1 != nil) {
+        return (empty, wrapError(key.1, "cryptoPasswordAesGcmSeal"));
+    }
+
+    var sealed = cryptoAesGcmSeal(key.0, nonce.0, plaintext, aad);
+    if (sealed.1 != nil) {
+        return (empty, wrapError(sealed.1, "cryptoPasswordAesGcmSeal"));
+    }
+
+    var envelope: CryptoPasswordAesGcmEnvelope = {
+        version: CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION,
+        iterations: iterations,
+        salt: salt.0,
+        nonce: nonce.0,
+        sealed: sealed.0
+    };
+    return (envelope, nil);
+}
+
+func cryptoPasswordAesGcmSealDefault(password: string,
+                                     plaintext: bytes,
+                                     aad: bytes): (CryptoPasswordAesGcmEnvelope, Error?) {
+    return cryptoPasswordAesGcmSeal(password,
+                                    plaintext,
+                                    aad,
+                                    CRYPTO_PASSWORD_AES_GCM_DEFAULT_ITERATIONS);
+}
+
+func cryptoPasswordAesGcmOpen(password: string,
+                              envelope: CryptoPasswordAesGcmEnvelope,
+                              aad: bytes): (bytes, Error?) {
+    var shape_err = cryptoValidatePasswordEnvelopeShape(envelope, "cryptoPasswordAesGcmOpen");
+    if (shape_err != nil) {
+        return (cryptoEmptyBytes(), shape_err);
+    }
+
+    var key = cryptoPasswordAesGcmDeriveKey(password,
+                                            envelope.salt,
+                                            envelope.iterations,
+                                            "cryptoPasswordAesGcmOpen");
+    if (key.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(key.1, "cryptoPasswordAesGcmOpen"));
+    }
+
+    return cryptoAesGcmOpen(key.0, envelope.nonce, envelope.sealed, aad);
+}
+
+func cryptoPasswordAesGcmSealBase64Url(password: string,
+                                       plaintext: bytes,
+                                       aad: bytes,
+                                       iterations: int,
+                                       with_padding: bool): (string, Error?) {
+    var envelope = cryptoPasswordAesGcmSeal(password, plaintext, aad, iterations);
+    if (envelope.1 != nil) {
+        return ("", wrapError(envelope.1, "cryptoPasswordAesGcmSealBase64Url"));
+    }
+    return cryptoPasswordAesGcmEncodeEnvelope(envelope.0, with_padding);
+}
+
+func cryptoPasswordAesGcmSealBase64UrlDefault(password: string,
+                                              plaintext: bytes,
+                                              aad: bytes): (string, Error?) {
+    return cryptoPasswordAesGcmSealBase64Url(password,
+                                             plaintext,
+                                             aad,
+                                             CRYPTO_PASSWORD_AES_GCM_DEFAULT_ITERATIONS,
+                                             false);
+}
+
+func cryptoPasswordAesGcmOpenBase64Url(password: string,
+                                       encoded: string,
+                                       aad: bytes): (bytes, Error?) {
+    var envelope = cryptoPasswordAesGcmDecodeEnvelope(encoded);
+    if (envelope.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(envelope.1, "cryptoPasswordAesGcmOpenBase64Url"));
+    }
+    return cryptoPasswordAesGcmOpen(password, envelope.0, aad);
+}
+
+func cryptoPasswordAesGcmSealTextBase64Url(password: string,
+                                           plaintext: string,
+                                           aad: bytes,
+                                           iterations: int,
+                                           with_padding: bool): (string, Error?) {
+    var plaintext_r = stringToBytes(plaintext);
+    if (plaintext_r.1 != nil) {
+        return ("", wrapError(plaintext_r.1, "cryptoPasswordAesGcmSealTextBase64Url"));
+    }
+
+    return cryptoPasswordAesGcmSealBase64Url(password,
+                                             plaintext_r.0,
+                                             aad,
+                                             iterations,
+                                             with_padding);
+}
+
+func cryptoPasswordAesGcmSealTextBase64UrlDefault(password: string,
+                                                  plaintext: string,
+                                                  aad: bytes): (string, Error?) {
+    return cryptoPasswordAesGcmSealTextBase64Url(password,
+                                                 plaintext,
+                                                 aad,
+                                                 CRYPTO_PASSWORD_AES_GCM_DEFAULT_ITERATIONS,
+                                                 false);
+}
+
+func cryptoPasswordHashDerive(password: string,
+                              salt: bytes,
+                              iterations: int,
+                              context: string): (bytes, Error?) {
+    var password_r = stringToBytes(password);
+    if (password_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(password_r.1, context));
+    }
+
+    var derived = cryptoPbkdf2HmacSha256Bytes(password_r.0,
+                                              salt,
+                                              iterations,
+                                              CRYPTO_PASSWORD_HASH_BYTES);
+    if (derived.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(derived.1, context));
+    }
+    return (derived.0, nil);
+}
+
+func cryptoPasswordHashEncode(hash: CryptoPasswordHash, with_padding: bool): (string, Error?) {
+    var shape_err = cryptoValidatePasswordHashShape(hash, "cryptoPasswordHashEncode");
+    if (shape_err != nil) {
+        return ("", shape_err);
+    }
+
+    var salt = encodingBase64UrlEncodeBytes(hash.salt, with_padding);
+    if (salt.1 != nil) {
+        return ("", wrapError(salt.1, "cryptoPasswordHashEncode"));
+    }
+
+    var digest = encodingBase64UrlEncodeBytes(hash.digest, with_padding);
+    if (digest.1 != nil) {
+        return ("", wrapError(digest.1, "cryptoPasswordHashEncode"));
+    }
+
+    return (hash.scheme +
+            "." +
+            hash.version +
+            "." +
+            str(hash.iterations) +
+            "." +
+            salt.0 +
+            "." +
+            digest.0,
+            nil);
+}
+
+func cryptoPasswordHashDecode(encoded: string): (CryptoPasswordHash, Error?) {
+    var empty = cryptoEmptyPasswordHash();
+    var parts: array<string> = split(encoded, ".");
+    if (len(parts) != 5) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "password hash must have 5 dot-separated parts",
+                            "cryptoPasswordHashDecode",
+                            len(parts)));
+    }
+
+    if (parts[0] != CRYPTO_PASSWORD_HASH_SCHEME) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "unsupported password hash scheme",
+                            "cryptoPasswordHashDecode",
+                            parts[0]));
+    }
+
+    if (parts[1] != CRYPTO_PASSWORD_HASH_VERSION) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "unsupported password hash version",
+                            "cryptoPasswordHashDecode",
+                            parts[1]));
+    }
+
+    if (!cryptoIsAsciiDigits(parts[2])) {
+        return (empty,
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "password hash iterations must be decimal digits",
+                            "cryptoPasswordHashDecode",
+                            parts[2]));
+    }
+
+    var iterations: int = toInt(parts[2]);
+    var iterations_err = cryptoValidatePasswordHashIterations(iterations, "cryptoPasswordHashDecode");
+    if (iterations_err != nil) {
+        return (empty, iterations_err);
+    }
+
+    var salt = encodingBase64UrlDecodeToBytes(parts[3]);
+    if (salt.1 != nil) {
+        return (empty, wrapError(salt.1, "cryptoPasswordHashDecode"));
+    }
+
+    var digest = encodingBase64UrlDecodeToBytes(parts[4]);
+    if (digest.1 != nil) {
+        return (empty, wrapError(digest.1, "cryptoPasswordHashDecode"));
+    }
+
+    var hash: CryptoPasswordHash = {
+        scheme: parts[0],
+        version: parts[1],
+        iterations: iterations,
+        salt: salt.0,
+        digest: digest.0
+    };
+
+    var shape_err = cryptoValidatePasswordHashShape(hash, "cryptoPasswordHashDecode");
+    if (shape_err != nil) {
+        return (empty, shape_err);
+    }
+    return (hash, nil);
+}
+
+func cryptoPasswordHashCreate(password: string, iterations: int): (CryptoPasswordHash, Error?) {
+    var empty = cryptoEmptyPasswordHash();
+    var iterations_err = cryptoValidatePasswordHashIterations(iterations, "cryptoPasswordHashCreate");
+    if (iterations_err != nil) {
+        return (empty, iterations_err);
+    }
+
+    var salt = randomSecureBytes(CRYPTO_PASSWORD_HASH_SALT_BYTES);
+    if (salt.1 != nil) {
+        return (empty, wrapError(salt.1, "cryptoPasswordHashCreate"));
+    }
+
+    var digest = cryptoPasswordHashDerive(password,
+                                          salt.0,
+                                          iterations,
+                                          "cryptoPasswordHashCreate");
+    if (digest.1 != nil) {
+        return (empty, wrapError(digest.1, "cryptoPasswordHashCreate"));
+    }
+
+    var hash: CryptoPasswordHash = {
+        scheme: CRYPTO_PASSWORD_HASH_SCHEME,
+        version: CRYPTO_PASSWORD_HASH_VERSION,
+        iterations: iterations,
+        salt: salt.0,
+        digest: digest.0
+    };
+    return (hash, nil);
+}
+
+func cryptoPasswordHashCreateDefault(password: string): (CryptoPasswordHash, Error?) {
+    return cryptoPasswordHashCreate(password, CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS);
+}
+
+func cryptoPasswordHashVerify(password: string, hash: CryptoPasswordHash): (bool, Error?) {
+    var shape_err = cryptoValidatePasswordHashShape(hash, "cryptoPasswordHashVerify");
+    if (shape_err != nil) {
+        return (false, shape_err);
+    }
+
+    var derived = cryptoPasswordHashDerive(password,
+                                           hash.salt,
+                                           hash.iterations,
+                                           "cryptoPasswordHashVerify");
+    if (derived.1 != nil) {
+        return (false, wrapError(derived.1, "cryptoPasswordHashVerify"));
+    }
+
+    return cryptoConstantTimeBytesEqual(derived.0, hash.digest);
+}
+
+func cryptoPasswordHashNeedsRehash(hash: CryptoPasswordHash, minimum_iterations: int): (bool, Error?) {
+    var minimum_err = cryptoValidatePasswordHashIterations(minimum_iterations, "cryptoPasswordHashNeedsRehash");
+    if (minimum_err != nil) {
+        return (false, minimum_err);
+    }
+
+    var shape_err = cryptoValidatePasswordHashShape(hash, "cryptoPasswordHashNeedsRehash");
+    if (shape_err != nil) {
+        return (false, shape_err);
+    }
+
+    return (hash.iterations < minimum_iterations, nil);
+}
+
+func cryptoPasswordHashCreateBase64Url(password: string,
+                                       iterations: int,
+                                       with_padding: bool): (string, Error?) {
+    var hash = cryptoPasswordHashCreate(password, iterations);
+    if (hash.1 != nil) {
+        return ("", wrapError(hash.1, "cryptoPasswordHashCreateBase64Url"));
+    }
+    return cryptoPasswordHashEncode(hash.0, with_padding);
+}
+
+func cryptoPasswordHashCreateBase64UrlDefault(password: string): (string, Error?) {
+    return cryptoPasswordHashCreateBase64Url(password,
+                                            CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS,
+                                            false);
+}
+
+func cryptoPasswordHashVerifyBase64Url(password: string, encoded: string): (bool, Error?) {
+    var hash = cryptoPasswordHashDecode(encoded);
+    if (hash.1 != nil) {
+        return (false, wrapError(hash.1, "cryptoPasswordHashVerifyBase64Url"));
+    }
+    return cryptoPasswordHashVerify(password, hash.0);
+}
+
+func cryptoPasswordHashVerifyAndUpgrade(password: string,
+                                        hash: CryptoPasswordHash,
+                                        minimum_iterations: int): (bool, bool, CryptoPasswordHash, Error?) {
+    var empty = cryptoEmptyPasswordHash();
+    var verified = cryptoPasswordHashVerify(password, hash);
+    if (verified.1 != nil) {
+        return (false, false, empty, wrapError(verified.1, "cryptoPasswordHashVerifyAndUpgrade"));
+    }
+
+    if (!verified.0) {
+        return (false, false, empty, nil);
+    }
+
+    var needs_rehash = cryptoPasswordHashNeedsRehash(hash, minimum_iterations);
+    if (needs_rehash.1 != nil) {
+        return (false, false, empty, wrapError(needs_rehash.1, "cryptoPasswordHashVerifyAndUpgrade"));
+    }
+
+    if (!needs_rehash.0) {
+        return (true, false, empty, nil);
+    }
+
+    var upgraded = cryptoPasswordHashCreate(password, minimum_iterations);
+    if (upgraded.1 != nil) {
+        return (false, false, empty, wrapError(upgraded.1, "cryptoPasswordHashVerifyAndUpgrade"));
+    }
+
+    return (true, true, upgraded.0, nil);
+}
+
+func cryptoPasswordHashVerifyAndUpgradeDefault(password: string,
+                                               hash: CryptoPasswordHash): (bool, bool, CryptoPasswordHash, Error?) {
+    return cryptoPasswordHashVerifyAndUpgrade(password,
+                                              hash,
+                                              CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS);
+}
+
+func cryptoPasswordHashVerifyAndUpgradeBase64Url(password: string,
+                                                 encoded: string,
+                                                 minimum_iterations: int,
+                                                 with_padding: bool): (bool, bool, string, Error?) {
+    var hash = cryptoPasswordHashDecode(encoded);
+    if (hash.1 != nil) {
+        return (false, false, "", wrapError(hash.1, "cryptoPasswordHashVerifyAndUpgradeBase64Url"));
+    }
+
+    var upgraded = cryptoPasswordHashVerifyAndUpgrade(password, hash.0, minimum_iterations);
+    if (upgraded.3 != nil) {
+        return (false, false, "", wrapError(upgraded.3, "cryptoPasswordHashVerifyAndUpgradeBase64Url"));
+    }
+
+    if (!upgraded.0 || !upgraded.1) {
+        return (upgraded.0, false, "", nil);
+    }
+
+    var encoded_hash = cryptoPasswordHashEncode(upgraded.2, with_padding);
+    if (encoded_hash.1 != nil) {
+        return (false, false, "", wrapError(encoded_hash.1, "cryptoPasswordHashVerifyAndUpgradeBase64Url"));
+    }
+
+    return (true, true, encoded_hash.0, nil);
+}
+
+func cryptoPasswordHashVerifyAndUpgradeBase64UrlDefault(password: string,
+                                                        encoded: string): (bool, bool, string, Error?) {
+    return cryptoPasswordHashVerifyAndUpgradeBase64Url(password,
+                                                       encoded,
+                                                       CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS,
+                                                       false);
+}
+
+func cryptoSignedTokenBuildBody(version: string,
+                                issued_at_ms: int,
+                                expires_at_ms: int,
+                                payload_b64url: string): string {
+    return version +
+           "." +
+           str(issued_at_ms) +
+           "." +
+           str(expires_at_ms) +
+           "." +
+           payload_b64url;
+}
+
+func cryptoSignedTokenMac(secret: bytes, body: string, context: string): (bytes, Error?) {
+    var body_r = stringToBytes(body);
+    if (body_r.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(body_r.1, context));
+    }
+
+    return cryptoHmacSha256Bytes(secret, body_r.0);
+}
+
+func cryptoSignedTokenDecodeInternal(token: string): (CryptoSignedTokenEnvelope, bytes, string, Error?) {
+    var empty = cryptoEmptySignedTokenEnvelope();
+    var parts: array<string> = split(token, ".");
+    if (len(parts) != 5) {
+        return (empty,
+                cryptoEmptyBytes(),
+                "",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "signed token must have 5 dot-separated parts",
+                            "cryptoSignedTokenDecode",
+                            len(parts)));
+    }
+
+    if (parts[0] != CRYPTO_SIGNED_TOKEN_VERSION) {
+        return (empty,
+                cryptoEmptyBytes(),
+                "",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "unsupported signed token version",
+                            "cryptoSignedTokenDecode",
+                            parts[0]));
+    }
+
+    if (!cryptoIsAsciiDigits(parts[1]) || !cryptoIsAsciiDigits(parts[2])) {
+        return (empty,
+                cryptoEmptyBytes(),
+                "",
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "signed token time fields must be decimal digits",
+                            "cryptoSignedTokenDecode",
+                            {"issuedAtMillis": parts[1], "expiresAtMillis": parts[2]}));
+    }
+
+    var issued_at_ms: int = toInt(parts[1]);
+    var expires_at_ms: int = toInt(parts[2]);
+    var times_err = cryptoValidateSignedTokenTimes(issued_at_ms,
+                                                   expires_at_ms,
+                                                   "cryptoSignedTokenDecode");
+    if (times_err != nil) {
+        return (empty, cryptoEmptyBytes(), "", times_err);
+    }
+
+    var payload = encodingBase64UrlDecodeToBytes(parts[3]);
+    if (payload.1 != nil) {
+        return (empty,
+                cryptoEmptyBytes(),
+                "",
+                wrapError(payload.1, "cryptoSignedTokenDecode"));
+    }
+
+    var tag = encodingBase64UrlDecodeToBytes(parts[4]);
+    if (tag.1 != nil) {
+        return (empty,
+                cryptoEmptyBytes(),
+                "",
+                wrapError(tag.1, "cryptoSignedTokenDecode"));
+    }
+
+    var envelope: CryptoSignedTokenEnvelope = {
+        version: parts[0],
+        issuedAtMillis: issued_at_ms,
+        expiresAtMillis: expires_at_ms,
+        payload: payload.0
+    };
+    var shape_err = cryptoValidateSignedTokenShape(envelope, "cryptoSignedTokenDecode");
+    if (shape_err != nil) {
+        return (empty, cryptoEmptyBytes(), "", shape_err);
+    }
+
+    return (envelope,
+            tag.0,
+            cryptoSignedTokenBuildBody(parts[0], issued_at_ms, expires_at_ms, parts[3]),
+            nil);
+}
+
+func cryptoSignedTokenSeal(secret: bytes,
+                           payload: bytes,
+                           issued_at_ms: int,
+                           expires_at_ms: int): (string, Error?) {
+    var times_err = cryptoValidateSignedTokenTimes(issued_at_ms, expires_at_ms, "cryptoSignedTokenSeal");
+    if (times_err != nil) {
+        return ("", times_err);
+    }
+
+    var payload_b64 = encodingBase64UrlEncodeBytes(payload, false);
+    if (payload_b64.1 != nil) {
+        return ("", wrapError(payload_b64.1, "cryptoSignedTokenSeal"));
+    }
+
+    var body = cryptoSignedTokenBuildBody(CRYPTO_SIGNED_TOKEN_VERSION,
+                                          issued_at_ms,
+                                          expires_at_ms,
+                                          payload_b64.0);
+    var mac = cryptoSignedTokenMac(secret, body, "cryptoSignedTokenSeal");
+    if (mac.1 != nil) {
+        return ("", wrapError(mac.1, "cryptoSignedTokenSeal"));
+    }
+
+    var tag_b64 = encodingBase64UrlEncodeBytes(mac.0, false);
+    if (tag_b64.1 != nil) {
+        return ("", wrapError(tag_b64.1, "cryptoSignedTokenSeal"));
+    }
+
+    return (body + "." + tag_b64.0, nil);
+}
+
+func cryptoSignedTokenSealWithTtl(secret: bytes, payload: bytes, ttl_ms: int): (string, Error?) {
+    var ttl_err = cryptoValidateSignedTokenTtl(ttl_ms, "cryptoSignedTokenSealWithTtl");
+    if (ttl_err != nil) {
+        return ("", ttl_err);
+    }
+
+    var issued_at_ms: int = timeNowMillis();
+    return cryptoSignedTokenSeal(secret, payload, issued_at_ms, issued_at_ms + ttl_ms);
+}
+
+func cryptoSignedTokenSealText(secret_text: string,
+                               payload_text: string,
+                               issued_at_ms: int,
+                               expires_at_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedTokenSealText"));
+    }
+
+    var payload_r = stringToBytes(payload_text);
+    if (payload_r.1 != nil) {
+        return ("", wrapError(payload_r.1, "cryptoSignedTokenSealText"));
+    }
+
+    return cryptoSignedTokenSeal(secret_r.0, payload_r.0, issued_at_ms, expires_at_ms);
+}
+
+func cryptoSignedTokenSealTextWithTtl(secret_text: string,
+                                      payload_text: string,
+                                      ttl_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedTokenSealTextWithTtl"));
+    }
+
+    var payload_r = stringToBytes(payload_text);
+    if (payload_r.1 != nil) {
+        return ("", wrapError(payload_r.1, "cryptoSignedTokenSealTextWithTtl"));
+    }
+
+    return cryptoSignedTokenSealWithTtl(secret_r.0, payload_r.0, ttl_ms);
+}
+
+func cryptoSignedTokenDecode(token: string): (CryptoSignedTokenEnvelope, Error?) {
+    var decoded = cryptoSignedTokenDecodeInternal(token);
+    if (decoded.3 != nil) {
+        return (cryptoEmptySignedTokenEnvelope(), wrapError(decoded.3, "cryptoSignedTokenDecode"));
+    }
+    return (decoded.0, nil);
+}
+
+func cryptoSignedTokenVerify(secret: bytes,
+                             token: string,
+                             now_ms: int): (bool, bool, CryptoSignedTokenEnvelope, Error?) {
+    var empty = cryptoEmptySignedTokenEnvelope();
+    var decoded = cryptoSignedTokenDecodeInternal(token);
+    if (decoded.3 != nil) {
+        return (false, false, empty, nil);
+    }
+
+    var mac = cryptoSignedTokenMac(secret, decoded.2, "cryptoSignedTokenVerify");
+    if (mac.1 != nil) {
+        return (false, false, empty, wrapError(mac.1, "cryptoSignedTokenVerify"));
+    }
+
+    var same = cryptoConstantTimeBytesEqual(mac.0, decoded.1);
+    if (same.1 != nil) {
+        return (false, false, empty, wrapError(same.1, "cryptoSignedTokenVerify"));
+    }
+
+    if (!same.0) {
+        return (false, false, empty, nil);
+    }
+
+    if (now_ms > decoded.0.expiresAtMillis) {
+        return (false, true, decoded.0, nil);
+    }
+
+    return (true, false, decoded.0, nil);
+}
+
+func cryptoSignedTokenVerifyNow(secret: bytes,
+                                token: string): (bool, bool, CryptoSignedTokenEnvelope, Error?) {
+    return cryptoSignedTokenVerify(secret, token, timeNowMillis());
+}
+
+func cryptoSignedTokenVerifyText(secret_text: string,
+                                 token: string,
+                                 now_ms: int): (bool, bool, CryptoSignedTokenEnvelope, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return (false,
+                false,
+                cryptoEmptySignedTokenEnvelope(),
+                wrapError(secret_r.1, "cryptoSignedTokenVerifyText"));
+    }
+    return cryptoSignedTokenVerify(secret_r.0, token, now_ms);
+}
+
+func cryptoSignedTokenVerifyTextNow(secret_text: string,
+                                    token: string): (bool, bool, CryptoSignedTokenEnvelope, Error?) {
+    return cryptoSignedTokenVerifyText(secret_text, token, timeNowMillis());
+}
+
+func cryptoSignedJsonClaimsEncodePayload(key_id: string?,
+                                         claims: map<string, any>,
+                                         context: string): (bytes, Error?) {
+    var payload_doc: map<string, any> = {
+        "claims": claims as any
+    };
+
+    if (key_id != nil) {
+        var key_id_str: string = key_id as string;
+        var key_id_err = cryptoValidateSignedJsonClaimsKeyId(key_id_str, context);
+        if (key_id_err != nil) {
+            return (cryptoEmptyBytes(), key_id_err);
+        }
+        mapSetString(payload_doc, "kid", key_id_str as any);
+    }
+
+    var encoded = jsonStringify(payload_doc as any);
+    if (encoded.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(encoded.1, context));
+    }
+
+    var payload = stringToBytes(encoded.0);
+    if (payload.1 != nil) {
+        return (cryptoEmptyBytes(), wrapError(payload.1, context));
+    }
+    return (payload.0, nil);
+}
+
+func cryptoSignedJsonClaimsDecodePayload(payload: bytes,
+                                         context: string): (string?, map<string, any>, Error?) {
+    var payload_text = bytesToString(payload);
+    if (payload_text.1 != nil) {
+        return (nil, {}, wrapError(payload_text.1, context));
+    }
+
+    var parsed = jsonParse(payload_text.0);
+    if (parsed.1 != nil) {
+        return (nil, {}, wrapError(parsed.1, context));
+    }
+
+    if (typeOf(parsed.0) != "map") {
+        return (nil,
+                {},
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "signed JSON claims payload must decode to map<string, any>",
+                            context,
+                            typeOf(parsed.0)));
+    }
+
+    var payload_doc: map<string, any> = parsed.0 as map<string, any>;
+    var claims_any: any = mapGetString(payload_doc, "claims");
+    if (claims_any == nil || typeOf(claims_any) != "map") {
+        return (nil,
+                {},
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "signed JSON claims payload must contain map field 'claims'",
+                            context,
+                            claims_any));
+    }
+
+    var key_id_any: any = mapGetString(payload_doc, "kid");
+    if (key_id_any != nil && typeOf(key_id_any) != "string") {
+        return (nil,
+                {},
+                cryptoError(ERR_INVALID_ARGUMENT,
+                            "signed JSON claims payload field 'kid' must be string when present",
+                            context,
+                            typeOf(key_id_any)));
+    }
+
+    if (key_id_any != nil) {
+        var key_id_err = cryptoValidateSignedJsonClaimsKeyId(key_id_any as string, context);
+        if (key_id_err != nil) {
+            return (nil, {}, key_id_err);
+        }
+    }
+
+    var key_id: string? = nil;
+    if (key_id_any != nil) {
+        key_id = key_id_any as string;
+    }
+
+    return (key_id, claims_any as map<string, any>, nil);
+}
+
+func cryptoSignedJsonClaimsFromTokenEnvelope(token: CryptoSignedTokenEnvelope,
+                                             context: string): (CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var decoded = cryptoSignedJsonClaimsDecodePayload(token.payload, context);
+    if (decoded.2 != nil) {
+        return (empty, wrapError(decoded.2, context));
+    }
+
+    var envelope: CryptoSignedJsonClaimsEnvelope = {
+        version: token.version,
+        issuedAtMillis: token.issuedAtMillis,
+        expiresAtMillis: token.expiresAtMillis,
+        keyId: decoded.0,
+        claims: decoded.1
+    };
+    return (envelope, nil);
+}
+
+func cryptoSignedJsonClaimsSeal(secret: bytes,
+                                claims: map<string, any>,
+                                issued_at_ms: int,
+                                expires_at_ms: int): (string, Error?) {
+    var payload = cryptoSignedJsonClaimsEncodePayload(nil,
+                                                      claims,
+                                                      "cryptoSignedJsonClaimsSeal");
+    if (payload.1 != nil) {
+        return ("", wrapError(payload.1, "cryptoSignedJsonClaimsSeal"));
+    }
+
+    return cryptoSignedTokenSeal(secret, payload.0, issued_at_ms, expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealWithAutoJwtId(secret: bytes,
+                                             claims: map<string, any>,
+                                             issued_at_ms: int,
+                                             expires_at_ms: int): (string, string, Error?) {
+    var next_claims = cryptoSignedJsonClaimsEnsureJwtId(claims);
+    if (next_claims.2 != nil) {
+        return ("", "", wrapError(next_claims.2, "cryptoSignedJsonClaimsSealWithAutoJwtId"));
+    }
+
+    var sealed = cryptoSignedJsonClaimsSeal(secret,
+                                            next_claims.0,
+                                            issued_at_ms,
+                                            expires_at_ms);
+    if (sealed.1 != nil) {
+        return ("", "", wrapError(sealed.1, "cryptoSignedJsonClaimsSealWithAutoJwtId"));
+    }
+
+    return (sealed.0, next_claims.1, nil);
+}
+
+func cryptoSignedJsonClaimsSealWithTtl(secret: bytes,
+                                       claims: map<string, any>,
+                                       ttl_ms: int): (string, Error?) {
+    var payload = cryptoSignedJsonClaimsEncodePayload(nil,
+                                                      claims,
+                                                      "cryptoSignedJsonClaimsSealWithTtl");
+    if (payload.1 != nil) {
+        return ("", wrapError(payload.1, "cryptoSignedJsonClaimsSealWithTtl"));
+    }
+
+    return cryptoSignedTokenSealWithTtl(secret, payload.0, ttl_ms);
+}
+
+func cryptoSignedJsonClaimsSealWithAutoJwtIdTtl(secret: bytes,
+                                                claims: map<string, any>,
+                                                ttl_ms: int): (string, string, Error?) {
+    var next_claims = cryptoSignedJsonClaimsEnsureJwtId(claims);
+    if (next_claims.2 != nil) {
+        return ("", "", wrapError(next_claims.2, "cryptoSignedJsonClaimsSealWithAutoJwtIdTtl"));
+    }
+
+    var sealed = cryptoSignedJsonClaimsSealWithTtl(secret, next_claims.0, ttl_ms);
+    if (sealed.1 != nil) {
+        return ("", "", wrapError(sealed.1, "cryptoSignedJsonClaimsSealWithAutoJwtIdTtl"));
+    }
+
+    return (sealed.0, next_claims.1, nil);
+}
+
+func cryptoSignedJsonClaimsSealWithKeyId(secret: bytes,
+                                         key_id: string,
+                                         claims: map<string, any>,
+                                         issued_at_ms: int,
+                                         expires_at_ms: int): (string, Error?) {
+    var payload = cryptoSignedJsonClaimsEncodePayload(key_id,
+                                                      claims,
+                                                      "cryptoSignedJsonClaimsSealWithKeyId");
+    if (payload.1 != nil) {
+        return ("", wrapError(payload.1, "cryptoSignedJsonClaimsSealWithKeyId"));
+    }
+
+    return cryptoSignedTokenSeal(secret, payload.0, issued_at_ms, expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealWithKeyIdAndAutoJwtId(secret: bytes,
+                                                     key_id: string,
+                                                     claims: map<string, any>,
+                                                     issued_at_ms: int,
+                                                     expires_at_ms: int): (string, string, Error?) {
+    var next_claims = cryptoSignedJsonClaimsEnsureJwtId(claims);
+    if (next_claims.2 != nil) {
+        return ("", "", wrapError(next_claims.2, "cryptoSignedJsonClaimsSealWithKeyIdAndAutoJwtId"));
+    }
+
+    var sealed = cryptoSignedJsonClaimsSealWithKeyId(secret,
+                                                     key_id,
+                                                     next_claims.0,
+                                                     issued_at_ms,
+                                                     expires_at_ms);
+    if (sealed.1 != nil) {
+        return ("", "", wrapError(sealed.1, "cryptoSignedJsonClaimsSealWithKeyIdAndAutoJwtId"));
+    }
+
+    return (sealed.0, next_claims.1, nil);
+}
+
+func cryptoSignedJsonClaimsSealText(secret_text: string,
+                                    claims: map<string, any>,
+                                    issued_at_ms: int,
+                                    expires_at_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealText"));
+    }
+
+    return cryptoSignedJsonClaimsSeal(secret_r.0, claims, issued_at_ms, expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithAutoJwtId(secret_text: string,
+                                                 claims: map<string, any>,
+                                                 issued_at_ms: int,
+                                                 expires_at_ms: int): (string, string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", "", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithAutoJwtId"));
+    }
+
+    return cryptoSignedJsonClaimsSealWithAutoJwtId(secret_r.0,
+                                                   claims,
+                                                   issued_at_ms,
+                                                   expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithTtl(secret_text: string,
+                                           claims: map<string, any>,
+                                           ttl_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithTtl"));
+    }
+
+    return cryptoSignedJsonClaimsSealWithTtl(secret_r.0, claims, ttl_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithAutoJwtIdTtl(secret_text: string,
+                                                    claims: map<string, any>,
+                                                    ttl_ms: int): (string, string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", "", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithAutoJwtIdTtl"));
+    }
+
+    return cryptoSignedJsonClaimsSealWithAutoJwtIdTtl(secret_r.0, claims, ttl_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithKeyId(secret_text: string,
+                                             key_id: string,
+                                             claims: map<string, any>,
+                                             issued_at_ms: int,
+                                             expires_at_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithKeyId"));
+    }
+
+    return cryptoSignedJsonClaimsSealWithKeyId(secret_r.0,
+                                               key_id,
+                                               claims,
+                                               issued_at_ms,
+                                               expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtId(secret_text: string,
+                                                         key_id: string,
+                                                         claims: map<string, any>,
+                                                         issued_at_ms: int,
+                                                         expires_at_ms: int): (string, string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", "", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtId"));
+    }
+
+    return cryptoSignedJsonClaimsSealWithKeyIdAndAutoJwtId(secret_r.0,
+                                                           key_id,
+                                                           claims,
+                                                           issued_at_ms,
+                                                           expires_at_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithKeyIdTtl(secret_text: string,
+                                                key_id: string,
+                                                claims: map<string, any>,
+                                                ttl_ms: int): (string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithKeyIdTtl"));
+    }
+
+    var payload = cryptoSignedJsonClaimsEncodePayload(key_id,
+                                                      claims,
+                                                      "cryptoSignedJsonClaimsSealTextWithKeyIdTtl");
+    if (payload.1 != nil) {
+        return ("", wrapError(payload.1, "cryptoSignedJsonClaimsSealTextWithKeyIdTtl"));
+    }
+
+    return cryptoSignedTokenSealWithTtl(secret_r.0, payload.0, ttl_ms);
+}
+
+func cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtIdTtl(secret_text: string,
+                                                            key_id: string,
+                                                            claims: map<string, any>,
+                                                            ttl_ms: int): (string, string, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return ("", "", wrapError(secret_r.1, "cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtIdTtl"));
+    }
+
+    var next_claims = cryptoSignedJsonClaimsEnsureJwtId(claims);
+    if (next_claims.2 != nil) {
+        return ("", "", wrapError(next_claims.2, "cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtIdTtl"));
+    }
+
+    var sealed = cryptoSignedJsonClaimsSealTextWithKeyIdTtl(secret_text,
+                                                            key_id,
+                                                            next_claims.0,
+                                                            ttl_ms);
+    if (sealed.1 != nil) {
+        return ("", "", wrapError(sealed.1, "cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtIdTtl"));
+    }
+
+    return (sealed.0, next_claims.1, nil);
+}
+
+func cryptoSignedJsonClaimsDecodeUnverified(token: string): (CryptoSignedJsonClaimsEnvelope, Error?) {
+    var decoded = cryptoSignedTokenDecode(token);
+    if (decoded.1 != nil) {
+        return (cryptoEmptySignedJsonClaimsEnvelope(),
+                wrapError(decoded.1, "cryptoSignedJsonClaimsDecodeUnverified"));
+    }
+
+    var claims = cryptoSignedJsonClaimsFromTokenEnvelope(decoded.0,
+                                                         "cryptoSignedJsonClaimsDecodeUnverified");
+    if (claims.1 != nil) {
+        return (cryptoEmptySignedJsonClaimsEnvelope(),
+                wrapError(claims.1, "cryptoSignedJsonClaimsDecodeUnverified"));
+    }
+    return (claims.0, nil);
+}
+
+func cryptoSignedJsonClaimsValidateRegistered(claims: CryptoSignedJsonClaimsEnvelope,
+                                              policy: CryptoSignedJsonClaimsValidationPolicy,
+                                              now_ms: int): (bool, Error?) {
+    var policy_err = cryptoValidateSignedJsonClaimsValidationPolicy(policy,
+                                                                    "cryptoSignedJsonClaimsValidateRegistered");
+    if (policy_err != nil) {
+        return (false, wrapError(policy_err, "cryptoSignedJsonClaimsValidateRegistered"));
+    }
+
+    var issuer_any: any = mapGetString(claims.claims, "iss");
+    if (issuer_any != nil) {
+        if (typeOf(issuer_any) != "string") {
+            return (false, nil);
+        }
+
+        var issuer: string = issuer_any as string;
+        if (issuer == "") {
+            return (false, nil);
+        }
+
+        if (policy.issuer != nil && issuer != (policy.issuer as string)) {
+            return (false, nil);
+        }
+    } else if (policy.requireIssuer || policy.issuer != nil) {
+        return (false, nil);
+    }
+
+    var audience_any: any = mapGetString(claims.claims, "aud");
+    if (audience_any != nil) {
+        if (!cryptoSignedJsonClaimsAudienceMatches(audience_any, policy.audience)) {
+            return (false, nil);
+        }
+    } else if (policy.requireAudience || policy.audience != nil) {
+        return (false, nil);
+    }
+
+    var not_before_any: any = mapGetString(claims.claims, "nbf");
+    if (not_before_any != nil) {
+        if (typeOf(not_before_any) != "int") {
+            return (false, nil);
+        }
+
+        var not_before_ms: int = not_before_any as int;
+        if (not_before_ms < 0) {
+            return (false, nil);
+        }
+
+        if ((now_ms + policy.clockSkewMillis) < not_before_ms) {
+            return (false, nil);
+        }
+    } else if (policy.requireNotBefore) {
+        return (false, nil);
+    }
+
+    var jwt_id_any: any = mapGetString(claims.claims, "jti");
+    if (jwt_id_any != nil) {
+        if (typeOf(jwt_id_any) != "string") {
+            return (false, nil);
+        }
+
+        if ((jwt_id_any as string) == "") {
+            return (false, nil);
+        }
+    } else if (policy.requireJti) {
+        return (false, nil);
+    }
+
+    return (true, nil);
+}
+
+func cryptoSignedJsonClaimsValidateRegisteredNow(claims: CryptoSignedJsonClaimsEnvelope,
+                                                 policy: CryptoSignedJsonClaimsValidationPolicy): (bool, Error?) {
+    return cryptoSignedJsonClaimsValidateRegistered(claims, policy, timeNowMillis());
+}
+
+func cryptoSignedJsonClaimsVerify(secret: bytes,
+                                  token: string,
+                                  now_ms: int): (bool, bool, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var verified = cryptoSignedTokenVerify(secret, token, now_ms);
+    if (verified.3 != nil) {
+        return (false, false, empty, wrapError(verified.3, "cryptoSignedJsonClaimsVerify"));
+    }
+
+    if (!verified.0 && !verified.1) {
+        return (false, false, empty, nil);
+    }
+
+    var claims = cryptoSignedJsonClaimsFromTokenEnvelope(verified.2,
+                                                         "cryptoSignedJsonClaimsVerify");
+    if (claims.1 != nil) {
+        return (false, false, empty, nil);
+    }
+
+    if (verified.1) {
+        return (false, true, claims.0, nil);
+    }
+    return (true, false, claims.0, nil);
+}
+
+func cryptoSignedJsonClaimsVerifyText(secret_text: string,
+                                      token: string,
+                                      now_ms: int): (bool, bool, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return (false,
+                false,
+                cryptoEmptySignedJsonClaimsEnvelope(),
+                wrapError(secret_r.1, "cryptoSignedJsonClaimsVerifyText"));
+    }
+
+    return cryptoSignedJsonClaimsVerify(secret_r.0, token, now_ms);
+}
+
+func cryptoSignedJsonClaimsVerifyWithPolicy(secret: bytes,
+                                            token: string,
+                                            now_ms: int,
+                                            policy: CryptoSignedJsonClaimsValidationPolicy): (bool, bool, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var policy_err = cryptoValidateSignedJsonClaimsValidationPolicy(policy,
+                                                                    "cryptoSignedJsonClaimsVerifyWithPolicy");
+    if (policy_err != nil) {
+        return (false, false, empty, wrapError(policy_err, "cryptoSignedJsonClaimsVerifyWithPolicy"));
+    }
+
+    var verified = cryptoSignedJsonClaimsVerify(secret, token, now_ms);
+    if (verified.3 != nil) {
+        return (false, false, empty, wrapError(verified.3, "cryptoSignedJsonClaimsVerifyWithPolicy"));
+    }
+
+    if (!verified.0 || verified.1) {
+        return verified;
+    }
+
+    var claims_ok = cryptoSignedJsonClaimsValidateRegistered(verified.2, policy, now_ms);
+    if (claims_ok.1 != nil) {
+        return (false, false, empty, wrapError(claims_ok.1, "cryptoSignedJsonClaimsVerifyWithPolicy"));
+    }
+
+    if (!claims_ok.0) {
+        return (false, false, verified.2, nil);
+    }
+
+    return verified;
+}
+
+func cryptoSignedJsonClaimsVerifyTextWithPolicy(secret_text: string,
+                                                token: string,
+                                                now_ms: int,
+                                                policy: CryptoSignedJsonClaimsValidationPolicy): (bool, bool, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var secret_r = stringToBytes(secret_text);
+    if (secret_r.1 != nil) {
+        return (false,
+                false,
+                cryptoEmptySignedJsonClaimsEnvelope(),
+                wrapError(secret_r.1, "cryptoSignedJsonClaimsVerifyTextWithPolicy"));
+    }
+
+    return cryptoSignedJsonClaimsVerifyWithPolicy(secret_r.0, token, now_ms, policy);
+}
+
+func cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation(secret_text: string,
+                                                             token: string,
+                                                             now_ms: int,
+                                                             policy: CryptoSignedJsonClaimsValidationPolicy,
+                                                             revocations: CryptoSignedJsonClaimsRevocationStore): (bool, bool, bool, CryptoSignedJsonClaimsEnvelope, CryptoSignedJsonClaimsRevocationStore, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var verified = cryptoSignedJsonClaimsVerifyTextWithPolicy(secret_text, token, now_ms, policy);
+    if (verified.3 != nil) {
+        return (false,
+                false,
+                false,
+                empty,
+                revocations,
+                wrapError(verified.3, "cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation"));
+    }
+
+    if (!verified.0 || verified.1) {
+        return (verified.0, verified.1, false, verified.2, revocations, nil);
+    }
+
+    var revoked = cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(revocations, verified.2, now_ms);
+    if (revoked.2 != nil) {
+        return (false,
+                false,
+                false,
+                empty,
+                revoked.0,
+                wrapError(revoked.2, "cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation"));
+    }
+
+    if (revoked.1) {
+        return (false, false, true, verified.2, revoked.0, nil);
+    }
+
+    return (true, false, false, verified.2, revoked.0, nil);
+}
+
+func cryptoSignedJsonClaimsVerifyKeyRing(key_ring: map<string, bytes>,
+                                         token: string,
+                                         now_ms: int): (bool, bool, string?, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var unverified = cryptoSignedJsonClaimsDecodeUnverified(token);
+    if (unverified.1 == nil && unverified.0.keyId != nil) {
+        var preferred_key_id: string = unverified.0.keyId as string;
+        var preferred_secret_any: any = mapGetString(key_ring, preferred_key_id);
+        if (preferred_secret_any == nil || typeOf(preferred_secret_any) != "bytes") {
+            return (false, false, nil, empty, nil);
+        }
+
+        var preferred = cryptoSignedJsonClaimsVerify(preferred_secret_any as bytes, token, now_ms);
+        if (preferred.3 != nil) {
+            return (false, false, nil, empty, wrapError(preferred.3, "cryptoSignedJsonClaimsVerifyKeyRing"));
+        }
+        if (preferred.0 || preferred.1) {
+            return (preferred.0, preferred.1, preferred_key_id, preferred.2, nil);
+        }
+        return (false, false, nil, empty, nil);
+    }
+
+    foreach (key_any in keys(key_ring)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+
+        var candidate_key_id: string = key_any as string;
+        var secret_any: any = mapGetString(key_ring, candidate_key_id);
+        if (secret_any == nil || typeOf(secret_any) != "bytes") {
+            continue;
+        }
+
+        var candidate = cryptoSignedJsonClaimsVerify(secret_any as bytes, token, now_ms);
+        if (candidate.3 != nil) {
+            return (false, false, nil, empty, wrapError(candidate.3, "cryptoSignedJsonClaimsVerifyKeyRing"));
+        }
+        if (candidate.0 || candidate.1) {
+            return (candidate.0, candidate.1, candidate_key_id, candidate.2, nil);
+        }
+    }
+
+    return (false, false, nil, empty, nil);
+}
+
+func cryptoSignedJsonClaimsVerifyKeyRingWithPolicy(key_ring: map<string, bytes>,
+                                                   token: string,
+                                                   now_ms: int,
+                                                   policy: CryptoSignedJsonClaimsValidationPolicy): (bool, bool, string?, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var policy_err = cryptoValidateSignedJsonClaimsValidationPolicy(policy,
+                                                                    "cryptoSignedJsonClaimsVerifyKeyRingWithPolicy");
+    if (policy_err != nil) {
+        return (false, false, nil, empty, wrapError(policy_err, "cryptoSignedJsonClaimsVerifyKeyRingWithPolicy"));
+    }
+
+    var verified = cryptoSignedJsonClaimsVerifyKeyRing(key_ring, token, now_ms);
+    if (verified.4 != nil) {
+        return (false, false, nil, empty, wrapError(verified.4, "cryptoSignedJsonClaimsVerifyKeyRingWithPolicy"));
+    }
+
+    if (!verified.0 || verified.1) {
+        return verified;
+    }
+
+    var claims_ok = cryptoSignedJsonClaimsValidateRegistered(verified.3, policy, now_ms);
+    if (claims_ok.1 != nil) {
+        return (false, false, nil, empty, wrapError(claims_ok.1, "cryptoSignedJsonClaimsVerifyKeyRingWithPolicy"));
+    }
+
+    if (!claims_ok.0) {
+        return (false, false, verified.2, verified.3, nil);
+    }
+
+    return verified;
+}
+
+func cryptoSignedJsonClaimsVerifyTextKeyRing(key_ring: map<string, string>,
+                                             token: string,
+                                             now_ms: int): (bool, bool, string?, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var unverified = cryptoSignedJsonClaimsDecodeUnverified(token);
+    if (unverified.1 == nil && unverified.0.keyId != nil) {
+        var preferred_key_id: string = unverified.0.keyId as string;
+        var preferred_secret_any: any = mapGetString(key_ring, preferred_key_id);
+        if (preferred_secret_any == nil || typeOf(preferred_secret_any) != "string") {
+            return (false, false, nil, empty, nil);
+        }
+
+        var preferred = cryptoSignedJsonClaimsVerifyText(preferred_secret_any as string, token, now_ms);
+        if (preferred.3 != nil) {
+            return (false, false, nil, empty, wrapError(preferred.3, "cryptoSignedJsonClaimsVerifyTextKeyRing"));
+        }
+        if (preferred.0 || preferred.1) {
+            return (preferred.0, preferred.1, preferred_key_id, preferred.2, nil);
+        }
+        return (false, false, nil, empty, nil);
+    }
+
+    foreach (key_any in keys(key_ring)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+
+        var candidate_key_id: string = key_any as string;
+        var secret_any: any = mapGetString(key_ring, candidate_key_id);
+        if (secret_any == nil || typeOf(secret_any) != "string") {
+            continue;
+        }
+
+        var candidate = cryptoSignedJsonClaimsVerifyText(secret_any as string, token, now_ms);
+        if (candidate.3 != nil) {
+            return (false, false, nil, empty, wrapError(candidate.3, "cryptoSignedJsonClaimsVerifyTextKeyRing"));
+        }
+        if (candidate.0 || candidate.1) {
+            return (candidate.0, candidate.1, candidate_key_id, candidate.2, nil);
+        }
+    }
+
+    return (false, false, nil, empty, nil);
+}
+
+func cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy(key_ring: map<string, string>,
+                                                       token: string,
+                                                       now_ms: int,
+                                                       policy: CryptoSignedJsonClaimsValidationPolicy): (bool, bool, string?, CryptoSignedJsonClaimsEnvelope, Error?) {
+    var empty = cryptoEmptySignedJsonClaimsEnvelope();
+    var policy_err = cryptoValidateSignedJsonClaimsValidationPolicy(policy,
+                                                                    "cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy");
+    if (policy_err != nil) {
+        return (false, false, nil, empty, wrapError(policy_err, "cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy"));
+    }
+
+    var verified = cryptoSignedJsonClaimsVerifyTextKeyRing(key_ring, token, now_ms);
+    if (verified.4 != nil) {
+        return (false, false, nil, empty, wrapError(verified.4, "cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy"));
+    }
+
+    if (!verified.0 || verified.1) {
+        return verified;
+    }
+
+    var claims_ok = cryptoSignedJsonClaimsValidateRegistered(verified.3, policy, now_ms);
+    if (claims_ok.1 != nil) {
+        return (false,
+                false,
+                nil,
+                empty,
+                wrapError(claims_ok.1, "cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy"));
+    }
+
+    if (!claims_ok.0) {
+        return (false, false, verified.2, verified.3, nil);
+    }
+
+    return verified;
+}
+
+func cryptoSessionTokenIssueText(secret_text: string,
+                                 config: CryptoSessionTokenConfig,
+                                 subject: string,
+                                 extra_claims: map<string, any>,
+                                 now_ms: int): (CryptoSessionTokenIssueResult, Error?) {
+    var empty = cryptoEmptySessionTokenIssueResult();
+    var issued_at_ms: int = cryptoNormalizeWallTimeMillis(now_ms);
+    var next_claims = cryptoSessionTokenBuildClaims(config,
+                                                    subject,
+                                                    extra_claims,
+                                                    issued_at_ms,
+                                                    "cryptoSessionTokenIssueText");
+    if (next_claims.1 != nil) {
+        return (empty, wrapError(next_claims.1, "cryptoSessionTokenIssueText"));
+    }
+
+    var expires_at_ms: int = issued_at_ms + config.ttlMillis;
+    var token: string = "";
+    var jwt_id: string = "";
+    if (config.keyId != nil) {
+        var sealed_with_key_id = cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtId(secret_text,
+                                                                                     config.keyId as string,
+                                                                                     next_claims.0,
+                                                                                     issued_at_ms,
+                                                                                     expires_at_ms);
+        if (sealed_with_key_id.2 != nil) {
+            return (empty, wrapError(sealed_with_key_id.2, "cryptoSessionTokenIssueText"));
+        }
+        token = sealed_with_key_id.0;
+        jwt_id = sealed_with_key_id.1;
+    } else {
+        var sealed = cryptoSignedJsonClaimsSealTextWithAutoJwtId(secret_text,
+                                                                 next_claims.0,
+                                                                 issued_at_ms,
+                                                                 expires_at_ms);
+        if (sealed.2 != nil) {
+            return (empty, wrapError(sealed.2, "cryptoSessionTokenIssueText"));
+        }
+        token = sealed.0;
+        jwt_id = sealed.1;
+    }
+
+    var issued: CryptoSessionTokenIssueResult = {
+        token: token,
+        jwtId: jwt_id,
+        subject: subject,
+        issuedAtMillis: issued_at_ms,
+        expiresAtMillis: expires_at_ms,
+        keyId: config.keyId
+    };
+    return (issued, nil);
+}
+
+func cryptoSessionTokenIssueTextNow(secret_text: string,
+                                    config: CryptoSessionTokenConfig,
+                                    subject: string,
+                                    extra_claims: map<string, any>): (CryptoSessionTokenIssueResult, Error?) {
+    return cryptoSessionTokenIssueText(secret_text,
+                                       config,
+                                       subject,
+                                       extra_claims,
+                                       timeNowMillis());
+}
+
+func cryptoSessionTokenVerifyText(secret_text: string,
+                                  config: CryptoSessionTokenConfig,
+                                  token: string,
+                                  now_ms: int,
+                                  revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    var normalized_now: int = cryptoNormalizeWallTimeMillis(now_ms);
+    var policy = cryptoSessionTokenValidationPolicy(config, "cryptoSessionTokenVerifyText");
+    if (policy.1 != nil) {
+        return (cryptoEmptySessionTokenVerifyResult(revocations),
+                wrapError(policy.1, "cryptoSessionTokenVerifyText"));
+    }
+
+    var purged = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(revocations, normalized_now);
+    var next_revocations: CryptoSignedJsonClaimsRevocationStore = purged.0;
+    var result: CryptoSessionTokenVerifyResult = cryptoEmptySessionTokenVerifyResult(next_revocations);
+
+    var verified = cryptoSignedJsonClaimsVerifyTextWithPolicy(secret_text,
+                                                              token,
+                                                              normalized_now,
+                                                              policy.0);
+    if (verified.3 != nil) {
+        return (result, wrapError(verified.3, "cryptoSessionTokenVerifyText"));
+    }
+
+    result.ok = verified.0;
+    result.expired = verified.1;
+    result.claims = verified.2;
+    result.keyId = verified.2.keyId;
+    result.jwtId = cryptoSessionTokenOptionalStringClaim(verified.2, "jti");
+    result.subject = cryptoSessionTokenOptionalStringClaim(verified.2, "sub");
+    result.sessionId = cryptoSessionTokenOptionalStringClaim(verified.2,
+                                                             CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM);
+    result.tokenKind = cryptoSessionTokenOptionalStringClaim(verified.2,
+                                                             CRYPTO_SESSION_TOKEN_KIND_CLAIM);
+
+    if (!verified.0 || verified.1) {
+        return (result, nil);
+    }
+
+    var subject_r = cryptoSessionTokenExtractSubject(verified.2, "cryptoSessionTokenVerifyText");
+    if (subject_r.1 != nil) {
+        result.ok = false;
+        result.subject = nil;
+        return (result, nil);
+    }
+    result.subject = subject_r.0;
+
+    var jwt_id_r = cryptoSignedJsonClaimsExtractJwtId(verified.2,
+                                                      true,
+                                                      "cryptoSessionTokenVerifyText");
+    if (jwt_id_r.1 != nil) {
+        result.ok = false;
+        result.jwtId = nil;
+        return (result, nil);
+    }
+    result.jwtId = jwt_id_r.0;
+
+    var revoked = cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(next_revocations,
+                                                                   verified.2,
+                                                                   normalized_now);
+    if (revoked.2 != nil) {
+        result.revocations = revoked.0;
+        return (result, wrapError(revoked.2, "cryptoSessionTokenVerifyText"));
+    }
+
+    result.revocations = revoked.0;
+    if (revoked.1) {
+        result.ok = false;
+        result.revoked = true;
+        return (result, nil);
+    }
+
+    return (result, nil);
+}
+
+func cryptoSessionTokenVerifyTextNow(secret_text: string,
+                                     config: CryptoSessionTokenConfig,
+                                     token: string,
+                                     revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    return cryptoSessionTokenVerifyText(secret_text,
+                                        config,
+                                        token,
+                                        timeNowMillis(),
+                                        revocations);
+}
+
+func cryptoSessionTokenVerifyTextKeyRing(key_ring: map<string, string>,
+                                         config: CryptoSessionTokenConfig,
+                                         token: string,
+                                         now_ms: int,
+                                         revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    var normalized_now: int = cryptoNormalizeWallTimeMillis(now_ms);
+    var policy = cryptoSessionTokenValidationPolicy(config, "cryptoSessionTokenVerifyTextKeyRing");
+    if (policy.1 != nil) {
+        return (cryptoEmptySessionTokenVerifyResult(revocations),
+                wrapError(policy.1, "cryptoSessionTokenVerifyTextKeyRing"));
+    }
+
+    var purged = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(revocations, normalized_now);
+    var next_revocations: CryptoSignedJsonClaimsRevocationStore = purged.0;
+    var result: CryptoSessionTokenVerifyResult = cryptoEmptySessionTokenVerifyResult(next_revocations);
+
+    var verified = cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy(key_ring,
+                                                                     token,
+                                                                     normalized_now,
+                                                                     policy.0);
+    if (verified.4 != nil) {
+        return (result, wrapError(verified.4, "cryptoSessionTokenVerifyTextKeyRing"));
+    }
+
+    result.ok = verified.0;
+    result.expired = verified.1;
+    result.keyId = verified.2;
+    result.claims = verified.3;
+    result.jwtId = cryptoSessionTokenOptionalStringClaim(verified.3, "jti");
+    result.subject = cryptoSessionTokenOptionalStringClaim(verified.3, "sub");
+    result.sessionId = cryptoSessionTokenOptionalStringClaim(verified.3,
+                                                             CRYPTO_SESSION_TOKEN_SESSION_ID_CLAIM);
+    result.tokenKind = cryptoSessionTokenOptionalStringClaim(verified.3,
+                                                             CRYPTO_SESSION_TOKEN_KIND_CLAIM);
+
+    if (!verified.0 || verified.1) {
+        return (result, nil);
+    }
+
+    var subject_r = cryptoSessionTokenExtractSubject(verified.3, "cryptoSessionTokenVerifyTextKeyRing");
+    if (subject_r.1 != nil) {
+        result.ok = false;
+        result.subject = nil;
+        return (result, nil);
+    }
+    result.subject = subject_r.0;
+
+    var jwt_id_r = cryptoSignedJsonClaimsExtractJwtId(verified.3,
+                                                      true,
+                                                      "cryptoSessionTokenVerifyTextKeyRing");
+    if (jwt_id_r.1 != nil) {
+        result.ok = false;
+        result.jwtId = nil;
+        return (result, nil);
+    }
+    result.jwtId = jwt_id_r.0;
+
+    var revoked = cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(next_revocations,
+                                                                   verified.3,
+                                                                   normalized_now);
+    if (revoked.2 != nil) {
+        result.revocations = revoked.0;
+        return (result, wrapError(revoked.2, "cryptoSessionTokenVerifyTextKeyRing"));
+    }
+
+    result.revocations = revoked.0;
+    if (revoked.1) {
+        result.ok = false;
+        result.revoked = true;
+        return (result, nil);
+    }
+
+    return (result, nil);
+}
+
+func cryptoSessionTokenVerifyTextKeyRingNow(key_ring: map<string, string>,
+                                            config: CryptoSessionTokenConfig,
+                                            token: string,
+                                            revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    return cryptoSessionTokenVerifyTextKeyRing(key_ring,
+                                               config,
+                                               token,
+                                               timeNowMillis(),
+                                               revocations);
+}
+
+func cryptoSessionTokenRevokeIssued(store: CryptoSignedJsonClaimsRevocationStore,
+                                    issued: CryptoSessionTokenIssueResult): (CryptoSignedJsonClaimsRevocationStore, Error?) {
+    return cryptoSignedJsonClaimsRevocationStoreRevokeId(store,
+                                                         issued.jwtId,
+                                                         issued.expiresAtMillis);
+}
+
+func cryptoSessionTokenRevokeVerified(store: CryptoSignedJsonClaimsRevocationStore,
+                                      verified: CryptoSessionTokenVerifyResult): (CryptoSignedJsonClaimsRevocationStore, Error?) {
+    return cryptoSignedJsonClaimsRevocationStoreRevoke(store, verified.claims);
+}
+
+func cryptoSessionTokenPairIssueText(access_secret_text: string,
+                                     refresh_secret_text: string,
+                                     config: CryptoSessionTokenPairConfig,
+                                     subject: string,
+                                     access_claims: map<string, any>,
+                                     refresh_claims: map<string, any>,
+                                     now_ms: int): (CryptoSessionTokenPairIssueResult, Error?) {
+    var empty = cryptoEmptySessionTokenPairIssueResult();
+    var config_err = cryptoValidateSessionTokenPairConfig(config, "cryptoSessionTokenPairIssueText");
+    if (config_err != nil) {
+        return (empty, wrapError(config_err, "cryptoSessionTokenPairIssueText"));
+    }
+
+    var session_id_r = uuidV4();
+    if (session_id_r.1 != nil) {
+        return (empty, wrapError(session_id_r.1, "cryptoSessionTokenPairIssueText"));
+    }
+
+    return cryptoSessionTokenPairIssueWithSessionIdText(access_secret_text,
+                                                        refresh_secret_text,
+                                                        config,
+                                                        session_id_r.0,
+                                                        subject,
+                                                        access_claims,
+                                                        refresh_claims,
+                                                        now_ms,
+                                                        "cryptoSessionTokenPairIssueText");
+}
+
+func cryptoSessionTokenPairIssueTextNow(access_secret_text: string,
+                                        refresh_secret_text: string,
+                                        config: CryptoSessionTokenPairConfig,
+                                        subject: string,
+                                        access_claims: map<string, any>,
+                                        refresh_claims: map<string, any>): (CryptoSessionTokenPairIssueResult, Error?) {
+    return cryptoSessionTokenPairIssueText(access_secret_text,
+                                           refresh_secret_text,
+                                           config,
+                                           subject,
+                                           access_claims,
+                                           refresh_claims,
+                                           timeNowMillis());
+}
+
+func cryptoSessionTokenPairValidateAccess(verified: CryptoSessionTokenVerifyResult): CryptoSessionTokenVerifyResult {
+    return cryptoSessionTokenPairValidateVerifiedKind(verified,
+                                                      CRYPTO_SESSION_TOKEN_KIND_ACCESS,
+                                                      "cryptoSessionTokenPairValidateAccess");
+}
+
+func cryptoSessionTokenPairValidateRefresh(verified: CryptoSessionTokenVerifyResult): CryptoSessionTokenVerifyResult {
+    return cryptoSessionTokenPairValidateVerifiedKind(verified,
+                                                      CRYPTO_SESSION_TOKEN_KIND_REFRESH,
+                                                      "cryptoSessionTokenPairValidateRefresh");
+}
+
+func cryptoSessionTokenPairVerifyAccessText(secret_text: string,
+                                            config: CryptoSessionTokenPairConfig,
+                                            token: string,
+                                            now_ms: int,
+                                            revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    var verified = cryptoSessionTokenVerifyText(secret_text,
+                                                config.access,
+                                                token,
+                                                now_ms,
+                                                revocations);
+    if (verified.1 != nil) {
+        return verified;
+    }
+    return (cryptoSessionTokenPairValidateAccess(verified.0), nil);
+}
+
+func cryptoSessionTokenPairVerifyRefreshText(secret_text: string,
+                                             config: CryptoSessionTokenPairConfig,
+                                             token: string,
+                                             now_ms: int,
+                                             revocations: CryptoSignedJsonClaimsRevocationStore): (CryptoSessionTokenVerifyResult, Error?) {
+    var verified = cryptoSessionTokenVerifyText(secret_text,
+                                                config.refresh,
+                                                token,
+                                                now_ms,
+                                                revocations);
+    if (verified.1 != nil) {
+        return verified;
+    }
+    return (cryptoSessionTokenPairValidateRefresh(verified.0), nil);
+}
+
+func cryptoSessionTokenPairRevokeIssued(store: CryptoSignedJsonClaimsRevocationStore,
+                                        issued: CryptoSessionTokenPairIssueResult): (CryptoSignedJsonClaimsRevocationStore, Error?) {
+    var access_r = cryptoSessionTokenRevokeIssued(store, issued.access);
+    if (access_r.1 != nil) {
+        return (store, wrapError(access_r.1, "cryptoSessionTokenPairRevokeIssued"));
+    }
+
+    var refresh_r = cryptoSessionTokenRevokeIssued(access_r.0, issued.refresh);
+    if (refresh_r.1 != nil) {
+        return (access_r.0, wrapError(refresh_r.1, "cryptoSessionTokenPairRevokeIssued"));
+    }
+
+    return refresh_r;
+}
+
+func cryptoSessionTokenPairRotateRefreshText(access_secret_text: string,
+                                             refresh_secret_text: string,
+                                             config: CryptoSessionTokenPairConfig,
+                                             refresh_token: string,
+                                             now_ms: int,
+                                             revocations: CryptoSignedJsonClaimsRevocationStore,
+                                             access_claims: map<string, any>,
+                                             refresh_claim_overrides: map<string, any>): (CryptoSessionTokenPairRotateResult, Error?) {
+    var result: CryptoSessionTokenPairRotateResult = cryptoEmptySessionTokenPairRotateResult(revocations);
+    var verified = cryptoSessionTokenPairVerifyRefreshText(refresh_secret_text,
+                                                           config,
+                                                           refresh_token,
+                                                           now_ms,
+                                                           revocations);
+    if (verified.1 != nil) {
+        return (result, wrapError(verified.1, "cryptoSessionTokenPairRotateRefreshText"));
+    }
+
+    result.expired = verified.0.expired;
+    result.revoked = verified.0.revoked;
+    result.sessionId = verified.0.sessionId;
+    if (verified.0.tokenKind != nil &&
+        (verified.0.tokenKind as string) == CRYPTO_SESSION_TOKEN_KIND_REFRESH) {
+        result.previousRefreshJwtId = verified.0.jwtId;
+    }
+    result.revocations = verified.0.revocations;
+
+    if (!verified.0.ok || verified.0.expired || verified.0.revoked) {
+        return (result, nil);
+    }
+
+    var inherited_refresh_claims = cryptoSessionTokenPairStripManagedClaims(verified.0.claims.claims);
+    var refresh_next_claims = cryptoSessionTokenPairMergeClaims(inherited_refresh_claims,
+                                                                refresh_claim_overrides);
+
+    var revoke_old_refresh = cryptoSessionTokenRevokeVerified(verified.0.revocations, verified.0);
+    if (revoke_old_refresh.1 != nil) {
+        result.revocations = revoke_old_refresh.0;
+        return (result, wrapError(revoke_old_refresh.1, "cryptoSessionTokenPairRotateRefreshText"));
+    }
+
+    result.revocations = revoke_old_refresh.0;
+    var replacement_pair = cryptoSessionTokenPairIssueWithSessionIdText(access_secret_text,
+                                                                        refresh_secret_text,
+                                                                        config,
+                                                                        verified.0.sessionId as string,
+                                                                        verified.0.subject as string,
+                                                                        access_claims,
+                                                                        refresh_next_claims,
+                                                                        now_ms,
+                                                                        "cryptoSessionTokenPairRotateRefreshText");
+    if (replacement_pair.1 != nil) {
+        return (result, wrapError(replacement_pair.1, "cryptoSessionTokenPairRotateRefreshText"));
+    }
+
+    result.ok = true;
+    result.pair = replacement_pair.0;
+    result.sessionId = replacement_pair.0.sessionId;
+    return (result, nil);
+}
+
+func cryptoSessionTokenPairRotateRefreshTextNow(access_secret_text: string,
+                                                refresh_secret_text: string,
+                                                config: CryptoSessionTokenPairConfig,
+                                                refresh_token: string,
+                                                revocations: CryptoSignedJsonClaimsRevocationStore,
+                                                access_claims: map<string, any>,
+                                                refresh_claim_overrides: map<string, any>): (CryptoSessionTokenPairRotateResult, Error?) {
+    return cryptoSessionTokenPairRotateRefreshText(access_secret_text,
+                                                   refresh_secret_text,
+                                                   config,
+                                                   refresh_token,
+                                                   timeNowMillis(),
+                                                   revocations,
+                                                   access_claims,
+                                                   refresh_claim_overrides);
+}

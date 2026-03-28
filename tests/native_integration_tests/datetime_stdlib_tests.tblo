@@ -1,0 +1,207 @@
+import "fixtures/datetime.tblo";
+
+func main(): void {
+    println(datetimeIsLeapYear(2024));
+    println(!datetimeIsLeapYear(2023));
+    println(!datetimeIsLeapYear(1900));
+    println(datetimeIsLeapYear(2000));
+
+    var dim_feb = datetimeDaysInMonth(2024, 2);
+    println(dim_feb.1 == nil);
+    if (dim_feb.1 == nil) {
+        println(dim_feb.0 == 29);
+    }
+
+    var dim_apr = datetimeDaysInMonth(2026, 4);
+    println(dim_apr.1 == nil);
+    if (dim_apr.1 == nil) {
+        println(dim_apr.0 == 30);
+    }
+
+    var dim_bad = datetimeDaysInMonth(2026, 13);
+    println(dim_bad.1 != nil);
+    if (dim_bad.1 != nil) {
+        println(dim_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var p1 = datetimeParseRfc3339("2026-02-17T10:20:30Z");
+    println(p1.1 == nil);
+    if (p1.1 == nil) {
+        println(p1.0.year == 2026);
+        println(p1.0.month == 2);
+        println(p1.0.day == 17);
+        println(p1.0.hour == 10);
+        println(p1.0.minute == 20);
+        println(p1.0.second == 30);
+        println(p1.0.millis == 0);
+        println(p1.0.offsetMinutes == 0);
+    }
+
+    var p2 = datetimeParseRfc3339("2026-02-17T10:20:30.7+02:30");
+    println(p2.1 == nil);
+    if (p2.1 == nil) {
+        println(p2.0.millis == 700);
+        println(p2.0.offsetMinutes == 150);
+    }
+
+    var p3 = datetimeParseRfc3339("2026-02-17T10:20:30.78-05:45");
+    println(p3.1 == nil);
+    if (p3.1 == nil) {
+        println(p3.0.millis == 780);
+        println(p3.0.offsetMinutes == -345);
+    }
+
+    var p4 = datetimeParseRfc3339("2026-02-17T10:20:30.789z");
+    println(p4.1 == nil);
+    if (p4.1 == nil) {
+        println(p4.0.millis == 789);
+        println(p4.0.offsetMinutes == 0);
+    }
+
+    var p_bad1 = datetimeParseRfc3339("2026-13-17T10:20:30Z");
+    println(p_bad1.1 != nil);
+    if (p_bad1.1 != nil) {
+        println(p_bad1.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var p_bad2 = datetimeParseRfc3339("2026-02-30T10:20:30Z");
+    println(p_bad2.1 != nil);
+    if (p_bad2.1 != nil) {
+        println(p_bad2.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var p_bad3 = datetimeParseRfc3339("2026-02-17 10:20:30Z");
+    println(p_bad3.1 != nil);
+    if (p_bad3.1 != nil) {
+        println(p_bad3.1.code == ERR_PARSE);
+    }
+
+    var p_bad4 = datetimeParseRfc3339("2026-02-17T10:20:30+24:00");
+    println(p_bad4.1 != nil);
+    if (p_bad4.1 != nil) {
+        println(p_bad4.1.code == ERR_PARSE);
+    }
+
+    var p_bad5 = datetimeParseRfc3339("2026-02-17T10:20:30");
+    println(p_bad5.1 != nil);
+    if (p_bad5.1 != nil) {
+        println(p_bad5.1.code == ERR_PARSE);
+    }
+
+    var p_bad6 = datetimeParseRfc3339("2026-02-17T10:20:30Zextra");
+    println(p_bad6.1 != nil);
+    if (p_bad6.1 != nil) {
+        println(p_bad6.1.code == ERR_PARSE);
+    }
+
+    var fmt1 = datetimeFormatRfc3339({
+        year: 2026,
+        month: 2,
+        day: 17,
+        hour: 10,
+        minute: 20,
+        second: 30,
+        millis: 0,
+        offsetMinutes: 0
+    });
+    println(fmt1.1 == nil);
+    if (fmt1.1 == nil) {
+        println(fmt1.0 == "2026-02-17T10:20:30Z");
+    }
+
+    var fmt2 = datetimeFormatRfc3339({
+        year: 2026,
+        month: 2,
+        day: 17,
+        hour: 10,
+        minute: 20,
+        second: 30,
+        millis: 45,
+        offsetMinutes: -330
+    });
+    println(fmt2.1 == nil);
+    if (fmt2.1 == nil) {
+        println(fmt2.0 == "2026-02-17T10:20:30.045-05:30");
+    }
+
+    var fmt_bad = datetimeFormatRfc3339({
+        year: 2026,
+        month: 2,
+        day: 31,
+        hour: 10,
+        minute: 20,
+        second: 30,
+        millis: 0,
+        offsetMinutes: 0
+    });
+    println(fmt_bad.1 != nil);
+    if (fmt_bad.1 != nil) {
+        println(fmt_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var round_src: DateTimeParts = {
+        year: 2026,
+        month: 2,
+        day: 17,
+        hour: 23,
+        minute: 59,
+        second: 58,
+        millis: 321,
+        offsetMinutes: 90
+    };
+    var round_fmt = datetimeFormatRfc3339(round_src);
+    println(round_fmt.1 == nil);
+    if (round_fmt.1 == nil) {
+        var round_parsed = datetimeParseRfc3339(round_fmt.0);
+        println(round_parsed.1 == nil);
+        if (round_parsed.1 == nil) {
+            println(round_parsed.0.year == round_src.year);
+            println(round_parsed.0.month == round_src.month);
+            println(round_parsed.0.day == round_src.day);
+            println(round_parsed.0.hour == round_src.hour);
+            println(round_parsed.0.minute == round_src.minute);
+            println(round_parsed.0.second == round_src.second);
+            println(round_parsed.0.millis == round_src.millis);
+            println(round_parsed.0.offsetMinutes == round_src.offsetMinutes);
+        }
+    }
+
+    var now_u = datetimeNowUtc();
+    println(now_u.1 == nil);
+    if (now_u.1 == nil) {
+        println(now_u.0.offsetMinutes == 0);
+        println(now_u.0.month >= 1 && now_u.0.month <= 12);
+        println(now_u.0.day >= 1 && now_u.0.day <= 31);
+    }
+
+    var now_l = datetimeNowLocal();
+    println(now_l.1 == nil);
+    if (now_l.1 == nil) {
+        println(now_l.0.offsetMinutes >= -720 && now_l.0.offsetMinutes <= 840);
+        println(now_l.0.month >= 1 && now_l.0.month <= 12);
+    }
+
+    var now_u_s = datetimeNowUtcRfc3339();
+    println(now_u_s.1 == nil);
+    if (now_u_s.1 == nil) {
+        var su: string = now_u_s.0;
+        println(len(su) >= 20);
+        println(find(su, "T") == 10);
+        println(endsWith(su, "Z"));
+    }
+
+    var now_l_s = datetimeNowLocalRfc3339();
+    println(now_l_s.1 == nil);
+    if (now_l_s.1 == nil) {
+        var sl: string = now_l_s.0;
+        println(len(sl) >= 20);
+        println(find(sl, "T") == 10);
+        var has_z: bool = endsWith(sl, "Z");
+        var has_offset: bool = false;
+        if (len(sl) >= 6) {
+            has_offset = substring(sl, len(sl) - 3, 1) == ":" &&
+                         (substring(sl, len(sl) - 6, 1) == "+" || substring(sl, len(sl) - 6, 1) == "-");
+        }
+        println(has_z || has_offset);
+    }
+}

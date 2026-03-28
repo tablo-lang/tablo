@@ -1,0 +1,39 @@
+enum Result[T, E] {
+    Ok(T),
+    Err(E)
+};
+
+func nextResult(index: int): Result[int, string] {
+    if (index == 0) {
+        return Result.Ok(1);
+    }
+    if (index == 1) {
+        return Result.Ok(2);
+    }
+    return Result.Err("stop");
+}
+
+func main(): void {
+    var ok: Result[int, string] = Result.Ok(7);
+    if let Result.Ok(okPayload) = ok {
+        println(okPayload as string);
+    } else {
+        println("bad");
+    }
+
+    var err: Result[int, string] = Result.Err("nope");
+    if let Result.Ok(okPayload) = err {
+        println("bad");
+    } else if let Result.Err(errPayload) = err {
+        println(errPayload);
+    } else {
+        println("bad");
+    }
+
+    var i: int = 0;
+    while let Result.Ok(itemPayload) = nextResult(i) {
+        println(itemPayload as string);
+        i = i + 1;
+    }
+    println(i as string);
+}

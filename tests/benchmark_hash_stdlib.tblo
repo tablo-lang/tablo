@@ -1,0 +1,148 @@
+// Hash stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_hash_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_hash_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/hash.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchHashStableString(iters: int): void {
+    var text: string = "user:42|tenant:acme|region:us-east-1|role:admin";
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var h_w = hashStableString(text);
+        if (h_w.1 != nil) {
+            println("perf hashStableString: warm run failed");
+            return;
+        }
+        sink = sink + h_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var h_i = hashStableString(text);
+        if (h_i.1 != nil) {
+            println("perf hashStableString: run failed");
+            return;
+        }
+        sink = sink + h_i.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf hashStableString", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchHashAdler32Bytes(iters: int): void {
+    var bytes_r = stringToBytes("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    if (bytes_r.1 != nil) {
+        println("perf hashAdler32Bytes: setup failed");
+        return;
+    }
+    var data: bytes = bytes_r.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        sink = sink + hashAdler32Bytes(data);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        sink = sink + hashAdler32Bytes(data);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf hashAdler32Bytes", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchHashFingerprintStrings(iters: int): void {
+    var lines: array<string> = [
+        "service=tablo-api",
+        "region=us-east-1",
+        "env=prod",
+        "build=2026.02.19",
+        "sha=abcdef0123456789"
+    ];
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var fp_w = hashFingerprintStrings(lines);
+        if (fp_w.1 != nil) {
+            println("perf hashFingerprintStrings: warm run failed");
+            return;
+        }
+        sink = sink + fp_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var fp_i = hashFingerprintStrings(lines);
+        if (fp_i.1 != nil) {
+            println("perf hashFingerprintStrings: run failed");
+            return;
+        }
+        sink = sink + fp_i.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf hashFingerprintStrings", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Hash Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchHashStableString(300000 * scale);
+    benchHashAdler32Bytes(350000 * scale);
+    benchHashFingerprintStrings(180000 * scale);
+
+    println("Hash stdlib benchmark complete!");
+}

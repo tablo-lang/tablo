@@ -1,0 +1,6 @@
+// Strict truthiness: array in condition (should fail)
+func main(): void {
+    if ([]) {
+        println("no");
+    }
+}

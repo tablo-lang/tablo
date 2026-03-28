@@ -1,0 +1,176 @@
+import "fixtures/cache.tblo";
+
+func main(): void {
+    var opened = cacheNew(3, 100);
+    println(opened.1 == nil);
+    if (opened.1 == nil) {
+        var store: CacheStore = opened.0;
+        println(store.maxEntries == 3);
+        println(store.defaultTtlMs == 100);
+        println(store.evictionPolicy == "lru");
+    }
+
+    var bad_open = cacheNew(0, 10);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var s_r = cacheNew(4, 0);
+    println(s_r.1 == nil);
+    if (s_r.1 != nil) {
+        return;
+    }
+    var s: CacheStore = s_r.0;
+
+    var set_a = cacheSetWithTtlAt(s, "a", 11 as any, 0, 1000);
+    println(set_a.1 == nil);
+    s = set_a.0;
+    var get_a = cacheGetAt(s, "a", 1010);
+    s = get_a.0;
+    println(get_a.2);
+    if (get_a.2) {
+        println((get_a.1 as int) == 11);
+    }
+
+    var ttl_set = cacheSetWithTtlAt(s, "ttl", "hello" as any, 50, 1000);
+    println(ttl_set.1 == nil);
+    s = ttl_set.0;
+
+    var ttl_get_hit = cacheGetAt(s, "ttl", 1040);
+    s = ttl_get_hit.0;
+    println(ttl_get_hit.2);
+
+    var ttl_get_miss = cacheGetAt(s, "ttl", 1051);
+    s = ttl_get_miss.0;
+    println(!ttl_get_miss.2);
+
+    var count_after_ttl = cacheCount(s);
+    s = count_after_ttl.0;
+    println(count_after_ttl.1 == 1);
+
+    var lru_r = cacheNewWithPolicy(2, 0, "lru");
+    println(lru_r.1 == nil);
+    if (lru_r.1 == nil) {
+        var lru: CacheStore = lru_r.0;
+        var lru_s1 = cacheSetWithTtlAt(lru, "a", 1 as any, 0, 1000);
+        lru = lru_s1.0;
+        var lru_s2 = cacheSetWithTtlAt(lru, "b", 2 as any, 0, 1001);
+        lru = lru_s2.0;
+        var lru_touch = cacheGetAt(lru, "a", 1002);
+        lru = lru_touch.0;
+        println(lru_touch.2);
+        var lru_s3 = cacheSetWithTtlAt(lru, "c", 3 as any, 0, 1003);
+        lru = lru_s3.0;
+        var lru_has_a = cachePeekAt(lru, "a", 1004);
+        lru = lru_has_a.0;
+        var lru_has_b = cachePeekAt(lru, "b", 1004);
+        lru = lru_has_b.0;
+        var lru_has_c = cachePeekAt(lru, "c", 1004);
+        lru = lru_has_c.0;
+        println(lru_has_a.2);
+        println(!lru_has_b.2);
+        println(lru_has_c.2);
+    }
+
+    var fifo_r = cacheNewWithPolicy(2, 0, "fifo");
+    println(fifo_r.1 == nil);
+    if (fifo_r.1 == nil) {
+        var fifo: CacheStore = fifo_r.0;
+        fifo = cacheSetWithTtlAt(fifo, "a", 1 as any, 0, 1000).0;
+        fifo = cacheSetWithTtlAt(fifo, "b", 2 as any, 0, 1001).0;
+        fifo = cacheGetAt(fifo, "a", 1002).0; // Access should not affect FIFO eviction.
+        fifo = cacheSetWithTtlAt(fifo, "c", 3 as any, 0, 1003).0;
+        var fifo_has_a = cachePeekAt(fifo, "a", 1004);
+        fifo = fifo_has_a.0;
+        var fifo_has_b = cachePeekAt(fifo, "b", 1004);
+        fifo = fifo_has_b.0;
+        var fifo_has_c = cachePeekAt(fifo, "c", 1004);
+        fifo = fifo_has_c.0;
+        println(!fifo_has_a.2);
+        println(fifo_has_b.2);
+        println(fifo_has_c.2);
+    }
+
+    var schema: map<string, any> = {
+        "n": "int",
+        "name": "string"
+    };
+    var typed_r = cacheNew(4, 0);
+    println(typed_r.1 == nil);
+    if (typed_r.1 == nil) {
+        var typed: CacheStore = typed_r.0;
+        var typed_set_ok = cacheSetTypedWithTtlAt(typed,
+                                                  "user",
+                                                  { "n": 7, "name": "alice" } as any,
+                                                  schema as any,
+                                                  0,
+                                                  2000);
+        typed = typed_set_ok.0;
+        println(typed_set_ok.1 == nil);
+
+        var typed_get_ok = cacheGetTypedAt(typed, "user", schema as any, 2001);
+        typed = typed_get_ok.0;
+        println(typed_get_ok.2);
+        println(typed_get_ok.3 == nil);
+        if (typed_get_ok.2 && typed_get_ok.3 == nil) {
+            var user_map: map<string, any> = typed_get_ok.1 as map<string, any>;
+            println((mapGetString(user_map, "n") as int) == 7);
+            println((mapGetString(user_map, "name") as string) == "alice");
+        }
+
+        var typed_get_bad = cacheGetTypedAt(typed, "user", {"n": "int", "name": "int"} as any, 2002);
+        typed = typed_get_bad.0;
+        println(!typed_get_bad.2);
+        println(typed_get_bad.3 != nil);
+        if (typed_get_bad.3 != nil) {
+            println(typed_get_bad.3.code == ERR_PARSE);
+        }
+
+        var typed_set_bad = cacheSetTypedWithTtlAt(typed,
+                                                   "bad",
+                                                   { "n": "oops", "name": "bob" } as any,
+                                                   schema as any,
+                                                   0,
+                                                   2003);
+        typed = typed_set_bad.0;
+        println(typed_set_bad.1 != nil);
+        if (typed_set_bad.1 != nil) {
+            println(typed_set_bad.1.code == ERR_PARSE);
+        }
+    }
+
+    var ops_r = cacheNew(8, 0);
+    println(ops_r.1 == nil);
+    if (ops_r.1 == nil) {
+        var ops: CacheStore = ops_r.0;
+        ops = cacheSetWithTtlAt(ops, "k1", 1 as any, 0, 3000).0;
+        ops = cacheSetWithTtlAt(ops, "k2", 2 as any, 0, 3001).0;
+        ops = cacheSetWithTtlAt(ops, "k3", 3 as any, 0, 3002).0;
+
+        var c1 = cacheCount(ops);
+        ops = c1.0;
+        println(c1.1 == 3);
+
+        var has_k2 = cacheHas(ops, "k2");
+        ops = has_k2.0;
+        println(has_k2.1);
+
+        var del_k2 = cacheDelete(ops, "k2");
+        ops = del_k2.0;
+        println(del_k2.1);
+
+        var has_k2_after = cacheHas(ops, "k2");
+        ops = has_k2_after.0;
+        println(!has_k2_after.1);
+
+        var keys_r = cacheKeys(ops);
+        ops = keys_r.0;
+        println(len(keys_r.1) == 2);
+
+        ops = cacheClear(ops);
+        var c2 = cacheCount(ops);
+        ops = c2.0;
+        println(c2.1 == 0);
+    }
+}

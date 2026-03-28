@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y valgrind cmake
+
+    - name: Build with sanitizers
+      run: |
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_SANITIZERS=ON ..
+        cmake --build . --config Debug
+
+    - name: Run tests with sanitizers
+      run: |
+        cd build
+        ctest --test-dir . --output-on-failure
+
+    - name: Upload TabloLang CLI JUnit (sanitizers)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tablo-cli-junit-sanitizers
+        path: build/tablo_tests.junit.xml
+        if-no-files-found: ignore
+
+    - name: Run Valgrind
+      run: |
+        cd build
+        valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all ./test_runner
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang cmake
+
+    - name: Configure fuzz targets
+      run: |
+        cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DENABLE_FUZZING=ON -DUSE_SANITIZERS=ON
+
+    - name: Build fuzz targets
+      run: |
+        cmake --build build-fuzz --target fuzz_lexer fuzz_parser fuzz_compile fuzz_http fuzz_artifact --config Debug
+
+    - name: Run fuzz smoke tests
+      run: |
+        ./build-fuzz/fuzz_lexer -runs=2000 -max_total_time=20 tests/fuzz/corpus/lexer
+        ./build-fuzz/fuzz_parser -runs=2000 -max_total_time=20 tests/fuzz/corpus/parser
+        ./build-fuzz/fuzz_compile -runs=2000 -max_total_time=20 tests/fuzz/corpus/compile
+        ./build-fuzz/fuzz_http -runs=2000 -max_total_time=20 tests/fuzz/corpus/http
+        ./build-fuzz/fuzz_artifact -runs=2000 -max_total_time=20 tests/fuzz/corpus/artifact
+
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        build_type: [Debug, Release]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure CMake
+      run: |
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ..
+
+    - name: Enable perf + fast-string gates (Ubuntu Release)
+      if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+      run: |
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_PERF_GATES=ON -DENABLE_FAST_STRING_BASELINE_GATE=ON -DFAST_STRING_BASELINE_FILE=tools/baselines/fast_string_release.json -DFAST_STRING_BASELINE_SAMPLES=5 ..
+
+    - name: Build
+      run: |
+        cd build
+        cmake --build . --config ${{ matrix.build_type }}
+
+    - name: Verify Linux build hardening (Release)
+      if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+      run: |
+        python3 tools/check_build_hardening.py --build-dir build --config Release --target tablo
+
+    - name: Run tests
+      run: |
+        cd build
+        ctest --test-dir . -C ${{ matrix.build_type }} --output-on-failure
+
+    - name: Upload TabloLang CLI JUnit
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tablo-cli-junit-${{ matrix.os }}-${{ matrix.build_type }}
+        path: build/tablo_tests.junit.xml
+        if-no-files-found: ignore

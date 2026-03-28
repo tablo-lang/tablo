@@ -1,0 +1,830 @@
+// TabloLang Benchmark Suite
+//
+// Run:
+//   ./build/Debug/tablo run tests/benchmark_suite.tblo
+//
+// This benchmark intentionally mixes "core language" hot loops with allocation-heavy
+// workloads that stress reference counting and the cycle collector (gcCollect()).
+
+record Point {
+    x: int;
+    y: int
+}
+
+record Node {
+    next: any
+}
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func reportGc(label: string, reclaimed: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var objs_per_sec: int = (reclaimed * 1000) / elapsed;
+    println(label + ": reclaimed " + str(reclaimed) + " objs in " + str(elapsed) + " ms (" + str(objs_per_sec) + " objs/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func addOne(x: int): int {
+    return x + 1;
+}
+
+func benchIntAdd(iters: int): void {
+    var sum: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        sum = sum + w;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("int add", iters, start, end);
+    if (sum == 0) { println("error"); }
+}
+
+func benchDoubleMulAdd(iters: int): void {
+    var x: double = 1.0000001;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        x = (x * 1.0000001) + 0.0000003;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        x = (x * 1.0000001) + 0.0000003;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("double mul+add", iters, start, end);
+    if (x == 0.0) { println("error"); }
+}
+
+func benchBranching(iters: int): void {
+    var acc: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        if ((w % 2) == 0) {
+            acc = acc + 1;
+        } else {
+            acc = acc - 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if ((i % 2) == 0) {
+            acc = acc + 1;
+        } else {
+            acc = acc - 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("branch (i%2)", iters, start, end);
+    if (acc == 123456789) { println("error"); }
+}
+
+func benchCall(iters: int): void {
+    var acc: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        acc = addOne(acc);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        acc = addOne(acc);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("call addOne(int)", iters, start, end);
+    if (acc == 0) { println("error"); }
+}
+
+func benchArrayPushPop(loops: int): void {
+    var arr: array<int> = [];
+    push(arr, 0);
+
+    var sink: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(loops);
+    while (w < warm) {
+        push(arr, w);
+        sink = pop(arr);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < loops) {
+        push(arr, i);
+        sink = pop(arr);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("array push+pop", loops * 2, start, end);
+    if (sink == -1) { println("error"); }
+}
+
+func benchArrayIndexReadWrite(iters: int, size: int): void {
+    var arr: array<int> = [];
+    var j: int = 0;
+    while (j < size) {
+        push(arr, j);
+        j = j + 1;
+    }
+
+    var sum: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % size;
+        var v_w: int = arr[idx_w];
+        arr[idx_w] = v_w + 1;
+        sum = sum + arr[idx_w];
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % size;
+        var v: int = arr[idx];
+        arr[idx] = v + 1;
+        sum = sum + arr[idx];
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("array index r+w", iters * 2, start, end);
+    if (sum == 0) { println("error"); }
+}
+
+func buildKeys(count: int): array<string> {
+    var key_list: array<string> = [];
+    var i: int = 0;
+    while (i < count) {
+        push(key_list, "k" + str(i));
+        i = i + 1;
+    }
+    return key_list;
+}
+
+func buildPrefixedKeys(prefix: string, count: int): array<string> {
+    var key_list: array<string> = [];
+    var i: int = 0;
+    while (i < count) {
+        push(key_list, prefix + str(i));
+        i = i + 1;
+    }
+    return key_list;
+}
+
+func buildHighBitIntKeys(count: int): array<int> {
+    var key_list: array<int> = [];
+    var i: int = 0;
+    while (i < count) {
+        // Exercise full 64-bit integer hashing path: keys differ in high bits.
+        push(key_list, (i * 8589934592) + 17);
+        i = i + 1;
+    }
+    return key_list;
+}
+
+func benchMapUpdateStringKeys(iters: int, key_count: int): void {
+    var key_list: array<string> = buildKeys(key_count);
+    var m: map<string, int> = {};
+
+    var j: int = 0;
+    while (j < key_count) {
+        mapSet(m, key_list[j], j);
+        j = j + 1;
+    }
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        mapSet(m, key_list[idx_w], w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        mapSet(m, key_list[idx], i);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("map update (string keys)", iters, start, end);
+}
+
+func benchMapGetStringKeys(iters: int, key_count: int): void {
+    var key_list: array<string> = buildKeys(key_count);
+    var m: map<string, int> = {};
+
+    var j: int = 0;
+    while (j < key_count) {
+        mapSet(m, key_list[j], j);
+        j = j + 1;
+    }
+
+    var sum: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var v_w: any = mapGet(m, key_list[idx_w]);
+        if (v_w != nil) {
+            sum = sum + (v_w as int);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var v: any = mapGet(m, key_list[idx]);
+        if (v != nil) {
+            sum = sum + (v as int);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("map get (string keys)", iters, start, end);
+    if (sum == 0) { println("error"); }
+}
+
+func benchSetAddHasString(iters: int, key_count: int): void {
+    var key_list: array<string> = buildKeys(key_count);
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w: set<string> = {"_seed"};
+        setRemove(s_w, "_seed");
+        var j_w: int = 0;
+        while (j_w < key_count) {
+            setAdd(s_w, key_list[j_w]);
+            j_w = j_w + 1;
+        }
+        if (setHas(s_w, key_list[w % key_count])) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s: set<string> = {"_seed"};
+        setRemove(s, "_seed");
+        var j: int = 0;
+        while (j < key_count) {
+            setAdd(s, key_list[j]);
+            j = j + 1;
+        }
+        if (setHas(s, key_list[i % key_count])) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("set add+has (string keys)", iters, start, end);
+    if (sink == 0) { println("error"); }
+}
+
+func benchSetAddHasStringFast(iters: int, key_count: int): void {
+    var key_list: array<string> = buildKeys(key_count);
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w: set<string> = {"_seed"};
+        setRemoveString(s_w, "_seed");
+        var j_w: int = 0;
+        while (j_w < key_count) {
+            setAddString(s_w, key_list[j_w]);
+            j_w = j_w + 1;
+        }
+        if (setHasString(s_w, key_list[w % key_count])) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s: set<string> = {"_seed"};
+        setRemoveString(s, "_seed");
+        var j: int = 0;
+        while (j < key_count) {
+            setAddString(s, key_list[j]);
+            j = j + 1;
+        }
+        if (setHasString(s, key_list[i % key_count])) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("set add+has fast-string (string keys)", iters, start, end);
+    if (sink == 0) { println("error"); }
+}
+
+func benchMapSetChurnString(iters: int, key_count: int): void {
+    var keys_a: array<string> = buildPrefixedKeys("a", key_count);
+    var keys_b: array<string> = buildPrefixedKeys("b", key_count);
+
+    var m: map<string, int> = {};
+    var s: set<string> = {"_seed"};
+    setRemove(s, "_seed");
+
+    var seed_i: int = 0;
+    while (seed_i < key_count) {
+        mapSet(m, keys_a[seed_i], seed_i);
+        setAdd(s, keys_a[seed_i]);
+        seed_i = seed_i + 1;
+    }
+
+    var sink: int = 0;
+    var phase: int = 0; // 0 => move A->B, 1 => move B->A
+    var last_key: string = keys_a[0];
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var in_key_w: string = keys_b[idx_w];
+        if (phase == 0) {
+            mapDelete(m, keys_a[idx_w]);
+            setRemove(s, keys_a[idx_w]);
+            mapSet(m, keys_b[idx_w], w);
+            setAdd(s, keys_b[idx_w]);
+        } else {
+            in_key_w = keys_a[idx_w];
+            mapDelete(m, keys_b[idx_w]);
+            setRemove(s, keys_b[idx_w]);
+            mapSet(m, keys_a[idx_w], w);
+            setAdd(s, keys_a[idx_w]);
+        }
+        last_key = in_key_w;
+
+        var mv_w: any = mapGet(m, in_key_w);
+        if (mv_w != nil) {
+            sink = sink + (mv_w as int);
+        }
+        if (setHas(s, in_key_w)) {
+            sink = sink + 1;
+        }
+
+        if (idx_w == key_count - 1) {
+            phase = 1 - phase;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var in_key: string = keys_b[idx];
+        if (phase == 0) {
+            mapDelete(m, keys_a[idx]);
+            setRemove(s, keys_a[idx]);
+            mapSet(m, keys_b[idx], i);
+            setAdd(s, keys_b[idx]);
+        } else {
+            in_key = keys_a[idx];
+            mapDelete(m, keys_b[idx]);
+            setRemove(s, keys_b[idx]);
+            mapSet(m, keys_a[idx], i);
+            setAdd(s, keys_a[idx]);
+        }
+        last_key = in_key;
+
+        var mv: any = mapGet(m, in_key);
+        if (mv != nil) {
+            sink = sink + (mv as int);
+        }
+        if (setHas(s, in_key)) {
+            sink = sink + 1;
+        }
+
+        if (idx == key_count - 1) {
+            phase = 1 - phase;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("map/set churn (string keys)", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("map/set churn count drift");
+    if (mapGet(m, last_key) == nil) panic("map/set churn map missing key");
+    if (!setHas(s, last_key)) panic("map/set churn set missing key");
+    if (sink == 0) { println("error"); }
+}
+
+func benchMapSetChurnStringFast(iters: int, key_count: int): void {
+    var keys_a: array<string> = buildPrefixedKeys("a", key_count);
+    var keys_b: array<string> = buildPrefixedKeys("b", key_count);
+
+    var m: map<string, int> = {};
+    var s: set<string> = {"_seed"};
+    setRemoveString(s, "_seed");
+
+    var seed_i: int = 0;
+    while (seed_i < key_count) {
+        mapSetString(m, keys_a[seed_i], seed_i);
+        setAddString(s, keys_a[seed_i]);
+        seed_i = seed_i + 1;
+    }
+
+    var sink: int = 0;
+    var phase: int = 0; // 0 => move A->B, 1 => move B->A
+    var last_key: string = keys_a[0];
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var in_key_w: string = keys_b[idx_w];
+        if (phase == 0) {
+            mapDeleteString(m, keys_a[idx_w]);
+            setRemoveString(s, keys_a[idx_w]);
+            mapSetString(m, keys_b[idx_w], w);
+            setAddString(s, keys_b[idx_w]);
+        } else {
+            in_key_w = keys_a[idx_w];
+            mapDeleteString(m, keys_b[idx_w]);
+            setRemoveString(s, keys_b[idx_w]);
+            mapSetString(m, keys_a[idx_w], w);
+            setAddString(s, keys_a[idx_w]);
+        }
+        last_key = in_key_w;
+
+        var mv_w: any = mapGetString(m, in_key_w);
+        if (mv_w != nil) {
+            sink = sink + (mv_w as int);
+        }
+        if (setHasString(s, in_key_w)) {
+            sink = sink + 1;
+        }
+
+        if (idx_w == key_count - 1) {
+            phase = 1 - phase;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var in_key: string = keys_b[idx];
+        if (phase == 0) {
+            mapDeleteString(m, keys_a[idx]);
+            setRemoveString(s, keys_a[idx]);
+            mapSetString(m, keys_b[idx], i);
+            setAddString(s, keys_b[idx]);
+        } else {
+            in_key = keys_a[idx];
+            mapDeleteString(m, keys_b[idx]);
+            setRemoveString(s, keys_b[idx]);
+            mapSetString(m, keys_a[idx], i);
+            setAddString(s, keys_a[idx]);
+        }
+        last_key = in_key;
+
+        var mv: any = mapGetString(m, in_key);
+        if (mv != nil) {
+            sink = sink + (mv as int);
+        }
+        if (setHasString(s, in_key)) {
+            sink = sink + 1;
+        }
+
+        if (idx == key_count - 1) {
+            phase = 1 - phase;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("map/set churn fast-string (string keys)", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("map/set churn fast-string count drift");
+    if (mapGetString(m, last_key) == nil) panic("map/set churn fast-string map missing key");
+    if (!setHasString(s, last_key)) panic("map/set churn fast-string set missing key");
+    if (sink == 0) { println("error"); }
+}
+
+func benchMapSetHighBitInt(iters: int, key_count: int): void {
+    var key_list: array<int> = buildHighBitIntKeys(key_count);
+    var m: map<int, int> = {};
+    var s: set<int> = {0};
+    setRemove(s, 0);
+
+    var j: int = 0;
+    while (j < key_count) {
+        mapSet(m, key_list[j], j);
+        setAdd(s, key_list[j]);
+        j = j + 1;
+    }
+
+    var sink: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var k_w: int = key_list[idx_w];
+        mapSet(m, k_w, w);
+
+        var v_w: any = mapGet(m, k_w);
+        if (v_w != nil) {
+            sink = sink + (v_w as int);
+        }
+        if (setHas(s, k_w)) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var k: int = key_list[idx];
+        mapSet(m, k, i);
+
+        var v: any = mapGet(m, k);
+        if (v != nil) {
+            sink = sink + (v as int);
+        }
+        if (setHas(s, k)) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("map/set highbit-int set+get", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("map/set highbit-int count drift");
+    if (!setHas(s, key_list[key_count - 1])) panic("map/set highbit-int set missing");
+    if (sink == 0) { println("error"); }
+}
+
+func benchRecordFieldAccess(iters: int): void {
+    var p: Point = { x: 1, y: 2 };
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        p.x = p.x + 1;
+        p.y = p.y + p.x;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        p.x = p.x + 1;
+        p.y = p.y + p.x;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("record field r+w", iters * 2, start, end);
+    if (p.x == 0) { println("error"); }
+}
+
+func benchTupleCreateAccess(iters: int): void {
+    var sum: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var t_w: (int, int) = (w, w + 1);
+        sum = sum + t_w.0 + t_w.1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var t: (int, int) = (i, i + 1);
+        sum = sum + t.0 + t.1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("tuple create+access", iters, start, end);
+    if (sum == 0) { println("error"); }
+}
+
+func benchStringConcatStr(iters: int): void {
+    var base: string = "bench:";
+    var acc: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w: string = base + str(w);
+        acc = acc + len(s_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s: string = base + str(i);
+        acc = acc + len(s);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("string concat+str+len", iters, start, end);
+    if (acc == 0) { println("error"); }
+}
+
+func benchRcCascadeArrays(num_arrays: int, elems: int): void {
+    var outer: array<array<int>> = [];
+
+    var i: int = 0;
+    var start_build: int = timeMonotonicMillis();
+    while (i < num_arrays) {
+        var a: array<int> = [];
+        var j: int = 0;
+        while (j < elems) {
+            push(a, j);
+            j = j + 1;
+        }
+        push(outer, a);
+        i = i + 1;
+    }
+    var end_build: int = timeMonotonicMillis();
+    report("build nested arrays", num_arrays, start_build, end_build);
+
+    var start_drop: int = timeMonotonicMillis();
+    outer = [];
+    var end_drop: int = timeMonotonicMillis();
+    report("drop nested arrays (RC)", num_arrays, start_drop, end_drop);
+}
+
+func benchCycleGcSelfArray(cycles: int): void {
+    var hold: array<any> = [];
+    var i: int = 0;
+    while (i < cycles) {
+        var a: array<any> = [];
+        push(a, a);
+        push(hold, a);
+        i = i + 1;
+    }
+    hold = [];
+
+    var start: int = timeMonotonicMillis();
+    var reclaimed: int = gcCollect();
+    var end: int = timeMonotonicMillis();
+    reportGc("gcCollect self-array cycles", reclaimed, start, end);
+}
+
+func benchCycleGcPairArrays(cycles: int): void {
+    var hold: array<any> = [];
+    var i: int = 0;
+    while (i < cycles) {
+        var a: array<any> = [];
+        var b: array<any> = [];
+        push(a, b);
+        push(b, a);
+        push(hold, a);
+        i = i + 1;
+    }
+    hold = [];
+
+    var start: int = timeMonotonicMillis();
+    var reclaimed: int = gcCollect();
+    var end: int = timeMonotonicMillis();
+    reportGc("gcCollect 2-array cycles", reclaimed, start, end);
+}
+
+func benchCycleGcRecordSelf(cycles: int): void {
+    var hold: array<any> = [];
+    var i: int = 0;
+    while (i < cycles) {
+        var n: Node = { next: nil };
+        n.next = n;
+        push(hold, n);
+        i = i + 1;
+    }
+    hold = [];
+
+    var start: int = timeMonotonicMillis();
+    var reclaimed: int = gcCollect();
+    var end: int = timeMonotonicMillis();
+    reportGc("gcCollect record self-cycles", reclaimed, start, end);
+}
+
+func benchCycleGcMapSelf(cycles: int): void {
+    var hold: array<any> = [];
+    var i: int = 0;
+    while (i < cycles) {
+        var m: map<string, any> = {};
+        mapSet(m, "self", m);
+        push(hold, m);
+        i = i + 1;
+    }
+    hold = [];
+
+    var start: int = timeMonotonicMillis();
+    var reclaimed: int = gcCollect();
+    var end: int = timeMonotonicMillis();
+    reportGc("gcCollect map self-cycles", reclaimed, start, end);
+}
+
+func benchCycleGcArrayTuple(cycles: int): void {
+    var hold: array<any> = [];
+    var i: int = 0;
+    while (i < cycles) {
+        var a: array<any> = [];
+        var t: (any, int) = (a, i);
+        push(a, t);
+        push(hold, a);
+        i = i + 1;
+    }
+    hold = [];
+
+    var start: int = timeMonotonicMillis();
+    var reclaimed: int = gcCollect();
+    var end: int = timeMonotonicMillis();
+    reportGc("gcCollect array<->tuple cycles", reclaimed, start, end);
+}
+
+func main(): void {
+    println("=== TabloLang Benchmark Suite ===");
+
+    // Edit this to scale workloads (keep >= 1).
+    var scale: int = 1;
+
+    // Core hot loops
+    benchIntAdd(5000000 * scale);
+    benchDoubleMulAdd(5000000 * scale);
+    benchBranching(4000000 * scale);
+    benchCall(6000000 * scale);
+
+    // Containers
+    benchArrayPushPop(1500000 * scale);
+    benchArrayIndexReadWrite(2000000 * scale, 1024);
+    benchMapUpdateStringKeys(1200000 * scale, 4096);
+    benchMapGetStringKeys(1200000 * scale, 4096);
+    benchSetAddHasString(600000 * scale, 4096);
+    benchSetAddHasStringFast(600000 * scale, 4096);
+    benchMapSetChurnString(700000 * scale, 4096);
+    benchMapSetChurnStringFast(700000 * scale, 4096);
+    benchMapSetHighBitInt(900000 * scale, 4096);
+    benchRecordFieldAccess(5000000 * scale);
+    benchTupleCreateAccess(1500000 * scale);
+    benchStringConcatStr(1200000 * scale);
+
+    // Memory management stress
+    benchRcCascadeArrays(4000 * scale, 64);
+
+    // Cycle collector stress
+    benchCycleGcSelfArray(20000 * scale);
+    benchCycleGcPairArrays(10000 * scale);
+    benchCycleGcRecordSelf(10000 * scale);
+    benchCycleGcMapSelf(8000 * scale);
+    benchCycleGcArrayTuple(10000 * scale);
+
+    println("Benchmark complete!");
+}

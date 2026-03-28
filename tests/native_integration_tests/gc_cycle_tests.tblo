@@ -1,0 +1,11 @@
+func main() {
+    // Create a self-cycle and then drop the last external reference.
+    var a: array<any> = [];
+    push(a, a);
+    a = [];
+
+    // The cycle collector returns the number of reclaimed container objects.
+    println(gcCollect());
+    println(gcCollect());
+}
+

@@ -1,0 +1,61 @@
+public record Point {
+    x: int,
+    y: int
+};
+
+interface Formatter {
+    format(): string;
+};
+
+type UserId = int;
+
+enum Status {
+    Ok = 200,
+    Fail = 500
+};
+
+const LIMIT: int = 7;
+var label: string = "ok";
+
+async func load(user_id: UserId): int {
+    return LIMIT;
+}
+
+func pointX(point: Point): int {
+    return point.x;
+}
+
+func statusOk(): Status {
+    return Status.Ok;
+}
+
+func render(point: Point): string {
+    return label;
+}
+
+func localSum(point: Point): int {
+    var total: int = point.x;
+    var alias: Point = point;
+    return total + alias.y;
+}
+
+func convert(user_id: UserId): UserId {
+    var current: UserId = user_id;
+    return current;
+}
+
+record Box[T] {
+    value: T
+};
+
+type Maybe[T] = Box[T];
+
+enum Outcome[T] {
+    Some(T),
+    None
+};
+
+func identity[T: Formatter, U](value: T, other: U): T {
+    var current: T = value;
+    return current;
+}

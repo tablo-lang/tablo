@@ -1,0 +1,510 @@
+// In-memory cache helpers with TTL expiry and bounded-size eviction.
+// Designed for service-level caching in interpreted workflows.
+
+import "context.tblo";
+
+record CacheStore {
+    entries: map<string, any>,
+    maxEntries: int,
+    defaultTtlMs: int,
+    evictionPolicy: string,
+    nextWriteSeq: int,
+    nextExpiryMs: int
+};
+
+func cacheStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func cacheError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return cacheStdError(code, message, data);
+}
+
+func cacheWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return cacheStdError(err.code, err.message, data);
+}
+
+func cacheDefaultStore(): CacheStore {
+    var store: CacheStore = {
+        entries: {},
+        maxEntries: 0,
+        defaultTtlMs: 0,
+        evictionPolicy: "lru",
+        nextWriteSeq: 1,
+        nextExpiryMs: 0
+    };
+    return store;
+}
+
+func cacheBuildEntry(value: any,
+                     expires_at_ms: int,
+                     last_access_ms: int,
+                     write_seq: int): map<string, any> {
+    var entry: map<string, any> = {
+        "value": value,
+        "expiresAtMs": expires_at_ms,
+        "lastAccessMs": last_access_ms,
+        "writeSeq": write_seq
+    };
+    return entry;
+}
+
+func cacheEntryReadInt(entry: map<string, any>, field: string, fallback: int): int {
+    var value_any: any = mapGetString(entry, field);
+    if (value_any == nil) {
+        return fallback;
+    }
+    return value_any as int;
+}
+
+func cacheEntryIsExpired(entry: map<string, any>, now_ms: int): bool {
+    var expires_at_ms: int = cacheEntryReadInt(entry, "expiresAtMs", 0);
+    if (expires_at_ms <= 0) {
+        return false;
+    }
+    return now_ms >= expires_at_ms;
+}
+
+func cacheNormalizeNowMs(now_ms: int): int {
+    if (now_ms < 0) {
+        return 0;
+    }
+    return now_ms;
+}
+
+func cacheValidateStoreConfig(max_entries: int,
+                              default_ttl_ms: int,
+                              eviction_policy: string): Error? {
+    if (max_entries < 1 || max_entries > 1000000) {
+        return cacheError(ERR_INVALID_ARGUMENT,
+                          "maxEntries must be between 1 and 1000000",
+                          "cache.config.maxEntries",
+                          max_entries);
+    }
+    if (default_ttl_ms < 0 || default_ttl_ms > 3600000) {
+        return cacheError(ERR_INVALID_ARGUMENT,
+                          "defaultTtlMs must be between 0 and 3600000",
+                          "cache.config.defaultTtlMs",
+                          default_ttl_ms);
+    }
+    if (eviction_policy != "lru" && eviction_policy != "fifo") {
+        return cacheError(ERR_INVALID_ARGUMENT,
+                          "evictionPolicy must be 'lru' or 'fifo'",
+                          "cache.config.evictionPolicy",
+                          eviction_policy);
+    }
+    return nil;
+}
+
+func cacheValidateKey(key: string, context: string): Error? {
+    if (key == "") {
+        return cacheError(ERR_INVALID_ARGUMENT,
+                          "cache key must not be empty",
+                          context,
+                          key);
+    }
+    return nil;
+}
+
+func cacheNew(max_entries: int, default_ttl_ms: int): (CacheStore, Error?) {
+    return cacheNewWithPolicy(max_entries, default_ttl_ms, "lru");
+}
+
+func cacheNewWithPolicy(max_entries: int,
+                        default_ttl_ms: int,
+                        eviction_policy: string): (CacheStore, Error?) {
+    var empty: CacheStore = cacheDefaultStore();
+    var cfg_err = cacheValidateStoreConfig(max_entries, default_ttl_ms, eviction_policy);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var store: CacheStore = {
+        entries: {},
+        maxEntries: max_entries,
+        defaultTtlMs: default_ttl_ms,
+        evictionPolicy: eviction_policy,
+        nextWriteSeq: 1,
+        nextExpiryMs: 0
+    };
+    return (store, nil);
+}
+
+func cachePurgeExpiredAt(store: CacheStore, now_ms: int): (CacheStore, int) {
+    var normalized_now: int = cacheNormalizeNowMs(now_ms);
+    if (mapCount(store.entries) == 0) {
+        store.nextExpiryMs = 0;
+        return (store, 0);
+    }
+
+    if (store.nextExpiryMs <= 0 || normalized_now < store.nextExpiryMs) {
+        return (store, 0);
+    }
+
+    var removed: int = 0;
+    var next_expiry_ms: int = 0;
+
+    var key_items: array<any> = keys(store.entries);
+    foreach (key_any in key_items) {
+        var key: string = key_any as string;
+        var entry_any: any = mapGetString(store.entries, key);
+        if (entry_any == nil) {
+            continue;
+        }
+
+        var entry: map<string, any> = entry_any as map<string, any>;
+        if (cacheEntryIsExpired(entry, normalized_now)) {
+            mapDeleteString(store.entries, key);
+            removed = removed + 1;
+            continue;
+        }
+
+        var expires_at_ms: int = cacheEntryReadInt(entry, "expiresAtMs", 0);
+        if (expires_at_ms > 0) {
+            if (next_expiry_ms == 0 || expires_at_ms < next_expiry_ms) {
+                next_expiry_ms = expires_at_ms;
+            }
+        }
+    }
+
+    store.nextExpiryMs = next_expiry_ms;
+    return (store, removed);
+}
+
+func cachePurgeExpired(store: CacheStore): (CacheStore, int) {
+    return cachePurgeExpiredAt(store, timeMonotonicMillis());
+}
+
+func cacheEvictOne(store: CacheStore): CacheStore {
+    if (mapCount(store.entries) == 0) {
+        return store;
+    }
+
+    var victim_key: string = "";
+    var victim_score: int = 0;
+    var victim_seq: int = 0;
+    var has_victim: bool = false;
+
+    var key_items: array<any> = keys(store.entries);
+    foreach (key_any in key_items) {
+        var key: string = key_any as string;
+        var entry_any: any = mapGetString(store.entries, key);
+        if (entry_any == nil) {
+            continue;
+        }
+
+        var entry: map<string, any> = entry_any as map<string, any>;
+        var seq: int = cacheEntryReadInt(entry, "writeSeq", 0);
+        var score: int = seq;
+        if (store.evictionPolicy == "lru") {
+            score = cacheEntryReadInt(entry, "lastAccessMs", seq);
+        }
+
+        if (!has_victim) {
+            victim_key = key;
+            victim_score = score;
+            victim_seq = seq;
+            has_victim = true;
+            continue;
+        }
+
+        var better: bool = false;
+        if (score < victim_score) {
+            better = true;
+        } else if (score == victim_score && seq < victim_seq) {
+            better = true;
+        }
+
+        if (better) {
+            victim_key = key;
+            victim_score = score;
+            victim_seq = seq;
+        }
+    }
+
+    if (has_victim) {
+        mapDeleteString(store.entries, victim_key);
+    }
+    return store;
+}
+
+func cacheSetWithTtlAt(store: CacheStore,
+                       key: string,
+                       value: any,
+                       ttl_ms: int,
+                       now_ms: int): (CacheStore, Error?) {
+    var next: CacheStore = store;
+    var key_err = cacheValidateKey(key, "cache.set.key");
+    if (key_err != nil) {
+        return (next, key_err);
+    }
+
+    if (ttl_ms < 0 || ttl_ms > 3600000) {
+        return (next,
+                cacheError(ERR_INVALID_ARGUMENT,
+                           "ttlMs must be between 0 and 3600000",
+                           "cache.set.ttlMs",
+                           ttl_ms));
+    }
+
+    var normalized_now: int = cacheNormalizeNowMs(now_ms);
+    var purged = cachePurgeExpiredAt(next, normalized_now);
+    next = purged.0;
+
+    if (!mapHasString(next.entries, key)) {
+        while (mapCount(next.entries) >= next.maxEntries) {
+            next = cacheEvictOne(next);
+            if (mapCount(next.entries) == 0) {
+                break;
+            }
+        }
+    }
+
+    var expires_at_ms: int = 0;
+    if (ttl_ms > 0) {
+        expires_at_ms = normalized_now + ttl_ms;
+    }
+
+    var write_seq: int = next.nextWriteSeq;
+    if (write_seq < 1) {
+        write_seq = 1;
+    }
+
+    var entry: map<string, any> = cacheBuildEntry(value, expires_at_ms, normalized_now, write_seq);
+    mapSetString(next.entries, key, entry as any);
+    next.nextWriteSeq = write_seq + 1;
+    if (expires_at_ms > 0) {
+        if (next.nextExpiryMs <= 0 || expires_at_ms < next.nextExpiryMs) {
+            next.nextExpiryMs = expires_at_ms;
+        }
+    }
+
+    return (next, nil);
+}
+
+func cacheSetWithTtl(store: CacheStore,
+                     key: string,
+                     value: any,
+                     ttl_ms: int): (CacheStore, Error?) {
+    return cacheSetWithTtlAt(store, key, value, ttl_ms, timeMonotonicMillis());
+}
+
+func cacheSet(store: CacheStore, key: string, value: any): (CacheStore, Error?) {
+    return cacheSetWithTtl(store, key, value, store.defaultTtlMs);
+}
+
+func cacheSetTypedWithTtlAt(store: CacheStore,
+                            key: string,
+                            value: any,
+                            schema: any,
+                            ttl_ms: int,
+                            now_ms: int): (CacheStore, Error?) {
+    var decoded = jsonDecode(value, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                cacheWrapError(decoded.1,
+                               "cache.setTyped.schema",
+                               { "key": key } as any));
+    }
+    return cacheSetWithTtlAt(store, key, decoded.0, ttl_ms, now_ms);
+}
+
+func cacheSetTypedWithTtl(store: CacheStore,
+                          key: string,
+                          value: any,
+                          schema: any,
+                          ttl_ms: int): (CacheStore, Error?) {
+    return cacheSetTypedWithTtlAt(store, key, value, schema, ttl_ms, timeMonotonicMillis());
+}
+
+func cacheSetTyped(store: CacheStore,
+                   key: string,
+                   value: any,
+                   schema: any): (CacheStore, Error?) {
+    return cacheSetTypedWithTtl(store, key, value, schema, store.defaultTtlMs);
+}
+
+func cachePeekAt(store: CacheStore, key: string, now_ms: int): (CacheStore, any, bool) {
+    var next: CacheStore = store;
+    var normalized_now: int = cacheNormalizeNowMs(now_ms);
+    var purged = cachePurgeExpiredAt(next, normalized_now);
+    next = purged.0;
+
+    if (!mapHasString(next.entries, key)) {
+        return (next, nil, false);
+    }
+
+    var entry_any: any = mapGetString(next.entries, key);
+    if (entry_any == nil) {
+        return (next, nil, false);
+    }
+
+    var entry: map<string, any> = entry_any as map<string, any>;
+    return (next, mapGetString(entry, "value"), true);
+}
+
+func cachePeek(store: CacheStore, key: string): (CacheStore, any, bool) {
+    return cachePeekAt(store, key, timeMonotonicMillis());
+}
+
+func cacheGetAt(store: CacheStore, key: string, now_ms: int): (CacheStore, any, bool) {
+    var next: CacheStore = store;
+    var peeked = cachePeekAt(store, key, now_ms);
+    next = peeked.0;
+    if (!peeked.2) {
+        return (next, nil, false);
+    }
+
+    var normalized_now: int = cacheNormalizeNowMs(now_ms);
+    var entry_any: any = mapGetString(next.entries, key);
+    if (entry_any == nil) {
+        return (next, nil, false);
+    }
+    var entry: map<string, any> = entry_any as map<string, any>;
+    var expires_at_ms: int = cacheEntryReadInt(entry, "expiresAtMs", 0);
+    var write_seq: int = cacheEntryReadInt(entry, "writeSeq", 0);
+    var value: any = mapGetString(entry, "value");
+
+    var refreshed: map<string, any> = cacheBuildEntry(value,
+                                                      expires_at_ms,
+                                                      normalized_now,
+                                                      write_seq);
+    mapSetString(next.entries, key, refreshed as any);
+
+    return (next, value, true);
+}
+
+func cacheGet(store: CacheStore, key: string): (CacheStore, any, bool) {
+    return cacheGetAt(store, key, timeMonotonicMillis());
+}
+
+func cacheGetTypedAt(store: CacheStore,
+                     key: string,
+                     schema: any,
+                     now_ms: int): (CacheStore, any, bool, Error?) {
+    var next: CacheStore = store;
+    var got = cacheGetAt(store, key, now_ms);
+    next = got.0;
+    if (!got.2) {
+        return (next, nil, false, nil);
+    }
+
+    var decoded = jsonDecode(got.1, schema);
+    if (decoded.1 != nil) {
+        return (next,
+                nil,
+                false,
+                cacheWrapError(decoded.1,
+                               "cache.getTyped.schema",
+                               { "key": key } as any));
+    }
+
+    return (next, decoded.0, true, nil);
+}
+
+func cacheGetTyped(store: CacheStore,
+                   key: string,
+                   schema: any): (CacheStore, any, bool, Error?) {
+    return cacheGetTypedAt(store, key, schema, timeMonotonicMillis());
+}
+
+func cacheDelete(store: CacheStore, key: string): (CacheStore, bool) {
+    var next: CacheStore = store;
+    var purged = cachePurgeExpired(store);
+    next = purged.0;
+
+    if (!mapHasString(next.entries, key)) {
+        return (next, false);
+    }
+    mapDeleteString(next.entries, key);
+    return (next, true);
+}
+
+func cacheHas(store: CacheStore, key: string): (CacheStore, bool) {
+    var peeked = cachePeek(store, key);
+    return (peeked.0, peeked.2);
+}
+
+func cacheCount(store: CacheStore): (CacheStore, int) {
+    var next: CacheStore = store;
+    var purged = cachePurgeExpired(next);
+    next = purged.0;
+    return (next, mapCount(next.entries));
+}
+
+func cacheKeys(store: CacheStore): (CacheStore, array<string>) {
+    var next: CacheStore = store;
+    var purged = cachePurgeExpired(next);
+    next = purged.0;
+
+    var out: array<string> = [];
+    var key_items: array<any> = keys(next.entries);
+    foreach (key_any in key_items) {
+        push(out, key_any as string);
+    }
+    return (next, out);
+}
+
+func cacheClear(store: CacheStore): CacheStore {
+    store.entries = {};
+    store.nextExpiryMs = 0;
+    return store;
+}
+
+func cacheSetWithContext(store: CacheStore,
+                         key: string,
+                         value: any,
+                         ctx: Context): (CacheStore, Error?) {
+    var ctx_err = contextErr(ctx);
+    if (ctx_err != nil) {
+        return (store, ctx_err);
+    }
+    return cacheSet(store, key, value);
+}
+
+func cacheSetTypedWithContext(store: CacheStore,
+                              key: string,
+                              value: any,
+                              schema: any,
+                              ctx: Context): (CacheStore, Error?) {
+    var ctx_err = contextErr(ctx);
+    if (ctx_err != nil) {
+        return (store, ctx_err);
+    }
+    return cacheSetTyped(store, key, value, schema);
+}
+
+func cacheGetWithContext(store: CacheStore,
+                         key: string,
+                         ctx: Context): (CacheStore, any, bool, Error?) {
+    var ctx_err = contextErr(ctx);
+    if (ctx_err != nil) {
+        return (store, nil, false, ctx_err);
+    }
+    var got = cacheGet(store, key);
+    return (got.0, got.1, got.2, nil);
+}
+
+func cacheGetTypedWithContext(store: CacheStore,
+                              key: string,
+                              schema: any,
+                              ctx: Context): (CacheStore, any, bool, Error?) {
+    var ctx_err = contextErr(ctx);
+    if (ctx_err != nil) {
+        return (store, nil, false, ctx_err);
+    }
+    return cacheGetTyped(store, key, schema);
+}

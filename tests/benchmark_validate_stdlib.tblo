@@ -1,0 +1,115 @@
+// Validate stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_validate_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_validate_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/validate.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchValidateEmail(iters: int): void {
+    var value: string = "user.name+tag@sub.example.co";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        if (validateEmail(value)) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (validateEmail(value)) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf validateEmail", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchValidateUuid(iters: int): void {
+    var value: string = "550e8400-e29b-41d4-a716-446655440000";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        if (validateUuid(value)) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (validateUuid(value)) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf validateUuid", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchValidateRequiredKeys(iters: int): void {
+    var payload: map<string, any> = {
+        "id": "u_1",
+        "email": "a@b.com",
+        "role": "admin",
+        "active": true
+    };
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w: Error? = validateRequiredKeys(payload, ["id", "email", "role"], "Bench");
+        if (r_w == nil) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r: Error? = validateRequiredKeys(payload, ["id", "email", "role"], "Bench");
+        if (r == nil) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf validateRequiredKeys", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Validate Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchValidateEmail(150000 * scale);
+    benchValidateUuid(260000 * scale);
+    benchValidateRequiredKeys(180000 * scale);
+
+    println("Validate stdlib benchmark complete!");
+}

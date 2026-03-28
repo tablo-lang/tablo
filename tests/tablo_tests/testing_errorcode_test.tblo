@@ -1,0 +1,21 @@
+import "fixtures/testing.tblo";
+
+func testAssertErrorCode(): void {
+    var forced: Error = fail("intentional");
+    var err = assertErrorCode(forced, TESTING_ASSERT_FAILED_CODE, "fail should use assertion code");
+    if (err != nil) {
+        panic(err.message);
+    }
+}
+
+func testAssertNil(): void {
+    var err = assertNil(nil, "nil should pass");
+    if (err != nil) {
+        panic(err.message);
+    }
+}
+
+func main(): void {
+    testAssertErrorCode();
+    testAssertNil();
+}

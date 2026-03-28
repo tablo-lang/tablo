@@ -1,0 +1,10 @@
+func helper(value: int): int {
+    var current: int = value + 1;
+    println(current);
+    return current;
+}
+
+func main(): void {
+    var total: int = helper(4);
+    println(total);
+}

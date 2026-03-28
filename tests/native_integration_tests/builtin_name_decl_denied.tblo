@@ -1,0 +1,5 @@
+var len: int = 1;
+
+func main() {
+    println(1);
+}

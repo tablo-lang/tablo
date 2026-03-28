@@ -1,0 +1,136 @@
+import "fixtures/netip.tblo";
+
+func main(): void {
+    println(netipIsIpv4("127.0.0.1"));
+    println(netipIsIpv4("001.002.003.004"));
+    println(!netipIsIpv4("256.0.0.1"));
+    println(!netipIsIpv4("1.2.3"));
+
+    var p = netipParseIpv4("192.168.1.10");
+    println(p.1 == nil);
+    if (p.1 == nil) {
+        println(p.0 == 3232235786);
+    }
+
+    var f = netipFormatIpv4(3232235786);
+    println(f.1 == nil);
+    if (f.1 == nil) {
+        println(f.0 == "192.168.1.10");
+    }
+
+    var n = netipNormalizeIpv4("001.002.003.004");
+    println(n.1 == nil);
+    if (n.1 == nil) {
+        println(n.0 == "1.2.3.4");
+    }
+
+    var bad_parse = netipParseIpv4("10.0.x.1");
+    println(bad_parse.1 != nil);
+    if (bad_parse.1 != nil) {
+        println(bad_parse.1.code == ERR_PARSE);
+    }
+
+    var bad_format = netipFormatIpv4(-1);
+    println(bad_format.1 != nil);
+    if (bad_format.1 != nil) {
+        println(bad_format.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var m24 = netipPrefixToMask(24);
+    println(m24.1 == nil);
+    if (m24.1 == nil) {
+        println(m24.0 == "255.255.255.0");
+    }
+
+    var p24 = netipMaskToPrefix("255.255.255.0");
+    println(p24.1 == nil);
+    if (p24.1 == nil) {
+        println(p24.0 == 24);
+    }
+
+    var bad_mask = netipMaskToPrefix("255.0.255.0");
+    println(bad_mask.1 != nil);
+    if (bad_mask.1 != nil) {
+        println(bad_mask.1.code == ERR_PARSE);
+    }
+
+    var c = netipParseCidr("10.0.0.0/8");
+    println(c.1 == nil);
+    if (c.1 == nil) {
+        println(c.0.network == 167772160);
+        println(c.0.prefix == 8);
+        println(c.0.mask == 4278190080);
+        println(c.0.broadcast == 184549375);
+
+        var range = netipCidrRangeText(c.0);
+        println(range.2 == nil);
+        if (range.2 == nil) {
+            println(range.0 == "10.0.0.0");
+            println(range.1 == "10.255.255.255");
+        }
+
+        var count = netipCidrHostCount(c.0);
+        println(count.1 == nil);
+        if (count.1 == nil) {
+            println(count.0 == 16777216);
+        }
+
+        var in1 = netipCidrContains(c.0, "10.2.3.4");
+        println(in1.1 == nil);
+        if (in1.1 == nil) {
+            println(in1.0);
+        }
+
+        var out1 = netipCidrContains(c.0, "11.2.3.4");
+        println(out1.1 == nil);
+        if (out1.1 == nil) {
+            println(!out1.0);
+        }
+
+        var in_int = netipCidrContainsInt(c.0, 167772161);
+        println(in_int.1 == nil);
+        if (in_int.1 == nil) {
+            println(in_int.0);
+        }
+
+        var out_int = netipCidrContainsInt(c.0, 184549376);
+        println(out_int.1 == nil);
+        if (out_int.1 == nil) {
+            println(!out_int.0);
+        }
+    }
+
+    var c2 = netipParseCidr("192.168.1.9/24");
+    println(c2.1 == nil);
+    if (c2.1 == nil) {
+        var n2 = netipCidrNetworkText(c2.0);
+        var b2 = netipCidrBroadcastText(c2.0);
+        println(n2.1 == nil && b2.1 == nil);
+        if (n2.1 == nil && b2.1 == nil) {
+            println(n2.0 == "192.168.1.0");
+            println(b2.0 == "192.168.1.255");
+        }
+    }
+
+    var c3 = netipParseCidr("0.0.0.0/0");
+    println(c3.1 == nil);
+    if (c3.1 == nil) {
+        var all_in = netipCidrContains(c3.0, "255.255.255.255");
+        println(all_in.1 == nil);
+        if (all_in.1 == nil) {
+            println(all_in.0);
+        }
+    }
+
+    var bad_cidr = netipParseCidr("10.0.0.0/33");
+    println(bad_cidr.1 != nil);
+    if (bad_cidr.1 != nil) {
+        println(bad_cidr.1.code == ERR_PARSE);
+    }
+
+    var bad_contains = netipCidrContainsInt({ network: 0, prefix: 33, mask: 0, broadcast: 0 }, 1);
+    println(bad_contains.1 != nil);
+    if (bad_contains.1 != nil) {
+        println(bad_contains.1.code == ERR_INVALID_ARGUMENT);
+    }
+}

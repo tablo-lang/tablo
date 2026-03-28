@@ -1,0 +1,529 @@
+// Numeric helper utilities for stats, percentiles, histograms, and rolling windows.
+// State is explicit and immutable-style where relevant (rolling windows).
+
+record MathxSummary {
+    count: int,
+    sum: double,
+    min: double,
+    max: double,
+    mean: double
+};
+
+record MathxVariance {
+    population: double,
+    sample: double
+};
+
+record MathxRollingWindow {
+    values: array<double>,
+    maxSize: int,
+    nextIndex: int,
+    count: int,
+    sum: double
+};
+
+record MathxRollingStats {
+    count: int,
+    maxSize: int,
+    sum: double,
+    mean: double,
+    min: double,
+    max: double
+};
+
+func mathxStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func mathxError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return mathxStdError(code, message, data);
+}
+
+func mathxDefaultSummary(): MathxSummary {
+    var summary: MathxSummary = {
+        count: 0,
+        sum: 0.0,
+        min: 0.0,
+        max: 0.0,
+        mean: 0.0
+    };
+    return summary;
+}
+
+func mathxDefaultVariance(): MathxVariance {
+    var variance: MathxVariance = {
+        population: 0.0,
+        sample: 0.0
+    };
+    return variance;
+}
+
+func mathxDefaultRollingWindow(): MathxRollingWindow {
+    var window: MathxRollingWindow = {
+        values: [],
+        maxSize: 0,
+        nextIndex: 0,
+        count: 0,
+        sum: 0.0
+    };
+    return window;
+}
+
+func mathxValidateNonEmpty(items: array<double>, context: string): Error? {
+    if (len(items) == 0) {
+        return mathxError(ERR_INVALID_ARGUMENT,
+                          "values must not be empty",
+                          context,
+                          0);
+    }
+    return nil;
+}
+
+func mathxValidateRollingSize(max_size: int, context: string): Error? {
+    if (max_size < 1 || max_size > 1000000) {
+        return mathxError(ERR_INVALID_ARGUMENT,
+                          "maxSize must be between 1 and 1000000",
+                          context,
+                          max_size);
+    }
+    return nil;
+}
+
+func mathxValidateBucketCount(bucket_count: int, context: string): Error? {
+    if (bucket_count < 1 || bucket_count > 4096) {
+        return mathxError(ERR_INVALID_ARGUMENT,
+                          "bucketCount must be between 1 and 4096",
+                          context,
+                          bucket_count);
+    }
+    return nil;
+}
+
+func mathxSum(items: array<double>): double {
+    var total: double = 0.0;
+    foreach (value in items) {
+        total = total + value;
+    }
+    return total;
+}
+
+func mathxMin(items: array<double>): (double, Error?) {
+    var empty_err = mathxValidateNonEmpty(items, "mathx.min.values");
+    if (empty_err != nil) {
+        return (0.0, empty_err);
+    }
+
+    var current: double = items[0];
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] < current) {
+            current = items[i];
+        }
+        i = i + 1;
+    }
+
+    return (current, nil);
+}
+
+func mathxMax(items: array<double>): (double, Error?) {
+    var empty_err = mathxValidateNonEmpty(items, "mathx.max.values");
+    if (empty_err != nil) {
+        return (0.0, empty_err);
+    }
+
+    var current: double = items[0];
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] > current) {
+            current = items[i];
+        }
+        i = i + 1;
+    }
+
+    return (current, nil);
+}
+
+func mathxMean(items: array<double>): (double, Error?) {
+    var empty_err = mathxValidateNonEmpty(items, "mathx.mean.values");
+    if (empty_err != nil) {
+        return (0.0, empty_err);
+    }
+
+    var total: double = mathxSum(items);
+    return (total / (len(items) as double), nil);
+}
+
+func mathxSummary(items: array<double>): (MathxSummary, Error?) {
+    var out: MathxSummary = mathxDefaultSummary();
+    var empty_err = mathxValidateNonEmpty(items, "mathx.summary.values");
+    if (empty_err != nil) {
+        return (out, empty_err);
+    }
+
+    var total: double = 0.0;
+    var low: double = items[0];
+    var high: double = items[0];
+    foreach (value in items) {
+        total = total + value;
+        if (value < low) {
+            low = value;
+        }
+        if (value > high) {
+            high = value;
+        }
+    }
+
+    out.count = len(items);
+    out.sum = total;
+    out.min = low;
+    out.max = high;
+    out.mean = total / (len(items) as double);
+    return (out, nil);
+}
+
+func mathxVariance(items: array<double>): (MathxVariance, Error?) {
+    var out: MathxVariance = mathxDefaultVariance();
+    var empty_err = mathxValidateNonEmpty(items, "mathx.variance.values");
+    if (empty_err != nil) {
+        return (out, empty_err);
+    }
+
+    var mean_value: double = (mathxSum(items) / (len(items) as double));
+    var sum_sq: double = 0.0;
+    foreach (value in items) {
+        var delta: double = value - mean_value;
+        sum_sq = sum_sq + (delta * delta);
+    }
+
+    out.population = sum_sq / (len(items) as double);
+    if (len(items) >= 2) {
+        out.sample = sum_sq / ((len(items) - 1) as double);
+    } else {
+        out.sample = 0.0;
+    }
+    return (out, nil);
+}
+
+func mathxStdDev(items: array<double>): (MathxVariance, Error?) {
+    var variance = mathxVariance(items);
+    if (variance.1 != nil) {
+        return (variance.0, variance.1);
+    }
+
+    var out: MathxVariance = variance.0;
+    out.population = sqrt(out.population);
+    out.sample = sqrt(out.sample);
+    return (out, nil);
+}
+
+func mathxQuickSortRange(items: array<double>, low: int, high: int): array<double> {
+    var next: array<double> = items;
+    if (low >= high) {
+        return next;
+    }
+
+    var i: int = low;
+    var j: int = high;
+    var pivot: double = next[(low + high) / 2];
+    while (i <= j) {
+        while (next[i] < pivot) {
+            i = i + 1;
+        }
+        while (next[j] > pivot) {
+            j = j - 1;
+        }
+        if (i <= j) {
+            var tmp: double = next[i];
+            next[i] = next[j];
+            next[j] = tmp;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+
+    if (low < j) {
+        next = mathxQuickSortRange(next, low, j);
+    }
+    if (i < high) {
+        next = mathxQuickSortRange(next, i, high);
+    }
+
+    return next;
+}
+
+func mathxSortedCopy(items: array<double>): array<double> {
+    var out: array<double> = [];
+    foreach (value in items) {
+        push(out, value);
+    }
+
+    if (len(out) > 1) {
+        out = mathxQuickSortRange(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func mathxPercentile(items: array<double>, percentile: double): (double, Error?) {
+    var empty_err = mathxValidateNonEmpty(items, "mathx.percentile.values");
+    if (empty_err != nil) {
+        return (0.0, empty_err);
+    }
+
+    if (percentile < 0.0 || percentile > 100.0) {
+        return (0.0,
+                mathxError(ERR_INVALID_ARGUMENT,
+                           "percentile must be between 0 and 100",
+                           "mathx.percentile.percentile",
+                           percentile));
+    }
+
+    var sorted: array<double> = mathxSortedCopy(items);
+    if (len(sorted) == 1) {
+        return (sorted[0], nil);
+    }
+
+    var rank: double = (percentile / 100.0) * ((len(sorted) - 1) as double);
+    var lower_i: int = floor(rank) as int;
+    var upper_i: int = ceil(rank) as int;
+    if (lower_i == upper_i) {
+        return (sorted[lower_i], nil);
+    }
+
+    var weight: double = rank - (lower_i as double);
+    var lower_v: double = sorted[lower_i];
+    var upper_v: double = sorted[upper_i];
+    return (lower_v + ((upper_v - lower_v) * weight), nil);
+}
+
+func mathxMedian(items: array<double>): (double, Error?) {
+    return mathxPercentile(items, 50.0);
+}
+
+func mathxHistogram(items: array<double>,
+                    bucket_count: int,
+                    min_value: double,
+                    max_value: double): (array<int>, Error?) {
+    var out: array<int> = [];
+    var empty_err = mathxValidateNonEmpty(items, "mathx.histogram.values");
+    if (empty_err != nil) {
+        return (out, empty_err);
+    }
+
+    var bucket_err = mathxValidateBucketCount(bucket_count, "mathx.histogram.bucketCount");
+    if (bucket_err != nil) {
+        return (out, bucket_err);
+    }
+
+    if (max_value <= min_value) {
+        return (out,
+                mathxError(ERR_INVALID_ARGUMENT,
+                           "maxValue must be greater than minValue",
+                           "mathx.histogram.range",
+                           {
+                               "minValue": min_value,
+                               "maxValue": max_value
+                           } as any));
+    }
+
+    out = arrayWithSize(bucket_count, 0).0;
+    var width: double = max_value - min_value;
+
+    foreach (value in items) {
+        var index: int = 0;
+        if (value <= min_value) {
+            index = 0;
+        } else {
+            if (value >= max_value) {
+                index = bucket_count - 1;
+            } else {
+                var pos: double = ((value - min_value) / width) * (bucket_count as double);
+                index = floor(pos) as int;
+                if (index < 0) {
+                    index = 0;
+                }
+                if (index >= bucket_count) {
+                    index = bucket_count - 1;
+                }
+            }
+        }
+
+        out[index] = out[index] + 1;
+    }
+
+    return (out, nil);
+}
+
+func mathxHistogramAuto(items: array<double>,
+                       bucket_count: int): (array<int>, double, double, Error?) {
+    var none: array<int> = [];
+    var empty_err = mathxValidateNonEmpty(items, "mathx.histogramAuto.values");
+    if (empty_err != nil) {
+        return (none, 0.0, 0.0, empty_err);
+    }
+
+    var min_r = mathxMin(items);
+    if (min_r.1 != nil) {
+        return (none, 0.0, 0.0, min_r.1);
+    }
+
+    var max_r = mathxMax(items);
+    if (max_r.1 != nil) {
+        return (none, 0.0, 0.0, max_r.1);
+    }
+
+    var low: double = min_r.0;
+    var high: double = max_r.0;
+    if (high <= low) {
+        low = low - 0.5;
+        high = high + 0.5;
+    }
+
+    var histogram = mathxHistogram(items, bucket_count, low, high);
+    if (histogram.1 != nil) {
+        return (none, low, high, histogram.1);
+    }
+
+    return (histogram.0, low, high, nil);
+}
+
+func mathxRollingNew(max_size: int): (MathxRollingWindow, Error?) {
+    var empty: MathxRollingWindow = mathxDefaultRollingWindow();
+    var size_err = mathxValidateRollingSize(max_size, "mathx.rollingNew.maxSize");
+    if (size_err != nil) {
+        return (empty, size_err);
+    }
+
+    var window: MathxRollingWindow = {
+        values: arrayWithSize(max_size, 0.0).0,
+        maxSize: max_size,
+        nextIndex: 0,
+        count: 0,
+        sum: 0.0
+    };
+    return (window, nil);
+}
+
+func mathxRollingPush(window: MathxRollingWindow, value: double): MathxRollingWindow {
+    var next: MathxRollingWindow = window;
+    if (next.maxSize <= 0) {
+        return next;
+    }
+
+    if (next.count < next.maxSize) {
+        next.values[next.nextIndex] = value;
+        next.count = next.count + 1;
+        next.sum = next.sum + value;
+    } else {
+        var old_value: double = next.values[next.nextIndex];
+        next.values[next.nextIndex] = value;
+        next.sum = next.sum - old_value + value;
+    }
+
+    next.nextIndex = next.nextIndex + 1;
+    if (next.nextIndex >= next.maxSize) {
+        next.nextIndex = 0;
+    }
+    return next;
+}
+
+func mathxRollingCount(window: MathxRollingWindow): int {
+    return window.count;
+}
+
+func mathxRollingSnapshot(window: MathxRollingWindow): array<double> {
+    var out: array<double> = [];
+    if (window.count == 0) {
+        return out;
+    }
+
+    if (window.count < window.maxSize) {
+        var i: int = 0;
+        while (i < window.count) {
+            push(out, window.values[i]);
+            i = i + 1;
+        }
+        return out;
+    }
+
+    var i: int = 0;
+    while (i < window.maxSize) {
+        var index: int = window.nextIndex + i;
+        if (index >= window.maxSize) {
+            index = index - window.maxSize;
+        }
+        push(out, window.values[index]);
+        i = i + 1;
+    }
+    return out;
+}
+
+func mathxRollingMean(window: MathxRollingWindow): (double, Error?) {
+    if (window.count == 0) {
+        return (0.0,
+                mathxError(ERR_INVALID_ARGUMENT,
+                           "rolling window is empty",
+                           "mathx.rollingMean.window",
+                           window.count));
+    }
+    return (window.sum / (window.count as double), nil);
+}
+
+func mathxRollingMinMax(window: MathxRollingWindow): (double, double, Error?) {
+    if (window.count == 0) {
+        return (0.0,
+                0.0,
+                mathxError(ERR_INVALID_ARGUMENT,
+                           "rolling window is empty",
+                           "mathx.rollingMinMax.window",
+                           window.count));
+    }
+
+    var snapshot: array<double> = mathxRollingSnapshot(window);
+    var low: double = snapshot[0];
+    var high: double = snapshot[0];
+    var i: int = 1;
+    while (i < len(snapshot)) {
+        if (snapshot[i] < low) {
+            low = snapshot[i];
+        }
+        if (snapshot[i] > high) {
+            high = snapshot[i];
+        }
+        i = i + 1;
+    }
+
+    return (low, high, nil);
+}
+
+func mathxRollingStats(window: MathxRollingWindow): (MathxRollingStats, Error?) {
+    var out: MathxRollingStats = {
+        count: window.count,
+        maxSize: window.maxSize,
+        sum: window.sum,
+        mean: 0.0,
+        min: 0.0,
+        max: 0.0
+    };
+
+    if (window.count == 0) {
+        return (out,
+                mathxError(ERR_INVALID_ARGUMENT,
+                           "rolling window is empty",
+                           "mathx.rollingStats.window",
+                           window.count));
+    }
+
+    out.mean = window.sum / (window.count as double);
+    var minmax = mathxRollingMinMax(window);
+    if (minmax.2 != nil) {
+        return (out, minmax.2);
+    }
+    out.min = minmax.0;
+    out.max = minmax.1;
+    return (out, nil);
+}

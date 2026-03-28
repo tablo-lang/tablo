@@ -1,0 +1,178 @@
+import "fixtures/encoding.tblo";
+
+func main(): void {
+    var hx = encodingHexEncode("Hi");
+    println(hx.1 == nil);
+    if (hx.1 == nil) {
+        println(hx.0 == "4869");
+    }
+
+    var hb = encodingHexDecodeToBytes("48 69");
+    println(hb.1 == nil);
+    if (hb.1 == nil) {
+        println(bytesToHex(hb.0).0 == "4869");
+    }
+
+    var hb_bad = encodingHexDecodeToBytes("zz");
+    println(hb_bad.1 != nil);
+    if (hb_bad.1 != nil) {
+        println(hb_bad.1.code == ERR_PARSE);
+    }
+
+    var b64_empty = encodingBase64Encode("");
+    println(b64_empty.1 == nil);
+    if (b64_empty.1 == nil) {
+        println(b64_empty.0 == "");
+    }
+
+    var b64_f = encodingBase64Encode("f");
+    println(b64_f.1 == nil);
+    if (b64_f.1 == nil) {
+        println(b64_f.0 == "Zg==");
+    }
+
+    var b64_fo = encodingBase64Encode("fo");
+    println(b64_fo.1 == nil);
+    if (b64_fo.1 == nil) {
+        println(b64_fo.0 == "Zm8=");
+    }
+
+    var b64_foo = encodingBase64Encode("foo");
+    println(b64_foo.1 == nil);
+    if (b64_foo.1 == nil) {
+        println(b64_foo.0 == "Zm9v");
+    }
+
+    var b64_hw = encodingBase64Encode("hello world");
+    println(b64_hw.1 == nil);
+    if (b64_hw.1 == nil) {
+        println(b64_hw.0 == "aGVsbG8gd29ybGQ=");
+    }
+
+    var d_foo = encodingBase64DecodeToBytes("Zm9v");
+    println(d_foo.1 == nil);
+    if (d_foo.1 == nil) {
+        println(bytesToHex(d_foo.0).0 == "666f6f");
+    }
+
+    var d_ws = encodingBase64DecodeToBytes("  Zm 9v \n");
+    println(d_ws.1 == nil);
+    if (d_ws.1 == nil) {
+        println(bytesToHex(d_ws.0).0 == "666f6f");
+    }
+
+    var d_empty = encodingBase64DecodeToBytes("");
+    println(d_empty.1 == nil);
+    if (d_empty.1 == nil) {
+        println(len(d_empty.0) == 0);
+    }
+
+    var d_bad_len = encodingBase64DecodeToBytes("abc");
+    println(d_bad_len.1 != nil);
+    if (d_bad_len.1 != nil) {
+        println(d_bad_len.1.code == ERR_PARSE);
+    }
+
+    var d_bad_char = encodingBase64DecodeToBytes("a*==");
+    println(d_bad_char.1 != nil);
+    if (d_bad_char.1 != nil) {
+        println(d_bad_char.1.code == ERR_PARSE);
+    }
+
+    var d_bad_pad = encodingBase64DecodeToBytes("ab=c");
+    println(d_bad_pad.1 != nil);
+    if (d_bad_pad.1 != nil) {
+        println(d_bad_pad.1.code == ERR_PARSE);
+    }
+
+    var raw3 = hexToBytes("fbefff");
+    println(raw3.1 == nil);
+    if (raw3.1 == nil) {
+        var u3p = encodingBase64UrlEncodeBytes(raw3.0, true);
+        println(u3p.1 == nil);
+        if (u3p.1 == nil) {
+            println(u3p.0 == "--__");
+        }
+
+        var u3n = encodingBase64UrlEncodeBytes(raw3.0, false);
+        println(u3n.1 == nil);
+        if (u3n.1 == nil) {
+            println(u3n.0 == "--__");
+        }
+
+        var u3d = encodingBase64UrlDecodeToBytes("--__");
+        println(u3d.1 == nil);
+        if (u3d.1 == nil) {
+            println(bytesToHex(u3d.0).0 == "fbefff");
+        }
+    }
+
+    var raw2 = hexToBytes("ffff");
+    println(raw2.1 == nil);
+    if (raw2.1 == nil) {
+        var u2p = encodingBase64UrlEncodeBytes(raw2.0, true);
+        println(u2p.1 == nil);
+        if (u2p.1 == nil) {
+            println(u2p.0 == "__8=");
+        }
+
+        var u2n = encodingBase64UrlEncodeBytes(raw2.0, false);
+        println(u2n.1 == nil);
+        if (u2n.1 == nil) {
+            println(u2n.0 == "__8");
+        }
+
+        var u2d = encodingBase64UrlDecodeToBytes("__8");
+        println(u2d.1 == nil);
+        if (u2d.1 == nil) {
+            println(bytesToHex(u2d.0).0 == "ffff");
+        }
+    }
+
+    var raw_gcm = hexToBytes("58e2fccefa7e3061367f1d57a4e7455a");
+    println(raw_gcm.1 == nil);
+    if (raw_gcm.1 == nil) {
+        var gcm_b64 = encodingBase64EncodeBytes(raw_gcm.0);
+        println(gcm_b64.1 == nil);
+        if (gcm_b64.1 == nil) {
+            println(gcm_b64.0 == "WOL8zvp+MGE2fx1XpOdFWg==");
+            var gcm_b64_dec = encodingBase64DecodeToBytes(gcm_b64.0);
+            println(gcm_b64_dec.1 == nil);
+            if (gcm_b64_dec.1 == nil) {
+                println(bytesToHex(gcm_b64_dec.0).0 == "58e2fccefa7e3061367f1d57a4e7455a");
+            }
+        }
+
+        var gcm_b64u = encodingBase64UrlEncodeBytes(raw_gcm.0, false);
+        println(gcm_b64u.1 == nil);
+        if (gcm_b64u.1 == nil) {
+            println(gcm_b64u.0 == "WOL8zvp-MGE2fx1XpOdFWg");
+            var gcm_b64u_dec = encodingBase64UrlDecodeToBytes(gcm_b64u.0);
+            println(gcm_b64u_dec.1 == nil);
+            if (gcm_b64u_dec.1 == nil) {
+                println(bytesToHex(gcm_b64u_dec.0).0 == "58e2fccefa7e3061367f1d57a4e7455a");
+            }
+        }
+    }
+
+    var url_bad_len = encodingBase64UrlDecodeToBytes("A");
+    println(url_bad_len.1 != nil);
+    if (url_bad_len.1 != nil) {
+        println(url_bad_len.1.code == ERR_PARSE);
+    }
+
+    var roundtrip_src = "tablo-encoding-2026";
+    var r_enc = encodingBase64Encode(roundtrip_src);
+    println(r_enc.1 == nil);
+    if (r_enc.1 == nil) {
+        var r_dec = encodingBase64DecodeToBytes(r_enc.0);
+        println(r_dec.1 == nil);
+        if (r_dec.1 == nil) {
+            var src_hex = encodingHexEncode(roundtrip_src);
+            println(src_hex.1 == nil);
+            if (src_hex.1 == nil) {
+                println(bytesToHex(r_dec.0).0 == src_hex.0);
+            }
+        }
+    }
+}

@@ -1,0 +1,44 @@
+async func delayedValue(delayMs: int, value: int): int {
+    await asyncSleep(delayMs);
+    return value;
+}
+
+async func measureSleep(delayMs: int): bool {
+    var start: int = timeMonotonicMillis();
+    await asyncSleep(delayMs);
+    return timeMonotonicMillis() - start >= 10;
+}
+
+async func chainedSleep(): string {
+    await asyncSleep(5);
+    await asyncSleep(0);
+    return "done";
+}
+
+func main(): void {
+    var immediate = asyncSleep(0);
+    println(str(futureIsReady(immediate)));
+    println(typeOf(futureGet(immediate)));
+
+    var delayed = delayedValue(20, 7);
+    println(str(!futureIsReady(delayed)));
+    while (!futureIsReady(delayed)) {
+    }
+    println(str(futureGet(delayed)));
+
+    var first = delayedValue(5, 2);
+    var second = delayedValue(15, 3);
+    while (!futureIsReady(first) || !futureIsReady(second)) {
+    }
+    println(str(futureGet(first) + futureGet(second)));
+
+    var measured = measureSleep(20);
+    while (!futureIsReady(measured)) {
+    }
+    println(str(futureGet(measured)));
+
+    var chained = chainedSleep();
+    while (!futureIsReady(chained)) {
+    }
+    println(futureGet(chained));
+}

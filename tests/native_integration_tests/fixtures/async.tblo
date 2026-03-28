@@ -1,0 +1,211 @@
+// Ergonomic helpers for composing Future[T] values in ordinary TabloLang async code.
+// This first slice stays deliberately small: typed fan-in helpers over the core runtime futures.
+
+const ASYNC_DEFAULT_POLL_INTERVAL_MS: int = 1;
+
+record AsyncAwaitAnyResult {
+    index: int,
+    ready: bool,
+    timedOut: bool,
+    value: any,
+    error: Error?
+};
+
+record AsyncAwaitWithTimeoutResult {
+    ready: bool,
+    timedOut: bool,
+    value: any,
+    error: Error?
+};
+
+func asyncError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func asyncAwaitAnyError(message: string, data: any): AsyncAwaitAnyResult {
+    var out: AsyncAwaitAnyResult = {
+        index: -1,
+        ready: false,
+        timedOut: false,
+        value: nil,
+        error: asyncError(ERR_INVALID_ARGUMENT, message, data)
+    };
+    return out;
+}
+
+func asyncAwaitAnyTimedOut(): AsyncAwaitAnyResult {
+    var out: AsyncAwaitAnyResult = {
+        index: -1,
+        ready: false,
+        timedOut: true,
+        value: nil,
+        error: nil
+    };
+    return out;
+}
+
+func asyncAwaitWithTimeoutError(message: string, data: any): AsyncAwaitWithTimeoutResult {
+    var out: AsyncAwaitWithTimeoutResult = {
+        ready: false,
+        timedOut: false,
+        value: nil,
+        error: asyncError(ERR_INVALID_ARGUMENT, message, data)
+    };
+    return out;
+}
+
+func asyncAwaitWithTimeoutTimedOut(): AsyncAwaitWithTimeoutResult {
+    var out: AsyncAwaitWithTimeoutResult = {
+        ready: false,
+        timedOut: true,
+        value: nil,
+        error: nil
+    };
+    return out;
+}
+
+async func asyncAwaitAll[T](tasks: array<Future[T]>): array<T> {
+    var out: array<T> = [];
+    var i: int = 0;
+    while (i < len(tasks)) {
+        var value: T = await tasks[i];
+        push(out, value);
+        i = i + 1;
+    }
+    return out;
+}
+
+async func asyncAwaitAll2[A, B](first: Future[A], second: Future[B]): (A, B) {
+    var left: A = await first;
+    var right: B = await second;
+    return (left, right);
+}
+
+async func asyncAwaitAll3[A, B, C](first: Future[A], second: Future[B], third: Future[C]): (A, B, C) {
+    var left: A = await first;
+    var middle: B = await second;
+    var right: C = await third;
+    return (left, middle, right);
+}
+
+async func asyncAwaitAny[T](tasks: array<Future[T]>, pollIntervalMs: int): AsyncAwaitAnyResult {
+    if (pollIntervalMs < 1) {
+        return asyncAwaitAnyError("asyncAwaitAny: pollIntervalMs must be >= 1", pollIntervalMs);
+    }
+    if (len(tasks) == 0) {
+        return asyncAwaitAnyError("asyncAwaitAny: tasks cannot be empty", 0);
+    }
+
+    while (true) {
+        var i: int = 0;
+        while (i < len(tasks)) {
+            if (futureIsReady(tasks[i])) {
+                var value: T = await tasks[i];
+                var ready: AsyncAwaitAnyResult = {
+                    index: i,
+                    ready: true,
+                    timedOut: false,
+                    value: value as any,
+                    error: nil
+                };
+                return ready;
+            }
+            i = i + 1;
+        }
+
+        await asyncSleep(pollIntervalMs);
+    }
+}
+
+async func asyncAwaitAnyDefault[T](tasks: array<Future[T]>): AsyncAwaitAnyResult {
+    return await asyncAwaitAny(tasks, ASYNC_DEFAULT_POLL_INTERVAL_MS);
+}
+
+async func asyncAwaitWithTimeout[T](task: Future[T],
+                                    timeoutMs: int,
+                                    pollIntervalMs: int): AsyncAwaitWithTimeoutResult {
+    if (timeoutMs < 0) {
+        return asyncAwaitWithTimeoutError("asyncAwaitWithTimeout: timeoutMs must be >= 0", timeoutMs);
+    }
+    if (pollIntervalMs < 1) {
+        return asyncAwaitWithTimeoutError("asyncAwaitWithTimeout: pollIntervalMs must be >= 1", pollIntervalMs);
+    }
+
+    var remaining: int = timeoutMs;
+    while (true) {
+        if (futureIsReady(task)) {
+            var value: T = await task;
+            var ready: AsyncAwaitWithTimeoutResult = {
+                ready: true,
+                timedOut: false,
+                value: value as any,
+                error: nil
+            };
+            return ready;
+        }
+
+        if (remaining == 0) {
+            return asyncAwaitWithTimeoutTimedOut();
+        }
+
+        var step: int = pollIntervalMs;
+        if (step > remaining) {
+            step = remaining;
+        }
+        await asyncSleep(step);
+        remaining = remaining - step;
+    }
+}
+
+async func asyncAwaitWithTimeoutDefault[T](task: Future[T], timeoutMs: int): AsyncAwaitWithTimeoutResult {
+    return await asyncAwaitWithTimeout(task, timeoutMs, ASYNC_DEFAULT_POLL_INTERVAL_MS);
+}
+
+async func asyncAwaitAnyWithTimeout[T](tasks: array<Future[T]>,
+                                       timeoutMs: int,
+                                       pollIntervalMs: int): AsyncAwaitAnyResult {
+    if (timeoutMs < 0) {
+        return asyncAwaitAnyError("asyncAwaitAnyWithTimeout: timeoutMs must be >= 0", timeoutMs);
+    }
+    if (pollIntervalMs < 1) {
+        return asyncAwaitAnyError("asyncAwaitAnyWithTimeout: pollIntervalMs must be >= 1", pollIntervalMs);
+    }
+    if (len(tasks) == 0) {
+        return asyncAwaitAnyError("asyncAwaitAnyWithTimeout: tasks cannot be empty", 0);
+    }
+
+    var remaining: int = timeoutMs;
+    while (true) {
+        var i: int = 0;
+        while (i < len(tasks)) {
+            if (futureIsReady(tasks[i])) {
+                var value: T = await tasks[i];
+                var ready: AsyncAwaitAnyResult = {
+                    index: i,
+                    ready: true,
+                    timedOut: false,
+                    value: value as any,
+                    error: nil
+                };
+                return ready;
+            }
+            i = i + 1;
+        }
+
+        if (remaining == 0) {
+            return asyncAwaitAnyTimedOut();
+        }
+
+        var step: int = pollIntervalMs;
+        if (step > remaining) {
+            step = remaining;
+        }
+        await asyncSleep(step);
+        remaining = remaining - step;
+    }
+}
+
+async func asyncAwaitAnyWithTimeoutDefault[T](tasks: array<Future[T]>, timeoutMs: int): AsyncAwaitAnyResult {
+    return await asyncAwaitAnyWithTimeout(tasks, timeoutMs, ASYNC_DEFAULT_POLL_INTERVAL_MS);
+}

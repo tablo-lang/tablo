@@ -1,0 +1,4 @@
+GET /lf-only HTTP/1.0
+Host: localhost
+X-Test: one
+

@@ -1,0 +1,741 @@
+// Streaming I/O standard library helpers.
+// Wraps handle-based builtins into Reader/Writer abstractions.
+
+import "context.tblo";
+
+record Reader {
+    handle: any
+}
+
+record Writer {
+    handle: any
+}
+
+record BufferedReader {
+    reader: Reader,
+    buffer: string,
+    bufferPos: int,
+    isFile: bool,
+    chunkBytes: int,
+    eof: bool
+}
+
+record BufferedWriter {
+    writer: Writer,
+    pending: string,
+    flushBytes: int
+}
+
+func ioBufferedError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func ioReaderFromHandle(handle: any): Reader {
+    var r: Reader = { handle: handle };
+    return r;
+}
+
+func ioWriterFromHandle(handle: any): Writer {
+    var w: Writer = { handle: handle };
+    return w;
+}
+
+func ioOpenReader(path: string): (Reader, Error?) {
+    var r = file_open(path, "rb");
+    if (r.1 != nil) {
+        var empty: Reader = { handle: nil };
+        return (empty, r.1);
+    }
+    return (ioReaderFromHandle(r.0), nil);
+}
+
+func ioOpenWriter(path: string): (Writer, Error?) {
+    var r = file_open(path, "wb");
+    if (r.1 != nil) {
+        var empty: Writer = { handle: nil };
+        return (empty, r.1);
+    }
+    return (ioWriterFromHandle(r.0), nil);
+}
+
+func ioOpenAppender(path: string): (Writer, Error?) {
+    var r = file_open(path, "ab");
+    if (r.1 != nil) {
+        var empty: Writer = { handle: nil };
+        return (empty, r.1);
+    }
+    return (ioWriterFromHandle(r.0), nil);
+}
+
+func ioCloseHandle(handle: any): void {
+    var t: string = typeOf(handle);
+    if (t == "file") {
+        file_close(handle);
+    }
+    if (t == "socket") {
+        tcpClose(handle);
+    }
+}
+
+func ioCloseReader(reader: Reader): void {
+    ioCloseHandle(reader.handle);
+}
+
+func ioCloseWriter(writer: Writer): void {
+    ioCloseHandle(writer.handle);
+}
+
+func ioReadLineFrom(reader: Reader): (string?, Error?) {
+    return ioReadLine(reader.handle);
+}
+
+func ioReadAllFrom(reader: Reader): (string, Error?) {
+    return ioReadAll(reader.handle);
+}
+
+func ioReadChunkFrom(reader: Reader, maxBytes: int): (string?, Error?) {
+    return ioReadChunk(reader.handle, maxBytes);
+}
+
+func ioReadChunkBytesFrom(reader: Reader, maxBytes: int): (bytes?, Error?) {
+    return ioReadChunkBytes(reader.handle, maxBytes);
+}
+
+func ioReadExactlyBytesFrom(reader: Reader, byteCount: int): (bytes, Error?) {
+    return ioReadExactlyBytes(reader.handle, byteCount);
+}
+
+func ioWriteAllTo(writer: Writer, data: string): (int, Error?) {
+    return ioWriteAll(writer.handle, data);
+}
+
+func ioWriteBytesAllTo(writer: Writer, data: bytes): (int, Error?) {
+    return ioWriteBytesAll(writer.handle, data);
+}
+
+func ioCopyAll(reader: Reader, writer: Writer, chunkBytes: int): (int, Error?) {
+    return ioCopy(reader.handle, writer.handle, chunkBytes);
+}
+
+// Reads lines until EOF (or up to maxLines if > 0).
+// For sockets, ERR_NETWORK during line read is treated as stream end.
+func ioLines(reader: Reader, maxLines: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    var count: int = 0;
+
+    while (true) {
+        if (maxLines > 0 && count >= maxLines) {
+            break;
+        }
+
+        var lr = ioReadLine(reader.handle);
+        if (lr.1 != nil) {
+            if (typeOf(reader.handle) == "socket" && lr.1.code == ERR_NETWORK) {
+                break;
+            }
+            return (out, lr.1);
+        }
+        if (lr.0 == nil) {
+            break;
+        }
+
+        push(out, lr.0 as string);
+        count = count + 1;
+    }
+
+    return (out, nil);
+}
+
+func ioCopyFile(srcPath: string, dstPath: string, chunkBytes: int): (int, Error?) {
+    var src = ioOpenReader(srcPath);
+    if (src.1 != nil) {
+        return (0, src.1);
+    }
+
+    var dst = ioOpenWriter(dstPath);
+    if (dst.1 != nil) {
+        ioCloseReader(src.0);
+        return (0, dst.1);
+    }
+
+    var copied = ioCopyAll(src.0, dst.0, chunkBytes);
+    ioCloseReader(src.0);
+    ioCloseWriter(dst.0);
+    return copied;
+}
+
+func ioCopyAllWithContext(reader: Reader,
+                          writer: Writer,
+                          chunkBytes: int,
+                          ctx: Context): (int, Error?) {
+    var total: int = 0;
+    if (chunkBytes < 1 || chunkBytes > 1048576) {
+        return (total,
+                ioBufferedError(ERR_INVALID_ARGUMENT,
+                                "chunkBytes must be between 1 and 1048576",
+                                chunkBytes));
+    }
+
+    while (true) {
+        var ctx_err = contextErr(ctx);
+        if (ctx_err != nil) {
+            return (total, ctx_err);
+        }
+
+        var read_r = ioReadChunkFrom(reader, chunkBytes);
+        if (read_r.1 != nil) {
+            return (total, read_r.1);
+        }
+        if (read_r.0 == nil) {
+            break;
+        }
+
+        var chunk: string = read_r.0 as string;
+        if (chunk == "") {
+            break;
+        }
+
+        var write_r = ioWriteAllTo(writer, chunk);
+        if (write_r.1 != nil) {
+            return (total, write_r.1);
+        }
+        total = total + write_r.0;
+    }
+
+    return (total, nil);
+}
+
+func ioLinesWithContext(reader: Reader,
+                        maxLines: int,
+                        ctx: Context): (array<string>, Error?) {
+    var out: array<string> = [];
+    var count: int = 0;
+
+    while (true) {
+        if (maxLines > 0 && count >= maxLines) {
+            break;
+        }
+
+        var ctx_err = contextErr(ctx);
+        if (ctx_err != nil) {
+            return (out, ctx_err);
+        }
+
+        var lr = ioReadLine(reader.handle);
+        if (lr.1 != nil) {
+            if (typeOf(reader.handle) == "socket" && lr.1.code == ERR_NETWORK) {
+                break;
+            }
+            return (out, lr.1);
+        }
+        if (lr.0 == nil) {
+            break;
+        }
+
+        push(out, lr.0 as string);
+        count = count + 1;
+    }
+
+    return (out, nil);
+}
+
+func ioCopyFileWithContext(srcPath: string,
+                           dstPath: string,
+                           chunkBytes: int,
+                           ctx: Context): (int, Error?) {
+    var src = ioOpenReader(srcPath);
+    if (src.1 != nil) {
+        return (0, src.1);
+    }
+
+    var dst = ioOpenWriter(dstPath);
+    if (dst.1 != nil) {
+        ioCloseReader(src.0);
+        return (0, dst.1);
+    }
+
+    var copied = ioCopyAllWithContext(src.0, dst.0, chunkBytes, ctx);
+    ioCloseReader(src.0);
+    ioCloseWriter(dst.0);
+    return copied;
+}
+
+func ioBufferedReaderFrom(reader: Reader, chunkBytes: int): (BufferedReader, Error?) {
+    var t: string = typeOf(reader.handle);
+    var is_file: bool = (t == "file");
+    var out: BufferedReader = {
+        reader: reader,
+        buffer: "",
+        bufferPos: 0,
+        isFile: is_file,
+        chunkBytes: chunkBytes,
+        eof: false
+    };
+    if (chunkBytes < 1 || chunkBytes > 1048576) {
+        return (out, ioBufferedError(ERR_INVALID_ARGUMENT,
+                                     "chunkBytes must be between 1 and 1048576",
+                                     chunkBytes));
+    }
+    if (reader.handle == nil) {
+        return (out, ioBufferedError(ERR_INVALID_ARGUMENT, "reader.handle cannot be nil", nil));
+    }
+
+    if (t != "file" && t != "socket") {
+        return (out,
+                ioBufferedError(ERR_INVALID_ARGUMENT,
+                                "buffered reader requires file or socket handle",
+                                t));
+    }
+    return (out, nil);
+}
+
+func ioBufferedReaderFromDefault(reader: Reader): (BufferedReader, Error?) {
+    return ioBufferedReaderFrom(reader, 4096);
+}
+
+func ioBufferedWriterFrom(writer: Writer, flushBytes: int): (BufferedWriter, Error?) {
+    var out: BufferedWriter = {
+        writer: writer,
+        pending: "",
+        flushBytes: flushBytes
+    };
+    if (flushBytes < 1 || flushBytes > 1048576) {
+        return (out, ioBufferedError(ERR_INVALID_ARGUMENT,
+                                     "flushBytes must be between 1 and 1048576",
+                                     flushBytes));
+    }
+    if (writer.handle == nil) {
+        return (out, ioBufferedError(ERR_INVALID_ARGUMENT, "writer.handle cannot be nil", nil));
+    }
+
+    var t: string = typeOf(writer.handle);
+    if (t != "file" && t != "socket") {
+        return (out,
+                ioBufferedError(ERR_INVALID_ARGUMENT,
+                                "buffered writer requires file or socket handle",
+                                t));
+    }
+    return (out, nil);
+}
+
+func ioBufferedWriterFromDefault(writer: Writer): (BufferedWriter, Error?) {
+    return ioBufferedWriterFrom(writer, 4096);
+}
+
+func ioOpenBufferedReader(path: string, chunkBytes: int): (BufferedReader, Error?) {
+    var opened = ioOpenReader(path);
+    var empty_r: Reader = { handle: nil };
+    var empty: BufferedReader = {
+        reader: empty_r,
+        buffer: "",
+        bufferPos: 0,
+        isFile: false,
+        chunkBytes: chunkBytes,
+        eof: true
+    };
+    if (opened.1 != nil) {
+        return (empty, opened.1);
+    }
+
+    var br = ioBufferedReaderFrom(opened.0, chunkBytes);
+    if (br.1 != nil) {
+        ioCloseReader(opened.0);
+        return (empty, br.1);
+    }
+    return br;
+}
+
+func ioOpenBufferedWriter(path: string, flushBytes: int): (BufferedWriter, Error?) {
+    var opened = ioOpenWriter(path);
+    var empty_w: Writer = { handle: nil };
+    var empty: BufferedWriter = {
+        writer: empty_w,
+        pending: "",
+        flushBytes: flushBytes
+    };
+    if (opened.1 != nil) {
+        return (empty, opened.1);
+    }
+
+    var bw = ioBufferedWriterFrom(opened.0, flushBytes);
+    if (bw.1 != nil) {
+        ioCloseWriter(opened.0);
+        return (empty, bw.1);
+    }
+    return bw;
+}
+
+func ioOpenBufferedAppender(path: string, flushBytes: int): (BufferedWriter, Error?) {
+    var opened = ioOpenAppender(path);
+    var empty_w: Writer = { handle: nil };
+    var empty: BufferedWriter = {
+        writer: empty_w,
+        pending: "",
+        flushBytes: flushBytes
+    };
+    if (opened.1 != nil) {
+        return (empty, opened.1);
+    }
+
+    var bw = ioBufferedWriterFrom(opened.0, flushBytes);
+    if (bw.1 != nil) {
+        ioCloseWriter(opened.0);
+        return (empty, bw.1);
+    }
+    return bw;
+}
+
+func ioBufferedFill(buffered: BufferedReader): (BufferedReader, Error?) {
+    var next = buffered;
+    if (next.eof) {
+        return (next, nil);
+    }
+
+    if (next.reader.handle == nil) {
+        return (next, ioBufferedError(ERR_INVALID_ARGUMENT, "buffered reader handle is nil", nil));
+    }
+
+    if (next.bufferPos > 0) {
+        var total: int = len(next.buffer);
+        if (next.bufferPos >= total) {
+            next.buffer = "";
+            next.bufferPos = 0;
+        } else if (next.bufferPos >= next.chunkBytes || total >= (next.chunkBytes * 4)) {
+            var remaining: int = total - next.bufferPos;
+            next.buffer = substring(next.buffer, next.bufferPos, remaining);
+            next.bufferPos = 0;
+        }
+    }
+
+    var chunk_r = ioReadChunk(next.reader.handle, next.chunkBytes);
+    if (chunk_r.1 != nil) {
+        // Keep socket semantics aligned with ioLines(): network close => EOF.
+        if (!next.isFile && chunk_r.1.code == ERR_NETWORK) {
+            next.eof = true;
+            return (next, nil);
+        }
+        return (next, chunk_r.1);
+    }
+    if (chunk_r.0 == nil) {
+        next.eof = true;
+        return (next, nil);
+    }
+
+    next.buffer = next.buffer + (chunk_r.0 as string);
+    return (next, nil);
+}
+
+func ioBufferedReadChunkFrom(buffered: BufferedReader, maxBytes: int): (BufferedReader, string, Error?) {
+    var next = buffered;
+    if (maxBytes < 1 || maxBytes > 1048576) {
+        return (next, "", ioBufferedError(ERR_INVALID_ARGUMENT,
+                                          "maxBytes must be between 1 and 1048576",
+                                          maxBytes));
+    }
+
+    var pending: int = len(next.buffer) - next.bufferPos;
+    if (pending < 0) {
+        pending = 0;
+    }
+
+    // File fast-path: when no buffered data is pending, avoid stdlib-level
+    // string buffering and forward chunk reads directly to the runtime builtin.
+    if (pending == 0 && !next.eof && next.isFile) {
+        var direct_r = ioReadChunk(next.reader.handle, maxBytes);
+        if (direct_r.1 != nil) {
+            return (next, "", direct_r.1);
+        }
+        if (direct_r.0 == nil) {
+            next.eof = true;
+            return (next, "", nil);
+        }
+        return (next, direct_r.0 as string, nil);
+    }
+
+    while (pending == 0 && !next.eof) {
+        var fill_r = ioBufferedFill(next);
+        if (fill_r.1 != nil) {
+            return (fill_r.0, "", fill_r.1);
+        }
+        next = fill_r.0;
+        pending = len(next.buffer) - next.bufferPos;
+        if (pending < 0) {
+            pending = 0;
+        }
+    }
+
+    if (pending == 0) {
+        return (next, "", nil);
+    }
+
+    var take: int = maxBytes;
+    if (take > pending) {
+        take = pending;
+    }
+
+    var chunk: string = substring(next.buffer, next.bufferPos, take);
+    next.bufferPos = next.bufferPos + take;
+    if (next.bufferPos >= len(next.buffer)) {
+        next.buffer = "";
+        next.bufferPos = 0;
+    } else if (next.bufferPos >= (next.chunkBytes * 2)) {
+        var remaining_after_take: int = len(next.buffer) - next.bufferPos;
+        next.buffer = substring(next.buffer, next.bufferPos, remaining_after_take);
+        next.bufferPos = 0;
+    }
+    return (next, chunk, nil);
+}
+
+func ioBufferedReadLineFrom(buffered: BufferedReader): (BufferedReader, string?, Error?) {
+    var next = buffered;
+    while (true) {
+        if (next.bufferPos > 0) {
+            var total: int = len(next.buffer);
+            if (next.bufferPos >= total) {
+                next.buffer = "";
+                next.bufferPos = 0;
+            } else if (next.bufferPos >= next.chunkBytes || total >= (next.chunkBytes * 4)) {
+                var remaining: int = total - next.bufferPos;
+                next.buffer = substring(next.buffer, next.bufferPos, remaining);
+                next.bufferPos = 0;
+            }
+        }
+
+        var pending: int = len(next.buffer) - next.bufferPos;
+        if (pending < 0) {
+            pending = 0;
+        }
+        var visible: string = "";
+        if (pending > 0) {
+            visible = substring(next.buffer, next.bufferPos, pending);
+        }
+
+        var newline_index: int = find(visible, "\n");
+        if (newline_index >= 0) {
+            var line: string = substring(visible, 0, newline_index);
+            next.bufferPos = next.bufferPos + newline_index + 1;
+            if (next.bufferPos >= len(next.buffer)) {
+                next.buffer = "";
+                next.bufferPos = 0;
+            }
+            if (endsWith(line, "\r")) {
+                line = substring(line, 0, len(line) - 1);
+            }
+            return (next, line, nil);
+        }
+
+        if (next.eof) {
+            if (pending == 0) {
+                return (next, nil, nil);
+            }
+
+            var tail: string = visible;
+            next.buffer = "";
+            next.bufferPos = 0;
+            if (endsWith(tail, "\r")) {
+                tail = substring(tail, 0, len(tail) - 1);
+            }
+            return (next, tail, nil);
+        }
+
+        var fill_r = ioBufferedFill(next);
+        if (fill_r.1 != nil) {
+            return (fill_r.0, nil, fill_r.1);
+        }
+        next = fill_r.0;
+    }
+}
+
+func ioBufferedReadAllFrom(buffered: BufferedReader): (BufferedReader, string, Error?) {
+    var next = buffered;
+    if (next.bufferPos > 0) {
+        var total: int = len(next.buffer);
+        if (next.bufferPos >= total) {
+            next.buffer = "";
+            next.bufferPos = 0;
+        } else {
+            var remaining: int = total - next.bufferPos;
+            next.buffer = substring(next.buffer, next.bufferPos, remaining);
+            next.bufferPos = 0;
+        }
+    }
+    var out: string = "";
+    var pending: int = len(next.buffer) - next.bufferPos;
+    if (pending < 0) {
+        pending = 0;
+    }
+    if (pending > 0) {
+        out = substring(next.buffer, next.bufferPos, pending);
+    }
+    next.buffer = "";
+    next.bufferPos = 0;
+
+    while (!next.eof) {
+        var fill_r = ioBufferedFill(next);
+        if (fill_r.1 != nil) {
+            return (fill_r.0, out, fill_r.1);
+        }
+        next = fill_r.0;
+        if (next.bufferPos == 0 && next.buffer != "") {
+            out = out + next.buffer;
+            next.buffer = "";
+            next.bufferPos = 0;
+        }
+    }
+
+    return (next, out, nil);
+}
+
+func ioBufferedLinesFrom(buffered: BufferedReader, maxLines: int): (BufferedReader, array<string>, Error?) {
+    var next = buffered;
+    var out: array<string> = [];
+    if (maxLines < 0) {
+        return (next, out, ioBufferedError(ERR_INVALID_ARGUMENT, "maxLines must be >= 0", maxLines));
+    }
+
+    var count: int = 0;
+    while (true) {
+        if (maxLines > 0 && count >= maxLines) {
+            break;
+        }
+
+        var line_r = ioBufferedReadLineFrom(next);
+        if (line_r.2 != nil) {
+            return (line_r.0, out, line_r.2);
+        }
+        next = line_r.0;
+
+        if (line_r.1 == nil) {
+            break;
+        }
+        push(out, line_r.1 as string);
+        count = count + 1;
+    }
+
+    return (next, out, nil);
+}
+
+func ioBufferedWriteAllTo(buffered: BufferedWriter, data: string): (BufferedWriter, int, Error?) {
+    var next = buffered;
+    if (next.writer.handle == nil) {
+        return (next, 0, ioBufferedError(ERR_INVALID_ARGUMENT, "buffered writer handle is nil", nil));
+    }
+
+    next.pending = next.pending + data;
+
+    if (len(next.pending) >= next.flushBytes) {
+        var flushed = ioBufferedFlushTo(next);
+        return (flushed.0, len(data), flushed.2);
+    }
+    return (next, len(data), nil);
+}
+
+func ioBufferedFlushTo(buffered: BufferedWriter): (BufferedWriter, int, Error?) {
+    var next = buffered;
+    if (next.writer.handle == nil) {
+        return (next, 0, ioBufferedError(ERR_INVALID_ARGUMENT, "buffered writer handle is nil", nil));
+    }
+
+    var pending_len: int = len(next.pending);
+    if (pending_len == 0) {
+        return (next, 0, nil);
+    }
+
+    var write_r = ioWriteAll(next.writer.handle, next.pending);
+    if (write_r.1 != nil) {
+        var wrote: int = write_r.0;
+        if (wrote < 0) {
+            wrote = 0;
+        }
+        if (wrote >= pending_len) {
+            next.pending = "";
+        } else {
+            next.pending = substring(next.pending, wrote, pending_len - wrote);
+        }
+        return (next, wrote, write_r.1);
+    }
+
+    next.pending = "";
+    return (next, write_r.0, nil);
+}
+
+func ioBufferedCloseReader(buffered: BufferedReader): void {
+    ioCloseReader(buffered.reader);
+}
+
+func ioBufferedCloseWriter(buffered: BufferedWriter): Error? {
+    var flushed = ioBufferedFlushTo(buffered);
+    ioCloseWriter(flushed.0.writer);
+    return flushed.2;
+}
+
+func ioBufferedCopyAll(reader: BufferedReader,
+                       writer: BufferedWriter,
+                       chunkBytes: int): (BufferedReader, BufferedWriter, int, Error?) {
+    var next_reader = reader;
+    var next_writer = writer;
+    var total: int = 0;
+
+    if (chunkBytes < 1 || chunkBytes > 1048576) {
+        return (next_reader,
+                next_writer,
+                total,
+                ioBufferedError(ERR_INVALID_ARGUMENT,
+                                "chunkBytes must be between 1 and 1048576",
+                                chunkBytes));
+    }
+
+    while (true) {
+        var rr = ioBufferedReadChunkFrom(next_reader, chunkBytes);
+        if (rr.2 != nil) {
+            return (rr.0, next_writer, total, rr.2);
+        }
+        next_reader = rr.0;
+
+        if (rr.1 == "") {
+            break;
+        }
+
+        var ww = ioBufferedWriteAllTo(next_writer, rr.1);
+        next_writer = ww.0;
+        if (ww.2 != nil) {
+            return (next_reader, next_writer, total, ww.2);
+        }
+        total = total + len(rr.1);
+    }
+
+    var flushed = ioBufferedFlushTo(next_writer);
+    next_writer = flushed.0;
+    if (flushed.2 != nil) {
+        return (next_reader, next_writer, total, flushed.2);
+    }
+    return (next_reader, next_writer, total, nil);
+}
+
+func ioBufferedCopyFile(srcPath: string,
+                        dstPath: string,
+                        readChunkBytes: int,
+                        writeFlushBytes: int): (int, Error?) {
+    var src = ioOpenBufferedReader(srcPath, readChunkBytes);
+    if (src.1 != nil) {
+        return (0, src.1);
+    }
+
+    var dst = ioOpenBufferedWriter(dstPath, writeFlushBytes);
+    if (dst.1 != nil) {
+        ioBufferedCloseReader(src.0);
+        return (0, dst.1);
+    }
+
+    var copied = ioBufferedCopyAll(src.0, dst.0, readChunkBytes);
+    ioBufferedCloseReader(copied.0);
+    var close_err = ioBufferedCloseWriter(copied.1);
+    if (copied.3 != nil) {
+        return (copied.2, copied.3);
+    }
+    if (close_err != nil) {
+        return (copied.2, close_err);
+    }
+    return (copied.2, nil);
+}

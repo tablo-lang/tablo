@@ -1,0 +1,51 @@
+// Networking Tests - HTTP Client (HTTP only)
+// Tests using httpbin.org public API
+
+func main(): void {
+    // Test simple HTTP GET
+    println("Testing httpGet...");
+    var response = httpGet("http://httpbin.org/get");
+    if (response.1 == nil) {
+        println("GET success");
+    } else {
+        println("GET failed (expected if offline)");
+    }
+    
+    // Test HTTP GET with headers
+    println("Testing httpGetWithHeaders...");
+    var headers: map<string, string> = {
+        "Accept": "application/json",
+        "X-Custom-Header": "test-value"
+    };
+    var response2 = httpGetWithHeaders("http://httpbin.org/get", headers);
+    if (response2.1 == nil) {
+        println("GET with headers success");
+    } else {
+        println("GET with headers failed");
+    }
+    
+    // Test HTTP POST
+    println("Testing httpPost...");
+    var body: string = "{\"name\": \"Alice\", \"age\": 30}";
+    var response3 = httpPost("http://httpbin.org/post", body);
+    if (response3.1 == nil) {
+        println("POST success");
+    } else {
+        println("POST failed");
+    }
+    
+    // Test HTTP POST with headers
+    println("Testing httpPostWithHeaders...");
+    var postHeaders: map<string, string> = {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    };
+    var response4 = httpPostWithHeaders("http://httpbin.org/post", body, postHeaders);
+    if (response4.1 == nil) {
+        println("POST with headers success");
+    } else {
+        println("POST with headers failed");
+    }
+    
+    println("HTTP tests completed");
+}

@@ -1,0 +1,360 @@
+// Encoding helpers for hex and Base64 transformations.
+// Base64 decode returns bytes to support binary-safe workflows.
+
+var ENCODING_HEX_DIGITS: string = "0123456789abcdef";
+var ENCODING_BASE64_STD_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var ENCODING_BASE64_URL_ALPHABET: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+func encodingStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func encodingError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return encodingStdError(code, message, data);
+}
+
+func encodingEmptyBytes(): bytes {
+    return bytesWithSize(0, 0).0;
+}
+
+func encodingIsSpace(ch: string): bool {
+    return ch == " " || ch == "\t" || ch == "\n" || ch == "\r";
+}
+
+func encodingHexByte(value: int): string {
+    var hi: int = value / 16;
+    var lo: int = value % 16;
+    return substring(ENCODING_HEX_DIGITS, hi, 1) + substring(ENCODING_HEX_DIGITS, lo, 1);
+}
+
+func encodingBase64CharValue(ch: string): int {
+    if (ch == "+") {
+        return 62;
+    }
+    if (ch == "/") {
+        return 63;
+    }
+    if (ch == "-") {
+        return 62;
+    }
+    if (ch == "_") {
+        return 63;
+    }
+    return find(ENCODING_BASE64_STD_ALPHABET, ch);
+}
+
+func encodingNormalizeBase64(input: string, allow_url: bool): (string, Error?) {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+
+        if (encodingIsSpace(ch)) {
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "=" || find(ENCODING_BASE64_STD_ALPHABET, ch) >= 0) {
+            out = out + ch;
+            i = i + 1;
+            continue;
+        }
+
+        if (allow_url && find(ENCODING_BASE64_URL_ALPHABET, ch) >= 0) {
+            if (ch == "-") {
+                out = out + "+";
+            } else if (ch == "_") {
+                out = out + "/";
+            } else {
+                out = out + ch;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        return ("",
+                encodingError(ERR_PARSE,
+                              "encodingBase64Decode: invalid character",
+                              "encoding.base64.char",
+                              ch));
+    }
+
+    return (out, nil);
+}
+
+func encodingBase64EncodeBytesWithAlphabet(data: bytes,
+                                           alphabet: string,
+                                           with_padding: bool): (string, Error?) {
+    var out: string = "";
+    var data_len: int = len(data);
+    var i: int = 0;
+    while ((i + 2) < data_len) {
+        var b1: int = data[i];
+        var b2: int = data[i + 1];
+        var b3: int = data[i + 2];
+
+        var n: int = b1 * 65536 + b2 * 256 + b3;
+        var c1: int = n / 262144;
+        n = n % 262144;
+        var c2: int = n / 4096;
+        n = n % 4096;
+        var c3: int = n / 64;
+        var c4: int = n % 64;
+
+        out = out +
+              substring(alphabet, c1, 1) +
+              substring(alphabet, c2, 1) +
+              substring(alphabet, c3, 1) +
+              substring(alphabet, c4, 1);
+        i = i + 3;
+    }
+
+    var tail: int = data_len - i;
+    if (tail == 1) {
+        var t1: int = data[i];
+        var e1: int = t1 / 4;
+        var e2: int = (t1 % 4) * 16;
+
+        out = out + substring(alphabet, e1, 1) + substring(alphabet, e2, 1);
+        if (with_padding) {
+            out = out + "==";
+        }
+    } else if (tail == 2) {
+        var t1_2: int = data[i];
+        var t2_2: int = data[i + 1];
+        var n2: int = t1_2 * 256 + t2_2;
+
+        var d1: int = n2 / 1024;
+        n2 = n2 % 1024;
+        var d2: int = n2 / 16;
+        var d3: int = (n2 % 16) * 4;
+
+        out = out +
+              substring(alphabet, d1, 1) +
+              substring(alphabet, d2, 1) +
+              substring(alphabet, d3, 1);
+        if (with_padding) {
+            out = out + "=";
+        }
+    }
+
+    return (out, nil);
+}
+
+func encodingBase64DecodeToBytesInternal(input: string, allow_url: bool): (bytes, Error?) {
+    var norm_r = encodingNormalizeBase64(input, allow_url);
+    if (norm_r.1 != nil) {
+        return (encodingEmptyBytes(), norm_r.1);
+    }
+
+    var text: string = norm_r.0;
+    var mod: int = len(text) % 4;
+    if (allow_url) {
+        if (mod == 1) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64UrlDecodeToBytes: invalid length",
+                                  "encoding.base64url.length",
+                                  len(text)));
+        }
+        if (mod == 2) {
+            text = text + "==";
+        } else if (mod == 3) {
+            text = text + "=";
+        }
+    } else {
+        if (mod != 0) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid length",
+                                  "encoding.base64.length",
+                                  len(text)));
+        }
+    }
+
+    if (text == "") {
+        return (encodingEmptyBytes(), nil);
+    }
+
+    var text_len: int = len(text);
+    var first_pad: int = find(text, "=");
+    var pad_count: int = 0;
+    if (first_pad >= 0) {
+        pad_count = text_len - first_pad;
+        if (pad_count < 1 || pad_count > 2) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid padding sequence",
+                                  "encoding.base64.padding",
+                                  text));
+        }
+    }
+
+    var out_len: int = (text_len / 4) * 3 - pad_count;
+    if (out_len < 0) {
+        return (encodingEmptyBytes(),
+                encodingError(ERR_PARSE,
+                              "encodingBase64DecodeToBytes: invalid decoded length",
+                              "encoding.base64.length",
+                              text_len));
+    }
+
+    var out: bytes = bytesWithSize(out_len, 0).0;
+    var out_i: int = 0;
+    var i: int = 0;
+    var pad_start: int = text_len - pad_count;
+
+    while (i < text_len) {
+        var c1: string = substring(text, i, 1);
+        var c2: string = substring(text, i + 1, 1);
+        var c3: string = substring(text, i + 2, 1);
+        var c4: string = substring(text, i + 3, 1);
+
+        var c1_padded: bool = i >= pad_start;
+        var c2_padded: bool = (i + 1) >= pad_start;
+        var c3_padded: bool = (i + 2) >= pad_start;
+        var c4_padded: bool = (i + 3) >= pad_start;
+
+        if (c1_padded || c2_padded) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid padding placement",
+                                  "encoding.base64.padding",
+                                  text));
+        }
+
+        if (c3_padded && !c4_padded) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid padding sequence",
+                                  "encoding.base64.padding",
+                                  text));
+        }
+
+        if ((!c3_padded && c3 == "=") || (!c4_padded && c4 == "=")) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid padding placement",
+                                  "encoding.base64.padding",
+                                  text));
+        }
+        if ((c3_padded && c3 != "=") || (c4_padded && c4 != "=")) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid padding sequence",
+                                  "encoding.base64.padding",
+                                  text));
+        }
+
+        var v1: int = encodingBase64CharValue(c1);
+        var v2: int = encodingBase64CharValue(c2);
+        var v3: int = 0;
+        var v4: int = 0;
+
+        if (v1 < 0 || v2 < 0) {
+            return (encodingEmptyBytes(),
+                    encodingError(ERR_PARSE,
+                                  "encodingBase64DecodeToBytes: invalid character",
+                                  "encoding.base64.char",
+                                  text));
+        }
+
+        if (!c3_padded) {
+            v3 = encodingBase64CharValue(c3);
+            if (v3 < 0) {
+                return (encodingEmptyBytes(),
+                        encodingError(ERR_PARSE,
+                                      "encodingBase64DecodeToBytes: invalid character",
+                                      "encoding.base64.char",
+                                      c3));
+            }
+        }
+
+        if (!c4_padded) {
+            v4 = encodingBase64CharValue(c4);
+            if (v4 < 0) {
+                return (encodingEmptyBytes(),
+                        encodingError(ERR_PARSE,
+                                      "encodingBase64DecodeToBytes: invalid character",
+                                      "encoding.base64.char",
+                                      c4));
+            }
+        }
+
+        var b1: int = v1 * 4 + (v2 / 16);
+        var b2: int = (v2 % 16) * 16 + (v3 / 4);
+        var b3: int = (v3 % 4) * 64 + v4;
+
+        out[out_i] = b1;
+        out_i = out_i + 1;
+        if (!c3_padded) {
+            out[out_i] = b2;
+            out_i = out_i + 1;
+        }
+        if (!c4_padded) {
+            out[out_i] = b3;
+            out_i = out_i + 1;
+        }
+
+        i = i + 4;
+    }
+
+    return (out, nil);
+}
+
+func encodingHexEncodeBytes(data: bytes): (string, Error?) {
+    return bytesToHex(data);
+}
+
+func encodingHexEncode(text: string): (string, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return ("", wrapError(bytes_r.1, "encodingHexEncode stringToBytes failed"));
+    }
+    return bytesToHex(bytes_r.0);
+}
+
+func encodingHexDecodeToBytes(hex_text: string): (bytes, Error?) {
+    var bytes_r = hexToBytes(hex_text);
+    if (bytes_r.1 != nil) {
+        return (encodingEmptyBytes(), wrapError(bytes_r.1, "encodingHexDecodeToBytes hexToBytes failed"));
+    }
+    return (bytes_r.0, nil);
+}
+
+func encodingBase64EncodeBytes(data: bytes): (string, Error?) {
+    return encodingBase64EncodeBytesWithAlphabet(data, ENCODING_BASE64_STD_ALPHABET, true);
+}
+
+func encodingBase64Encode(text: string): (string, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return ("", wrapError(bytes_r.1, "encodingBase64Encode stringToBytes failed"));
+    }
+    return encodingBase64EncodeBytes(bytes_r.0);
+}
+
+func encodingBase64DecodeToBytes(input: string): (bytes, Error?) {
+    return encodingBase64DecodeToBytesInternal(input, false);
+}
+
+func encodingBase64UrlEncodeBytes(data: bytes, with_padding: bool): (string, Error?) {
+    return encodingBase64EncodeBytesWithAlphabet(data, ENCODING_BASE64_URL_ALPHABET, with_padding);
+}
+
+func encodingBase64UrlEncode(text: string, with_padding: bool): (string, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return ("", wrapError(bytes_r.1, "encodingBase64UrlEncode stringToBytes failed"));
+    }
+    return encodingBase64UrlEncodeBytes(bytes_r.0, with_padding);
+}
+
+func encodingBase64UrlDecodeToBytes(input: string): (bytes, Error?) {
+    return encodingBase64DecodeToBytesInternal(input, true);
+}

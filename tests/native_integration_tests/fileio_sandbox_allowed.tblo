@@ -1,0 +1,14 @@
+func main() {
+    write_all("sandbox_tmp.txt", "hello");
+    println(read_all("sandbox_tmp.txt").0);
+    println(exists("sandbox_tmp.txt").0);
+    println(delete("sandbox_tmp.txt").0);
+    println(exists("sandbox_tmp.txt").0);
+
+    var b = stringToBytes("Hi").0;
+    println(writeBytes("sandbox_tmp_bytes.bin", b).0);
+    var r = readBytes("sandbox_tmp_bytes.bin");
+    println(bytesToHex(r.0).0);
+    println(delete("sandbox_tmp_bytes.bin").0);
+    println(exists("sandbox_tmp_bytes.bin").0);
+}

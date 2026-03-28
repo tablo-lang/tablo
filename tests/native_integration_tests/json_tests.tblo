@@ -1,0 +1,196 @@
+func main(): void {
+    var parsed: any = jsonParse("{\"name\":\"Ada\",\"active\":true,\"count\":2,\"ratio\":3.5,\"items\":[1,2],\"meta\":null}").0;
+    println(typeOf(parsed));
+    println(mapGet(parsed, "name"));
+    println(mapGet(parsed, "active"));
+    println(mapGet(parsed, "count"));
+    println(mapGet(parsed, "ratio"));
+
+    var items_any: any = mapGet(parsed, "items");
+    var items: array<any> = items_any as array<any>;
+    println(items);
+    println(mapGet(parsed, "meta"));
+
+    println(jsonStringify([true, false, 2, "x", nil]).0);
+
+    var obj: map<string, any> = {"ok": true};
+    println(jsonStringify(obj).0);
+    println(jsonStringifyPretty(obj).0);
+
+    var scalar_parse_s = jsonParse("\"fast\"").0;
+    println(scalar_parse_s);
+    var scalar_parse_i = jsonParse("123").0;
+    println(scalar_parse_i);
+
+    println(jsonStringify("line\nbreak").0);
+    println(jsonStringify(123).0);
+    println(jsonStringify(nil).0);
+
+    var id_map: map<int, string> = {1: "one"};
+    println(jsonStringify(id_map).0);
+
+    var schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "name": "string",
+            "active": "bool",
+            "count": "int",
+            "ratio": "double",
+            "items": {"type": "array", "items": "int"},
+            "meta": "string?"
+        }
+    };
+
+    var dr = jsonDecode(parsed, schema);
+    println(dr.1 == nil);
+    var decoded: map<string, any> = dr.0 as map<string, any>;
+    println(mapGet(decoded, "name"));
+    var decoded_items: array<any> = mapGet(decoded, "items") as array<any>;
+    println(decoded_items[1]);
+
+    var bad: any = jsonParse("{\"name\":\"Ada\",\"active\":true,\"count\":\"x\",\"ratio\":3.5,\"items\":[1,\"oops\"],\"meta\":null}").0;
+    var bad_r = jsonDecode(bad, schema);
+    println(bad_r.1 != nil);
+    if (bad_r.1 != nil) {
+        println(bad_r.1.code == ERR_PARSE);
+        println(find(bad_r.1.message, "$.count") >= 0);
+        var data: map<string, any> = bad_r.1.data as map<string, any>;
+        println(mapGet(data, "path"));
+        println(mapGet(data, "schemaPath"));
+        println(mapGet(data, "expected"));
+        println(mapGet(data, "actual"));
+        println(mapGet(data, "expectedType"));
+        println(mapGet(data, "actualType"));
+    }
+
+    var schema_err = jsonDecode(parsed, {"type": "array"});
+    println(schema_err.1 != nil);
+    if (schema_err.1 != nil) {
+        println(schema_err.1.code == ERR_INVALID_ARGUMENT);
+        var sdata: map<string, any> = schema_err.1.data as map<string, any>;
+        println(mapGet(sdata, "path"));
+        println(mapGet(sdata, "schemaPath"));
+        println(mapGet(sdata, "expected"));
+        println(mapGet(sdata, "actual"));
+        println(mapGet(sdata, "expectedType"));
+        println(mapGet(sdata, "actualType"));
+        println(find(mapGet(sdata, "detail") as string, "array schema requires items") >= 0);
+    }
+
+    var int_key_schema: map<string, any> = {"type": "map", "keys": "int", "values": "int"};
+    var int_key_json: any = jsonParse("{\"1\":10,\"-2\":20}").0;
+    var int_key_ok = jsonDecode(int_key_json, int_key_schema);
+    println(int_key_ok.1 == nil);
+    if (int_key_ok.1 == nil) {
+        var int_map: map<int, int> = int_key_ok.0 as map<int, int>;
+        println(mapGet(int_map, 1));
+        println(mapGet(int_map, -2));
+    }
+
+    var int_key_bad_json: any = jsonParse("{\"x\":1}").0;
+    var int_key_bad = jsonDecode(int_key_bad_json, int_key_schema);
+    println(int_key_bad.1 != nil);
+    if (int_key_bad.1 != nil) {
+        var kdata: map<string, any> = int_key_bad.1.data as map<string, any>;
+        println(mapGet(kdata, "path"));
+        println(mapGet(kdata, "schemaPath"));
+        println(mapGet(kdata, "kind"));
+        println(mapGet(kdata, "expectedType"));
+        println(mapGet(kdata, "actualType"));
+        println(find(mapGet(kdata, "detail") as string, "decimal int literal") >= 0);
+    }
+
+    var int_key_dup_json: any = jsonParse("{\"1\":10,\"+1\":20}").0;
+    var int_key_dup = jsonDecode(int_key_dup_json, int_key_schema);
+    println(int_key_dup.1 != nil);
+    if (int_key_dup.1 != nil) {
+        var dk: map<string, any> = int_key_dup.1.data as map<string, any>;
+        println(mapGet(dk, "kind"));
+        println(mapGet(dk, "expected"));
+    }
+
+    var bytes_ok = jsonDecode(jsonParse("[0,1,255]").0, "bytes");
+    println(bytes_ok.1 == nil);
+    if (bytes_ok.1 == nil) {
+        println(bytesToHex(bytes_ok.0 as bytes).0);
+    }
+
+    var bytes_bad = jsonDecode(jsonParse("[0,300]").0, "bytes");
+    println(bytes_bad.1 != nil);
+    if (bytes_bad.1 != nil) {
+        var bdata: map<string, any> = bytes_bad.1.data as map<string, any>;
+        println(mapGet(bdata, "path"));
+        println(mapGet(bdata, "schemaPath"));
+        println(mapGet(bdata, "kind"));
+        println(mapGet(bdata, "expected"));
+        println(mapGet(bdata, "actual"));
+        println(mapGet(bdata, "expectedType"));
+        println(mapGet(bdata, "actualType"));
+    }
+
+    var lit_schema: map<string, any> = {"type": "literal", "value": "prod"};
+    var lit_ok = jsonDecode(jsonParse("\"prod\"").0, lit_schema);
+    println(lit_ok.1 == nil);
+    if (lit_ok.1 == nil) {
+        println(lit_ok.0);
+    }
+    var lit_bad = jsonDecode(jsonParse("\"dev\"").0, lit_schema);
+    println(lit_bad.1 != nil);
+    if (lit_bad.1 != nil) {
+        var ldata: map<string, any> = lit_bad.1.data as map<string, any>;
+        println(mapGet(ldata, "kind"));
+        println(mapGet(ldata, "schemaPath"));
+        println(mapGet(ldata, "expected"));
+        println(mapGet(ldata, "actual"));
+    }
+
+    var enum_schema: map<string, any> = {"type": "enum", "values": ["dev", "stage", "prod"]};
+    var enum_ok = jsonDecode(jsonParse("\"stage\"").0, enum_schema);
+    println(enum_ok.1 == nil);
+    if (enum_ok.1 == nil) {
+        println(enum_ok.0);
+    }
+    var enum_bad = jsonDecode(jsonParse("\"qa\"").0, enum_schema);
+    println(enum_bad.1 != nil);
+    if (enum_bad.1 != nil) {
+        var edata: map<string, any> = enum_bad.1.data as map<string, any>;
+        println(mapGet(edata, "kind"));
+        println(mapGet(edata, "schemaPath"));
+        println(mapGet(edata, "expected"));
+        println(mapGet(edata, "actual"));
+    }
+
+    var event_schema: map<string, any> = {
+        "type": "oneOf",
+        "variants": [
+            {
+                "type": "record",
+                "fields": {
+                    "kind": {"type": "literal", "value": "user"},
+                    "id": "int"
+                }
+            },
+            {
+                "type": "record",
+                "fields": {
+                    "kind": {"type": "literal", "value": "system"},
+                    "msg": "string"
+                }
+            }
+        ]
+    };
+    var event_ok = jsonDecode(jsonParse("{\"kind\":\"system\",\"msg\":\"up\"}").0, event_schema);
+    println(event_ok.1 == nil);
+    if (event_ok.1 == nil) {
+        var ev: map<string, any> = event_ok.0 as map<string, any>;
+        println(mapGet(ev, "msg"));
+    }
+    var event_bad = jsonDecode(jsonParse("{\"kind\":\"other\"}").0, event_schema);
+    println(event_bad.1 != nil);
+    if (event_bad.1 != nil) {
+        var odata: map<string, any> = event_bad.1.data as map<string, any>;
+        println(mapGet(odata, "kind"));
+        println(mapGet(odata, "schemaPath"));
+        println(find(mapGet(odata, "detail") as string, "none of 2 variants matched") >= 0);
+    }
+}

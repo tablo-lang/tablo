@@ -1,0 +1,342 @@
+// Generic object pool helpers with bounded idle/total capacity.
+// Pool state is explicit and immutable-style: each operation returns updated store.
+
+record PoolLease {
+    id: int,
+    value: any
+};
+
+record PoolStore {
+    idle: array<any>,
+    inUse: map<string, any>,
+    maxIdle: int,
+    maxTotal: int,
+    createdCount: int,
+    acquiredCount: int,
+    releasedCount: int,
+    droppedCount: int,
+    nextLeaseId: int
+};
+
+record PoolStats {
+    idleCount: int,
+    inUseCount: int,
+    totalCount: int,
+    maxIdle: int,
+    maxTotal: int,
+    createdCount: int,
+    acquiredCount: int,
+    releasedCount: int,
+    droppedCount: int
+};
+
+func poolStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func poolError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return poolStdError(code, message, data);
+}
+
+func poolWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return poolStdError(err.code, err.message, data);
+}
+
+func poolDefaultLease(): PoolLease {
+    var lease: PoolLease = {
+        id: 0,
+        value: nil
+    };
+    return lease;
+}
+
+func poolDefaultStore(): PoolStore {
+    var store: PoolStore = {
+        idle: [],
+        inUse: {},
+        maxIdle: 0,
+        maxTotal: 0,
+        createdCount: 0,
+        acquiredCount: 0,
+        releasedCount: 0,
+        droppedCount: 0,
+        nextLeaseId: 1
+    };
+    return store;
+}
+
+func poolLeaseKey(lease_id: int): string {
+    return str(lease_id);
+}
+
+func poolValidateConfig(max_idle: int, max_total: int): Error? {
+    if (max_total < 1 || max_total > 1000000) {
+        return poolError(ERR_INVALID_ARGUMENT,
+                         "maxTotal must be between 1 and 1000000",
+                         "pool.config.maxTotal",
+                         max_total);
+    }
+    if (max_idle < 0 || max_idle > max_total) {
+        return poolError(ERR_INVALID_ARGUMENT,
+                         "maxIdle must be between 0 and maxTotal",
+                         "pool.config.maxIdle",
+                         max_idle);
+    }
+    return nil;
+}
+
+func poolValidateLease(lease: PoolLease, context: string): Error? {
+    if (lease.id < 1) {
+        return poolError(ERR_INVALID_ARGUMENT,
+                         "lease id must be >= 1",
+                         context,
+                         lease.id);
+    }
+    return nil;
+}
+
+func poolCountTotal(store: PoolStore): int {
+    return len(store.idle) + mapCount(store.inUse);
+}
+
+func poolNew(max_idle: int, max_total: int): (PoolStore, Error?) {
+    var empty: PoolStore = poolDefaultStore();
+    var cfg_err = poolValidateConfig(max_idle, max_total);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var store: PoolStore = {
+        idle: [],
+        inUse: {},
+        maxIdle: max_idle,
+        maxTotal: max_total,
+        createdCount: 0,
+        acquiredCount: 0,
+        releasedCount: 0,
+        droppedCount: 0,
+        nextLeaseId: 1
+    };
+    return (store, nil);
+}
+
+func poolNewWithSeed(max_idle: int,
+                     max_total: int,
+                     seed_idle: array<any>): (PoolStore, Error?) {
+    var opened = poolNew(max_idle, max_total);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    if (len(seed_idle) > max_idle || len(seed_idle) > max_total) {
+        return (opened.0,
+                poolError(ERR_INVALID_ARGUMENT,
+                          "seed size must be <= maxIdle and <= maxTotal",
+                          "pool.config.seedIdle",
+                          len(seed_idle)));
+    }
+
+    var next: PoolStore = opened.0;
+    foreach (item in seed_idle) {
+        push(next.idle, item);
+    }
+    next.createdCount = len(seed_idle);
+    return (next, nil);
+}
+
+func poolAcquire(store: PoolStore, fallback_value: any): (PoolStore, PoolLease, bool, Error?) {
+    var next: PoolStore = store;
+    var lease: PoolLease = poolDefaultLease();
+    var reused: bool = false;
+    var value: any = fallback_value;
+
+    if (len(next.idle) > 0) {
+        value = pop(next.idle);
+        reused = true;
+    } else {
+        if (poolCountTotal(next) >= next.maxTotal) {
+            return (next,
+                    lease,
+                    false,
+                    poolError(ERR_LIMIT,
+                              "pool exhausted: maxTotal reached",
+                              "pool.acquire.exhausted",
+                              {
+                                  "maxTotal": next.maxTotal,
+                                  "inUse": mapCount(next.inUse),
+                                  "idle": len(next.idle)
+                              } as any));
+        }
+        next.createdCount = next.createdCount + 1;
+    }
+
+    var lease_id: int = next.nextLeaseId;
+    if (lease_id < 1) {
+        lease_id = 1;
+    }
+    next.nextLeaseId = lease_id + 1;
+    next.acquiredCount = next.acquiredCount + 1;
+
+    mapSetString(next.inUse, poolLeaseKey(lease_id), value);
+    lease.id = lease_id;
+    lease.value = value;
+
+    return (next, lease, reused, nil);
+}
+
+func poolAcquireTyped(store: PoolStore,
+                      fallback_value: any,
+                      schema: any): (PoolStore, PoolLease, bool, Error?) {
+    var acquired = poolAcquire(store, fallback_value);
+    if (acquired.3 != nil) {
+        return acquired;
+    }
+
+    var next: PoolStore = acquired.0;
+    var lease: PoolLease = acquired.1;
+    var reused: bool = acquired.2;
+    var decoded = jsonDecode(lease.value, schema);
+    if (decoded.1 != nil) {
+        // Invalid pooled value is discarded to keep pool healthy.
+        mapDeleteString(next.inUse, poolLeaseKey(lease.id));
+        next.releasedCount = next.releasedCount + 1;
+        next.droppedCount = next.droppedCount + 1;
+        return (next,
+                poolDefaultLease(),
+                false,
+                poolWrapError(decoded.1,
+                              "pool.acquireTyped.schema",
+                              { "leaseId": lease.id } as any));
+    }
+
+    lease.value = decoded.0;
+    mapSetString(next.inUse, poolLeaseKey(lease.id), lease.value);
+    return (next, lease, reused, nil);
+}
+
+func poolRelease(store: PoolStore,
+                 lease: PoolLease,
+                 returned_value: any): (PoolStore, bool, Error?) {
+    var next: PoolStore = store;
+    var lease_err = poolValidateLease(lease, "pool.release.lease");
+    if (lease_err != nil) {
+        return (next, false, lease_err);
+    }
+
+    var lease_key: string = poolLeaseKey(lease.id);
+    if (!mapHasString(next.inUse, lease_key)) {
+        return (next,
+                false,
+                poolError(ERR_INVALID_ARGUMENT,
+                          "unknown lease id",
+                          "pool.release.unknownLease",
+                          lease.id));
+    }
+
+    mapDeleteString(next.inUse, lease_key);
+    next.releasedCount = next.releasedCount + 1;
+
+    if (len(next.idle) < next.maxIdle) {
+        push(next.idle, returned_value);
+        return (next, true, nil);
+    }
+
+    next.droppedCount = next.droppedCount + 1;
+    return (next, false, nil);
+}
+
+func poolReleaseTyped(store: PoolStore,
+                      lease: PoolLease,
+                      returned_value: any,
+                      schema: any): (PoolStore, bool, Error?) {
+    var decoded = jsonDecode(returned_value, schema);
+    if (decoded.1 != nil) {
+        // Release as dropped so in-use tracking is not leaked.
+        var discarded = poolDiscard(store, lease);
+        return (discarded.0,
+                false,
+                poolWrapError(decoded.1,
+                              "pool.releaseTyped.schema",
+                              { "leaseId": lease.id } as any));
+    }
+    return poolRelease(store, lease, decoded.0);
+}
+
+func poolDiscard(store: PoolStore, lease: PoolLease): (PoolStore, Error?) {
+    var next: PoolStore = store;
+    var lease_err = poolValidateLease(lease, "pool.discard.lease");
+    if (lease_err != nil) {
+        return (next, lease_err);
+    }
+
+    var lease_key: string = poolLeaseKey(lease.id);
+    if (!mapHasString(next.inUse, lease_key)) {
+        return (next,
+                poolError(ERR_INVALID_ARGUMENT,
+                          "unknown lease id",
+                          "pool.discard.unknownLease",
+                          lease.id));
+    }
+
+    mapDeleteString(next.inUse, lease_key);
+    next.releasedCount = next.releasedCount + 1;
+    next.droppedCount = next.droppedCount + 1;
+    return (next, nil);
+}
+
+func poolIdleCount(store: PoolStore): int {
+    return len(store.idle);
+}
+
+func poolInUseCount(store: PoolStore): int {
+    return mapCount(store.inUse);
+}
+
+func poolTotalCount(store: PoolStore): int {
+    return poolCountTotal(store);
+}
+
+func poolStats(store: PoolStore): PoolStats {
+    var stats: PoolStats = {
+        idleCount: len(store.idle),
+        inUseCount: mapCount(store.inUse),
+        totalCount: poolCountTotal(store),
+        maxIdle: store.maxIdle,
+        maxTotal: store.maxTotal,
+        createdCount: store.createdCount,
+        acquiredCount: store.acquiredCount,
+        releasedCount: store.releasedCount,
+        droppedCount: store.droppedCount
+    };
+    return stats;
+}
+
+func poolClearIdle(store: PoolStore): (PoolStore, int) {
+    var next: PoolStore = store;
+    var removed: int = len(next.idle);
+    next.idle = [];
+    return (next, removed);
+}
+
+func poolBorrowedLeaseIds(store: PoolStore): array<int> {
+    var out: array<int> = [];
+    var key_items: array<any> = keys(store.inUse);
+    foreach (key_any in key_items) {
+        push(out, toInt(key_any as string));
+    }
+    return out;
+}
+

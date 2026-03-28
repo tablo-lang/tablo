@@ -1,0 +1,10 @@
+func main(): void {
+    // Create a self-cycle in a map and then drop the last external reference.
+    var m: map<string, any> = {};
+    mapSet(m, "self", m);
+    m = {};
+
+    println(gcCollect());
+    println(gcCollect());
+}
+

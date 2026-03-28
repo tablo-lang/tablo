@@ -1,0 +1,132 @@
+import "fixtures/retry.tblo";
+
+func main(): void {
+    var policy: RetryPolicy = retryDefaultPolicy();
+    println(policy.maxAttempts == 5);
+    println(policy.initialDelayMs == 100);
+    println(policy.maxDelayMs == 5000);
+    println(policy.multiplierPercent == 200);
+    println(policy.jitterPercent == 0);
+
+    var policy_ok = retryValidatePolicy(policy);
+    println(policy_ok == nil);
+
+    var bad_policy: RetryPolicy = {
+        maxAttempts: 0,
+        initialDelayMs: 100,
+        maxDelayMs: 5000,
+        multiplierPercent: 200,
+        jitterPercent: 0
+    };
+    var bad_policy_r = retryValidatePolicy(bad_policy);
+    println(bad_policy_r != nil);
+    if (bad_policy_r != nil) {
+        println(bad_policy_r.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var d1 = retryComputeDelayMs(policy, 1);
+    println(d1.1 == nil);
+    if (d1.1 == nil) {
+        println(d1.0 == 100);
+    }
+
+    var d2 = retryComputeDelayMs(policy, 2);
+    println(d2.1 == nil);
+    if (d2.1 == nil) {
+        println(d2.0 == 200);
+    }
+
+    var d3 = retryComputeDelayMs(policy, 3);
+    println(d3.1 == nil);
+    if (d3.1 == nil) {
+        println(d3.0 == 400);
+    }
+
+    var d8 = retryComputeDelayMs(policy, 8);
+    println(d8.1 == nil);
+    if (d8.1 == nil) {
+        println(d8.0 == 5000);
+    }
+
+    var bad_delay = retryComputeDelayMs(policy, 0);
+    println(bad_delay.1 != nil);
+    if (bad_delay.1 != nil) {
+        println(bad_delay.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var jitter_policy: RetryPolicy = {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 5000,
+        multiplierPercent: 200,
+        jitterPercent: 25
+    };
+    randomSeed(12345);
+    var jitter_delay = retryComputeDelayMs(jitter_policy, 3);
+    println(jitter_delay.1 == nil);
+    if (jitter_delay.1 == nil) {
+        println((jitter_delay.0 as int) >= 300);
+        println((jitter_delay.0 as int) <= 500);
+    }
+
+    var net_err: Error = { code: ERR_NETWORK, message: "network", data: nil };
+    var parse_err: Error = { code: ERR_PARSE, message: "parse", data: nil };
+    println(retryShouldRetry(policy, 1, net_err));
+    println(!retryShouldRetry(policy, 1, parse_err));
+    println(!retryShouldRetry(policy, 5, net_err));
+    println(!retryShouldRetry(policy, 1, nil));
+
+    var circuit_new = retryCircuitNew(2, 500, 2);
+    println(circuit_new.1 == nil);
+    if (circuit_new.1 == nil) {
+        var circuit: RetryCircuit = circuit_new.0;
+        println(circuit.state == "closed");
+
+        var allow_1 = retryCircuitAllow(circuit, 1000);
+        circuit = allow_1.0;
+        println(allow_1.1);
+
+        circuit = retryCircuitOnFailure(circuit, 1000);
+        println(circuit.state == "closed");
+        println(circuit.failureCount == 1);
+
+        circuit = retryCircuitOnFailure(circuit, 1100);
+        println(circuit.state == "open");
+        println(retryCircuitOpenRemainingMs(circuit, 1200) == 400);
+
+        var allow_2 = retryCircuitAllow(circuit, 1200);
+        circuit = allow_2.0;
+        println(!allow_2.1);
+
+        var allow_3 = retryCircuitAllow(circuit, 1700);
+        circuit = allow_3.0;
+        println(allow_3.1);
+        println(circuit.state == "half_open");
+
+        circuit = retryCircuitOnSuccess(circuit);
+        println(circuit.state == "half_open");
+        println(circuit.halfOpenSuccesses == 1);
+
+        circuit = retryCircuitOnSuccess(circuit);
+        println(circuit.state == "closed");
+        println(circuit.failureCount == 0);
+
+        circuit = retryCircuitOnFailure(circuit, 2000);
+        circuit = retryCircuitOnFailure(circuit, 2100);
+        println(circuit.state == "open");
+
+        var allow_4 = retryCircuitAllow(circuit, 2600);
+        circuit = allow_4.0;
+        println(allow_4.1);
+        println(circuit.state == "half_open");
+
+        circuit = retryCircuitOnFailure(circuit, 2600);
+        println(circuit.state == "open");
+    }
+
+    var bad_circuit = retryCircuitNew(0, 500, 1);
+    println(bad_circuit.1 != nil);
+    if (bad_circuit.1 != nil) {
+        println(bad_circuit.1.code == ERR_INVALID_ARGUMENT);
+    }
+}

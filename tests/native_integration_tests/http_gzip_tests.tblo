@@ -1,0 +1,243 @@
+import "fixtures/http.tblo";
+
+func gzipLargeText(): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < 40) {
+        out = out + "gzip payload ";
+        i = i + 1;
+    }
+    return out;
+}
+
+func httpGzipStdlibHandler(_req: map<string, any>): map<string, any> {
+    return httpServerGzipResponse(200,
+                                  gzipLargeText(),
+                                  {"Content-Type": "text/plain; charset=utf-8"});
+}
+
+func httpGzipClientWorker(): bool {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var port: int = arg_r.0 as int;
+    var url: string = "http://127.0.0.1:" + str(port) + "/gzip";
+
+    var r1 = httpRequestWithOptions("GET", url, nil, nil, 5000, nil);
+    var ok1: bool = r1.1 == nil;
+    if (ok1) {
+        var resp1: map<string, any> = r1.0 as map<string, any>;
+        var headers1: map<string, string> = mapGet(resp1, "headers") as map<string, string>;
+        ok1 = (mapGet(resp1, "status") as int) == 200 &&
+              (mapGet(resp1, "body") as string) == "hello gzip" &&
+              mapGet(headers1, "Content-Encoding") == nil;
+    }
+    if (!ok1) {
+        return false;
+    }
+
+    var r2 = httpRequestWithOptions("GET",
+                                    url,
+                                    nil,
+                                    nil,
+                                    5000,
+                                    {"gzip": false} as map<string, any>);
+    var ok2: bool = r2.1 == nil;
+    if (ok2) {
+        var resp2: map<string, any> = r2.0 as map<string, any>;
+        var headers2: map<string, string> = mapGet(resp2, "headers") as map<string, string>;
+        ok2 = (mapGet(resp2, "status") as int) == 200 &&
+              (mapGet(headers2, "Content-Encoding") as string) == "gzip" &&
+              (mapGet(resp2, "body") as string) != "hello gzip" &&
+              len(mapGet(resp2, "body") as string) > 0;
+    }
+
+    return ok2;
+}
+
+func httpGzipStdlibClientWorker(): bool {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var payload: string = gzipLargeText();
+    var port: int = arg_r.0 as int;
+    var url: string = "http://127.0.0.1:" + str(port) + "/gzip";
+
+    var r1 = httpClientGet(url, nil, 5000);
+    var ok1: bool = r1.1 == nil;
+    if (ok1) {
+        ok1 = r1.0.status == 200 &&
+              r1.0.body == payload &&
+              mapGet(r1.0.headers, "Content-Encoding") == nil;
+    }
+    if (!ok1) {
+        return false;
+    }
+
+    var r2 = httpClientRequestWithOptions("GET",
+                                          url,
+                                          nil,
+                                          nil,
+                                          5000,
+                                          {"gzip": false} as map<string, any>);
+    var ok2: bool = r2.1 == nil;
+    if (ok2) {
+        ok2 = r2.0.status == 200 &&
+              r2.0.body == payload &&
+              mapGet(r2.0.headers, "Content-Encoding") == nil;
+    }
+
+    return ok2;
+}
+
+func runRawHttpGzipScenarioOnListener(listener: any, port: int): bool {
+    var spawn = syncThreadSpawnTyped("httpGzipClientWorker", port as any, "int", -1, -1);
+    if (spawn.1 != nil) {
+        tcpClose(listener);
+        return false;
+    }
+
+    var ok: bool = true;
+
+    var accept_1 = tcpAccept(listener, 5000);
+    ok = ok && accept_1.1 == nil;
+    if (accept_1.1 == nil) {
+        var client_1: any = accept_1.0;
+        var read_1 = httpReadRequest(client_1, 4096);
+        ok = ok && read_1.1 == nil;
+        if (read_1.1 == nil) {
+            var req_1: map<string, any> = read_1.0 as map<string, any>;
+            var headers_1: map<string, string> = mapGet(req_1, "headers") as map<string, string>;
+            ok = ok &&
+                 mapGet(req_1, "path") == "/gzip" &&
+                 (mapGet(headers_1, "Accept-Encoding") as string) == "gzip";
+        }
+        var write_1 = httpWriteResponse(client_1,
+                                        200,
+                                        "hello gzip",
+                                        {
+                                            "Content-Encoding": "gzip",
+                                            "Content-Type": "text/plain; charset=utf-8"
+                                        });
+        ok = ok && write_1.1 == nil && write_1.0;
+        tcpClose(client_1);
+    }
+
+    var accept_2 = tcpAccept(listener, 5000);
+    ok = ok && accept_2.1 == nil;
+    if (accept_2.1 == nil) {
+        var client_2: any = accept_2.0;
+        var read_2 = httpReadRequest(client_2, 4096);
+        ok = ok && read_2.1 == nil;
+        if (read_2.1 == nil) {
+            var req_2: map<string, any> = read_2.0 as map<string, any>;
+            var headers_2: map<string, string> = mapGet(req_2, "headers") as map<string, string>;
+            ok = ok && mapGet(headers_2, "Accept-Encoding") == nil;
+        }
+        var write_2 = httpWriteResponse(client_2,
+                                        200,
+                                        "hello gzip",
+                                        {
+                                            "Content-Encoding": "gzip",
+                                            "Content-Type": "text/plain; charset=utf-8"
+                                        });
+        ok = ok && write_2.1 == nil && write_2.0;
+        tcpClose(client_2);
+    }
+
+    tcpClose(listener);
+
+    var join_r = syncThreadJoinTyped(spawn.0, "bool", 5000);
+    if (join_r.1 != nil) {
+        return false;
+    }
+    return ok && (join_r.0 as bool);
+}
+
+func runRawHttpGzipScenario(): bool {
+    var raw_offset: int = timeMonotonicMillis() % 96;
+    var raw_i: int = 0;
+    while (raw_i < 96) {
+        var p: int = 23341 + ((raw_offset + raw_i) % 96);
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            return runRawHttpGzipScenarioOnListener(lr.0, p);
+        }
+        raw_i = raw_i + 1;
+    }
+    return false;
+}
+
+func runStdlibHttpGzipScenarioOnListener(listener: any, port: int): bool {
+    var spawn = syncThreadSpawnTyped("httpGzipStdlibClientWorker", port as any, "int", -1, -1);
+    if (spawn.1 != nil) {
+        tcpClose(listener);
+        return false;
+    }
+
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/gzip", httpGzipStdlibHandler as any);
+
+    var ok: bool = true;
+
+    var accept_1 = tcpAccept(listener, 5000);
+    ok = ok && accept_1.1 == nil;
+    if (accept_1.1 == nil) {
+        var serve_1 = httpServerServeAcceptedClient(accept_1.0, routes, [], 65536);
+        ok = ok && serve_1.1 == nil && serve_1.0;
+    }
+
+    var accept_2 = tcpAccept(listener, 5000);
+    ok = ok && accept_2.1 == nil;
+    if (accept_2.1 == nil) {
+        var serve_2 = httpServerServeAcceptedClient(accept_2.0, routes, [], 65536);
+        ok = ok && serve_2.1 == nil && serve_2.0;
+    }
+
+    tcpClose(listener);
+
+    var join_r = syncThreadJoinTyped(spawn.0, "bool", 5000);
+    if (join_r.1 != nil) {
+        return false;
+    }
+    return ok && (join_r.0 as bool);
+}
+
+func runStdlibHttpGzipScenario(): bool {
+    var stdlib_offset: int = timeMonotonicMillis() % 96;
+    var stdlib_i: int = 0;
+    while (stdlib_i < 96) {
+        var p: int = 23481 + ((stdlib_offset + stdlib_i) % 96);
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            return runStdlibHttpGzipScenarioOnListener(lr.0, p);
+        }
+        stdlib_i = stdlib_i + 1;
+    }
+    return false;
+}
+
+func main(): void {
+    println(runRawHttpGzipScenario());
+    println(runStdlibHttpGzipScenario());
+
+    var invalid_raw = httpRequestWithOptions("GET",
+                                             "http://example.com",
+                                             nil,
+                                             nil,
+                                             1000,
+                                             {"gzip": "yes"} as map<string, any>);
+    println(invalid_raw.1 != nil && invalid_raw.1.code == ERR_INVALID_ARGUMENT);
+
+    var invalid_std = httpClientRequestWithOptions("GET",
+                                                   "http://example.com",
+                                                   nil,
+                                                   nil,
+                                                   1000,
+                                                   {"gzip": "yes"} as map<string, any>);
+    println(invalid_std.1 != nil && invalid_std.1.code == ERR_INVALID_ARGUMENT);
+}

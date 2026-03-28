@@ -1,0 +1,701 @@
+// Dense bitset helpers for high-performance membership and set algebra.
+// Uses 30 bits per word to keep all word values non-negative in int32.
+
+record BitsetStore {
+    words: array<int>,
+    bitLength: int,
+    setCount: int
+};
+
+record BitsetStats {
+    bitLength: int,
+    wordCount: int,
+    setCount: int,
+    densityPermille: int
+};
+
+var BITSET_WORD_BITS: int = 30;
+var BITSET_WORD_ALL: int = 1073741823;
+var BITSET_BIT_MASKS: array<int> = [
+    1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+    1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288,
+    1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912
+];
+var BITSET_MASKS_BY_COUNT: array<int> = [
+    0, 1, 3, 7, 15, 31, 63, 127, 255, 511,
+    1023, 2047, 4095, 8191, 16383, 32767, 65535, 131071, 262143, 524287,
+    1048575, 2097151, 4194303, 8388607, 16777215, 33554431, 67108863, 134217727, 268435455, 536870911,
+    1073741823
+];
+var BITSET_POPCOUNT_NIBBLE: array<int> = [
+    0, 1, 1, 2, 1, 2, 2, 3,
+    1, 2, 2, 3, 2, 3, 3, 4
+];
+
+func bitsetStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func bitsetError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return bitsetStdError(code, message, data);
+}
+
+func bitsetDefaultStore(): BitsetStore {
+    var store: BitsetStore = {
+        words: [],
+        bitLength: 0,
+        setCount: 0
+    };
+    return store;
+}
+
+func bitsetWordCountForBits(bit_length: int): int {
+    if (bit_length <= 0) {
+        return 0;
+    }
+    return (bit_length + BITSET_WORD_BITS - 1) / BITSET_WORD_BITS;
+}
+
+func bitsetMaskForBits(bit_count: int): int {
+    if (bit_count <= 0) {
+        return 0;
+    }
+    if (bit_count >= len(BITSET_MASKS_BY_COUNT)) {
+        return BITSET_WORD_ALL;
+    }
+    return BITSET_MASKS_BY_COUNT[bit_count];
+}
+
+func bitsetLastWordMask(bit_length: int): int {
+    if (bit_length <= 0) {
+        return 0;
+    }
+
+    var rem: int = bit_length % BITSET_WORD_BITS;
+    if (rem == 0) {
+        return BITSET_WORD_ALL;
+    }
+    return bitsetMaskForBits(rem);
+}
+
+func bitsetPopcountWord(word: int): int {
+    var x: int = word;
+    var count: int = 0;
+    while (x != 0) {
+        count = count + BITSET_POPCOUNT_NIBBLE[x & 15];
+        x = x / 16;
+    }
+    return count;
+}
+
+func bitsetRecount(store: BitsetStore): BitsetStore {
+    var next: BitsetStore = store;
+    var total: int = 0;
+    foreach (word in next.words) {
+        total = total + bitsetPopcountWord(word);
+    }
+    next.setCount = total;
+    return next;
+}
+
+func bitsetTrimLastWord(store: BitsetStore): BitsetStore {
+    var next: BitsetStore = store;
+    if (len(next.words) == 0) {
+        return next;
+    }
+
+    var last_i: int = len(next.words) - 1;
+    next.words[last_i] = next.words[last_i] & bitsetLastWordMask(next.bitLength);
+    return next;
+}
+
+func bitsetValidateBitLength(bit_length: int): Error? {
+    if (bit_length < 1 || bit_length > 100000000) {
+        return bitsetError(ERR_INVALID_ARGUMENT,
+                           "bitLength must be between 1 and 100000000",
+                           "bitset.config.bitLength",
+                           bit_length);
+    }
+    return nil;
+}
+
+func bitsetValidateIndex(store: BitsetStore, index: int, context: string): Error? {
+    if (index < 0 || index >= store.bitLength) {
+        return bitsetError(ERR_INVALID_ARGUMENT,
+                           "bit index out of range",
+                           context,
+                           {
+                               "index": index,
+                               "bitLength": store.bitLength
+                           } as any);
+    }
+    return nil;
+}
+
+func bitsetValidateRange(store: BitsetStore,
+                         start_index: int,
+                         end_index_exclusive: int,
+                         context: string): Error? {
+    if (start_index < 0 || start_index > end_index_exclusive || end_index_exclusive > store.bitLength) {
+        return bitsetError(ERR_INVALID_ARGUMENT,
+                           "invalid bit range",
+                           context,
+                           {
+                               "startIndex": start_index,
+                               "endIndexExclusive": end_index_exclusive,
+                               "bitLength": store.bitLength
+                           } as any);
+    }
+    return nil;
+}
+
+func bitsetValidatePair(left: BitsetStore, right: BitsetStore, context: string): Error? {
+    if (left.bitLength != right.bitLength) {
+        return bitsetError(ERR_INVALID_ARGUMENT,
+                           "bitset sizes must match",
+                           context,
+                           {
+                               "leftBitLength": left.bitLength,
+                               "rightBitLength": right.bitLength
+                           } as any);
+    }
+    return nil;
+}
+
+func bitsetNew(bit_length: int): (BitsetStore, Error?) {
+    var empty: BitsetStore = bitsetDefaultStore();
+    var len_err = bitsetValidateBitLength(bit_length);
+    if (len_err != nil) {
+        return (empty, len_err);
+    }
+
+    var word_count: int = bitsetWordCountForBits(bit_length);
+    var store: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: bit_length,
+        setCount: 0
+    };
+    return (store, nil);
+}
+
+func bitsetFromIndices(bit_length: int, indices: array<int>): (BitsetStore, Error?) {
+    var opened = bitsetNew(bit_length);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    var next: BitsetStore = opened.0;
+    foreach (index in indices) {
+        var set_r = bitsetSet(next, index);
+        next = set_r.0;
+        if (set_r.2 != nil) {
+            return (next, set_r.2);
+        }
+    }
+
+    return (next, nil);
+}
+
+func bitsetClone(store: BitsetStore): BitsetStore {
+    var words_copy: array<int> = [];
+    foreach (word in store.words) {
+        push(words_copy, word);
+    }
+
+    var out: BitsetStore = {
+        words: words_copy,
+        bitLength: store.bitLength,
+        setCount: store.setCount
+    };
+    return out;
+}
+
+func bitsetLen(store: BitsetStore): int {
+    return store.bitLength;
+}
+
+func bitsetWordCount(store: BitsetStore): int {
+    return len(store.words);
+}
+
+func bitsetCount(store: BitsetStore): int {
+    return store.setCount;
+}
+
+func bitsetIsEmpty(store: BitsetStore): bool {
+    return store.setCount == 0;
+}
+
+func bitsetHas(store: BitsetStore, index: int): (bool, Error?) {
+    if (index < 0 || index >= store.bitLength) {
+        var idx_err = bitsetValidateIndex(store, index, "bitset.has.index");
+        return (false, idx_err);
+    }
+
+    var word_i: int = index / BITSET_WORD_BITS;
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var has: bool = (store.words[word_i] & mask) != 0;
+    return (has, nil);
+}
+
+func bitsetSet(store: BitsetStore, index: int): (BitsetStore, bool, Error?) {
+    var next: BitsetStore = store;
+    if (index < 0 || index >= next.bitLength) {
+        var idx_err = bitsetValidateIndex(next, index, "bitset.set.index");
+        return (next, false, idx_err);
+    }
+
+    var word_i: int = index / BITSET_WORD_BITS;
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var word: int = next.words[word_i];
+    if ((word & mask) != 0) {
+        return (next, false, nil);
+    }
+
+    next.words[word_i] = word | mask;
+    next.setCount = next.setCount + 1;
+    return (next, true, nil);
+}
+
+func bitsetClear(store: BitsetStore, index: int): (BitsetStore, bool, Error?) {
+    var next: BitsetStore = store;
+    if (index < 0 || index >= next.bitLength) {
+        var idx_err = bitsetValidateIndex(next, index, "bitset.clear.index");
+        return (next, false, idx_err);
+    }
+
+    var word_i: int = index / BITSET_WORD_BITS;
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var word: int = next.words[word_i];
+    if ((word & mask) == 0) {
+        return (next, false, nil);
+    }
+
+    next.words[word_i] = word & (~mask);
+    next.setCount = next.setCount - 1;
+    if (next.setCount < 0) {
+        next.setCount = 0;
+    }
+    return (next, true, nil);
+}
+
+func bitsetToggle(store: BitsetStore, index: int): (BitsetStore, bool, Error?) {
+    var next: BitsetStore = store;
+    var idx_err = bitsetValidateIndex(next, index, "bitset.toggle.index");
+    if (idx_err != nil) {
+        return (next, false, idx_err);
+    }
+
+    var word_i: int = index / BITSET_WORD_BITS;
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var word: int = next.words[word_i];
+    var now_set: bool = (word & mask) == 0;
+    next.words[word_i] = word ^ mask;
+
+    if (now_set) {
+        next.setCount = next.setCount + 1;
+    } else {
+        next.setCount = next.setCount - 1;
+        if (next.setCount < 0) {
+            next.setCount = 0;
+        }
+    }
+
+    return (next, now_set, nil);
+}
+
+func bitsetSetRange(store: BitsetStore,
+                    start_index: int,
+                    end_index_exclusive: int): (BitsetStore, int, Error?) {
+    var next: BitsetStore = store;
+    var range_err = bitsetValidateRange(next, start_index, end_index_exclusive, "bitset.setRange.range");
+    if (range_err != nil) {
+        return (next, 0, range_err);
+    }
+
+    var changed: int = 0;
+    var i: int = start_index;
+    while (i < end_index_exclusive) {
+        var set_r = bitsetSet(next, i);
+        next = set_r.0;
+        if (set_r.2 != nil) {
+            return (next, changed, set_r.2);
+        }
+        if (set_r.1) {
+            changed = changed + 1;
+        }
+        i = i + 1;
+    }
+    return (next, changed, nil);
+}
+
+func bitsetClearRange(store: BitsetStore,
+                      start_index: int,
+                      end_index_exclusive: int): (BitsetStore, int, Error?) {
+    var next: BitsetStore = store;
+    var range_err = bitsetValidateRange(next, start_index, end_index_exclusive, "bitset.clearRange.range");
+    if (range_err != nil) {
+        return (next, 0, range_err);
+    }
+
+    var changed: int = 0;
+    var i: int = start_index;
+    while (i < end_index_exclusive) {
+        var clear_r = bitsetClear(next, i);
+        next = clear_r.0;
+        if (clear_r.2 != nil) {
+            return (next, changed, clear_r.2);
+        }
+        if (clear_r.1) {
+            changed = changed + 1;
+        }
+        i = i + 1;
+    }
+    return (next, changed, nil);
+}
+
+func bitsetSetMany(store: BitsetStore, indices: array<int>): (BitsetStore, int, Error?) {
+    var next: BitsetStore = store;
+    var changed: int = 0;
+    foreach (index in indices) {
+        var set_r = bitsetSet(next, index);
+        next = set_r.0;
+        if (set_r.2 != nil) {
+            return (next, changed, set_r.2);
+        }
+        if (set_r.1) {
+            changed = changed + 1;
+        }
+    }
+    return (next, changed, nil);
+}
+
+func bitsetClearMany(store: BitsetStore, indices: array<int>): (BitsetStore, int, Error?) {
+    var next: BitsetStore = store;
+    var changed: int = 0;
+    foreach (index in indices) {
+        var clear_r = bitsetClear(next, index);
+        next = clear_r.0;
+        if (clear_r.2 != nil) {
+            return (next, changed, clear_r.2);
+        }
+        if (clear_r.1) {
+            changed = changed + 1;
+        }
+    }
+    return (next, changed, nil);
+}
+
+func bitsetClearAll(store: BitsetStore): (BitsetStore, int) {
+    var next: BitsetStore = store;
+    var removed: int = next.setCount;
+    next.words = arrayWithSize(len(next.words), 0).0;
+    next.setCount = 0;
+    return (next, removed);
+}
+
+func bitsetUnion(left: BitsetStore, right: BitsetStore): (BitsetStore, Error?) {
+    var pair_err = bitsetValidatePair(left, right, "bitset.union.size");
+    if (pair_err != nil) {
+        return (bitsetDefaultStore(), pair_err);
+    }
+
+    var word_count: int = len(left.words);
+    var out: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: left.bitLength,
+        setCount: 0
+    };
+    var last_word_i: int = word_count - 1;
+    var last_mask: int = bitsetLastWordMask(left.bitLength);
+    var total: int = 0;
+    var i: int = 0;
+    while (i < word_count) {
+        var word: int = left.words[i] | right.words[i];
+        if (i == last_word_i) {
+            word = word & last_mask;
+        }
+        out.words[i] = word;
+        total = total + bitsetPopcountWord(word);
+        i = i + 1;
+    }
+
+    out.setCount = total;
+    return (out, nil);
+}
+
+func bitsetIntersect(left: BitsetStore, right: BitsetStore): (BitsetStore, Error?) {
+    var pair_err = bitsetValidatePair(left, right, "bitset.intersect.size");
+    if (pair_err != nil) {
+        return (bitsetDefaultStore(), pair_err);
+    }
+
+    var word_count: int = len(left.words);
+    var out: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: left.bitLength,
+        setCount: 0
+    };
+    var last_word_i: int = word_count - 1;
+    var last_mask: int = bitsetLastWordMask(left.bitLength);
+    var total: int = 0;
+    var i: int = 0;
+    while (i < word_count) {
+        var word: int = left.words[i] & right.words[i];
+        if (i == last_word_i) {
+            word = word & last_mask;
+        }
+        out.words[i] = word;
+        total = total + bitsetPopcountWord(word);
+        i = i + 1;
+    }
+
+    out.setCount = total;
+    return (out, nil);
+}
+
+func bitsetDifference(left: BitsetStore, right: BitsetStore): (BitsetStore, Error?) {
+    var pair_err = bitsetValidatePair(left, right, "bitset.difference.size");
+    if (pair_err != nil) {
+        return (bitsetDefaultStore(), pair_err);
+    }
+
+    var word_count: int = len(left.words);
+    var out: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: left.bitLength,
+        setCount: 0
+    };
+    var last_word_i: int = word_count - 1;
+    var last_mask: int = bitsetLastWordMask(left.bitLength);
+    var total: int = 0;
+    var i: int = 0;
+    while (i < word_count) {
+        var word: int = left.words[i] & (~right.words[i]);
+        if (i == last_word_i) {
+            word = word & last_mask;
+        }
+        out.words[i] = word;
+        total = total + bitsetPopcountWord(word);
+        i = i + 1;
+    }
+
+    out.setCount = total;
+    return (out, nil);
+}
+
+func bitsetXor(left: BitsetStore, right: BitsetStore): (BitsetStore, Error?) {
+    var pair_err = bitsetValidatePair(left, right, "bitset.xor.size");
+    if (pair_err != nil) {
+        return (bitsetDefaultStore(), pair_err);
+    }
+
+    var word_count: int = len(left.words);
+    var out: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: left.bitLength,
+        setCount: 0
+    };
+    var last_word_i: int = word_count - 1;
+    var last_mask: int = bitsetLastWordMask(left.bitLength);
+    var total: int = 0;
+    var i: int = 0;
+    while (i < word_count) {
+        var word: int = left.words[i] ^ right.words[i];
+        if (i == last_word_i) {
+            word = word & last_mask;
+        }
+        out.words[i] = word;
+        total = total + bitsetPopcountWord(word);
+        i = i + 1;
+    }
+
+    out.setCount = total;
+    return (out, nil);
+}
+
+func bitsetComplement(store: BitsetStore): BitsetStore {
+    var word_count: int = len(store.words);
+    var out: BitsetStore = {
+        words: arrayWithSize(word_count, 0).0,
+        bitLength: store.bitLength,
+        setCount: 0
+    };
+
+    var last_word_i: int = word_count - 1;
+    var last_mask: int = bitsetLastWordMask(store.bitLength);
+    var total: int = 0;
+    var i: int = 0;
+    while (i < word_count) {
+        var word: int = (~store.words[i]) & BITSET_WORD_ALL;
+        if (i == last_word_i) {
+            word = word & last_mask;
+        }
+        out.words[i] = word;
+        total = total + bitsetPopcountWord(word);
+        i = i + 1;
+    }
+
+    out.setCount = total;
+    return out;
+}
+
+func bitsetEquals(left: BitsetStore, right: BitsetStore): (bool, Error?) {
+    var pair_err = bitsetValidatePair(left, right, "bitset.equals.size");
+    if (pair_err != nil) {
+        return (false, pair_err);
+    }
+
+    var i: int = 0;
+    while (i < len(left.words)) {
+        if (left.words[i] != right.words[i]) {
+            return (false, nil);
+        }
+        i = i + 1;
+    }
+
+    return (true, nil);
+}
+
+func bitsetRank(store: BitsetStore, index_exclusive: int): (int, Error?) {
+    if (index_exclusive < 0 || index_exclusive > store.bitLength) {
+        return (0,
+                bitsetError(ERR_INVALID_ARGUMENT,
+                           "rank index must be between 0 and bitLength",
+                           "bitset.rank.indexExclusive",
+                           {
+                               "indexExclusive": index_exclusive,
+                               "bitLength": store.bitLength
+                           } as any));
+    }
+
+    var total: int = 0;
+    var full_words: int = index_exclusive / BITSET_WORD_BITS;
+    var i: int = 0;
+    while (i < full_words) {
+        total = total + bitsetPopcountWord(store.words[i]);
+        i = i + 1;
+    }
+
+    var rem: int = index_exclusive % BITSET_WORD_BITS;
+    if (rem > 0 && full_words < len(store.words)) {
+        var mask: int = bitsetMaskForBits(rem);
+        total = total + bitsetPopcountWord(store.words[full_words] & mask);
+    }
+
+    return (total, nil);
+}
+
+func bitsetSelect(store: BitsetStore, rank_index: int): (int, bool, Error?) {
+    if (rank_index < 0) {
+        return (-1,
+                false,
+                bitsetError(ERR_INVALID_ARGUMENT,
+                           "rankIndex must be >= 0",
+                           "bitset.select.rankIndex",
+                           rank_index));
+    }
+
+    if (rank_index >= store.setCount) {
+        return (-1, false, nil);
+    }
+
+    var remaining: int = rank_index;
+    var word_i: int = 0;
+    while (word_i < len(store.words)) {
+        var word: int = store.words[word_i];
+        if (word != 0) {
+            var count: int = bitsetPopcountWord(word);
+            if (remaining >= count) {
+                remaining = remaining - count;
+            } else {
+                var bit_i: int = 0;
+                while (bit_i < BITSET_WORD_BITS) {
+                    var mask: int = BITSET_BIT_MASKS[bit_i];
+                    if ((word & mask) != 0) {
+                        if (remaining == 0) {
+                            var index: int = (word_i * BITSET_WORD_BITS) + bit_i;
+                            if (index < store.bitLength) {
+                                return (index, true, nil);
+                            }
+                        }
+                        remaining = remaining - 1;
+                    }
+                    bit_i = bit_i + 1;
+                }
+            }
+        }
+        word_i = word_i + 1;
+    }
+
+    return (-1,
+            false,
+            bitsetError(ERR_INTERNAL,
+                       "select failed to resolve rank index",
+                       "bitset.select.internal",
+                       {
+                           "rankIndex": rank_index,
+                           "setCount": store.setCount
+                       } as any));
+}
+
+func bitsetToIndices(store: BitsetStore,
+                     max_items: int): (array<int>, bool, Error?) {
+    var out: array<int> = [];
+    if (max_items < 1 || max_items > 100000000) {
+        return (out,
+                false,
+                bitsetError(ERR_INVALID_ARGUMENT,
+                           "maxItems must be between 1 and 100000000",
+                           "bitset.toIndices.maxItems",
+                           max_items));
+    }
+
+    var word_i: int = 0;
+    while (word_i < len(store.words)) {
+        var word: int = store.words[word_i];
+        if (word != 0) {
+            var bit_i: int = 0;
+            while (bit_i < BITSET_WORD_BITS) {
+                var mask: int = BITSET_BIT_MASKS[bit_i];
+                if ((word & mask) != 0) {
+                    var index: int = (word_i * BITSET_WORD_BITS) + bit_i;
+                    if (index < store.bitLength) {
+                        if (len(out) >= max_items) {
+                            return (out, true, nil);
+                        }
+                        push(out, index);
+                    }
+                }
+                bit_i = bit_i + 1;
+            }
+        }
+        word_i = word_i + 1;
+    }
+
+    return (out, false, nil);
+}
+
+func bitsetStats(store: BitsetStore): BitsetStats {
+    var density: int = 0;
+    if (store.bitLength > 0) {
+        density = (store.setCount * 1000) / store.bitLength;
+    }
+
+    var stats: BitsetStats = {
+        bitLength: store.bitLength,
+        wordCount: len(store.words),
+        setCount: store.setCount,
+        densityPermille: density
+    };
+    return stats;
+}

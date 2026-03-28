@@ -1,0 +1,123 @@
+import "fixtures/url.tblo";
+
+func main(): void {
+    var enc_basic = urlEncode("hello world");
+    println(enc_basic.1 == nil);
+    if (enc_basic.1 == nil) {
+        println(enc_basic.0 == "hello%20world");
+    }
+
+    var dec_basic = urlDecode("hello%20world");
+    println(dec_basic.1 == nil);
+    if (dec_basic.1 == nil) {
+        println(dec_basic.0 == "hello world");
+    }
+
+    var enc_reserved = urlEncode("a/b?x=1&y=2+z");
+    println(enc_reserved.1 == nil);
+    if (enc_reserved.1 == nil) {
+        println(enc_reserved.0 == "a%2Fb%3Fx%3D1%26y%3D2%2Bz");
+    }
+
+    var dec_reserved = urlDecode("a%2Fb%3Fx%3D1%26y%3D2%2Bz");
+    println(dec_reserved.1 == nil);
+    if (dec_reserved.1 == nil) {
+        println(dec_reserved.0 == "a/b?x=1&y=2+z");
+    }
+
+    var dec_bad_short = urlDecode("abc%2");
+    println(dec_bad_short.1 != nil);
+    if (dec_bad_short.1 != nil) {
+        println(dec_bad_short.1.code == ERR_PARSE);
+    }
+
+    var dec_bad_hex = urlDecode("abc%zz");
+    println(dec_bad_hex.1 != nil);
+    if (dec_bad_hex.1 != nil) {
+        println(dec_bad_hex.1.code == ERR_PARSE);
+    }
+
+    var dec_bad_nul = urlDecode("a%00b");
+    println(dec_bad_nul.1 != nil);
+    if (dec_bad_nul.1 != nil) {
+        println(dec_bad_nul.1.code == ERR_PARSE);
+    }
+
+    var parsed = queryParse("name=alice&city=New%20York&q=hello+world");
+    println(parsed.1 == nil);
+    if (parsed.1 == nil) {
+        println(mapCount(parsed.0) == 3);
+        println(mapGetString(parsed.0, "name") == "alice");
+        println(mapGetString(parsed.0, "city") == "New York");
+        println(mapGetString(parsed.0, "q") == "hello world");
+    }
+
+    var parsed2 = queryParse("?a=1&b=&c");
+    println(parsed2.1 == nil);
+    if (parsed2.1 == nil) {
+        println(mapCount(parsed2.0) == 3);
+        println(mapGetString(parsed2.0, "a") == "1");
+        println(mapGetString(parsed2.0, "b") == "");
+        println(mapGetString(parsed2.0, "c") == "");
+    }
+
+    var parsed_dup = queryParse("x=1&x=2");
+    println(parsed_dup.1 == nil);
+    if (parsed_dup.1 == nil) {
+        println(mapGetString(parsed_dup.0, "x") == "2");
+    }
+
+    var parsed_bad = queryParse("name=%zz");
+    println(parsed_bad.1 != nil);
+    if (parsed_bad.1 != nil) {
+        println(parsed_bad.1.code == ERR_PARSE);
+        println(find(parsed_bad.1.message, "queryParse") >= 0);
+        var parsed_bad_data: map<string, any> = parsed_bad.1.data as map<string, any>;
+        println(mapGetString(parsed_bad_data, "context"));
+    }
+
+    var parsed_empty_key = queryParse("=x");
+    println(parsed_empty_key.1 != nil);
+    if (parsed_empty_key.1 != nil) {
+        println(parsed_empty_key.1.code == ERR_PARSE);
+        var parsed_empty_key_data: map<string, any> = parsed_empty_key.1.data as map<string, any>;
+        println(mapGetString(parsed_empty_key_data, "context"));
+    }
+
+    var empty_params: map<string, string> = {};
+    var stringified_empty = queryStringify(empty_params);
+    println(stringified_empty.1 == nil);
+    if (stringified_empty.1 == nil) {
+        println(stringified_empty.0 == "");
+    }
+
+    var params: map<string, string> = {};
+    mapSetString(params, "name", "alice bob");
+    mapSetString(params, "city", "New York");
+    mapSetString(params, "symbol", "a+b&c");
+    var stringified = queryStringify(params);
+    println(stringified.1 == nil);
+    if (stringified.1 == nil) {
+        println(find(stringified.0, "name=alice%20bob") >= 0);
+        println(find(stringified.0, "city=New%20York") >= 0);
+        println(find(stringified.0, "symbol=a%2Bb%26c") >= 0);
+
+        var parsed_back = queryParse(stringified.0);
+        println(parsed_back.1 == nil);
+        if (parsed_back.1 == nil) {
+            println(mapGetString(parsed_back.0, "name") == "alice bob");
+            println(mapGetString(parsed_back.0, "city") == "New York");
+            println(mapGetString(parsed_back.0, "symbol") == "a+b&c");
+        }
+    }
+
+    var bad_params: map<string, string> = {};
+    mapSetString(bad_params, "", "x");
+    var bad_stringified = queryStringify(bad_params);
+    println(bad_stringified.1 != nil);
+    if (bad_stringified.1 != nil) {
+        println(bad_stringified.1.code == ERR_INVALID_ARGUMENT);
+        var bad_stringified_data: map<string, any> = bad_stringified.1.data as map<string, any>;
+        println(mapGetString(bad_stringified_data, "context"));
+    }
+}

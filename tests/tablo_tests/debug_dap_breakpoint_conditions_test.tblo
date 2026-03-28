@@ -1,0 +1,9 @@
+func main(): void {
+    var allow: bool = false;
+    var i: int = 0;
+    while (i < 3) {
+        allow = i == 1;
+        println(i);
+        i = i + 1;
+    }
+}

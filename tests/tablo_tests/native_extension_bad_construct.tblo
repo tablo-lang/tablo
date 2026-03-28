@@ -1,0 +1,7 @@
+func main(): void {
+    var counter: Counter = counterNew(1);
+    match (counter) {
+        Counter {}: println("bad");
+        else: println("ok");
+    }
+}

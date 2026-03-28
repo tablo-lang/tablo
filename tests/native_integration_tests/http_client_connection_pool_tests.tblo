@@ -1,0 +1,150 @@
+import "fixtures/http.tblo";
+
+func printWorkerBool(outboxId: int, timeoutMs: int): void {
+    var recv_r = syncChannelRecv(outboxId, timeoutMs);
+    println(recv_r.1 == nil);
+    if (recv_r.1 != nil) {
+        return;
+    }
+    println(recv_r.0 as bool);
+}
+
+func connectionPoolClientWorker(): bool {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var outbox: int = syncThreadOutbox();
+    var port: int = arg_r.0 as int;
+    var url1: string = "http://127.0.0.1:" + str(port) + "/one";
+    var url2: string = "http://127.0.0.1:" + str(port) + "/two";
+
+    var r1 = httpRequestWithOptions("GET",
+                                    url1,
+                                    nil,
+                                    nil,
+                                    5000,
+                                    {"keepAlive": true} as map<string, any>);
+    var ok1: bool = r1.1 == nil;
+    if (ok1) {
+        var resp1: map<string, any> = r1.0;
+        ok1 = (mapGet(resp1, "status") as int) == 200 && (mapGet(resp1, "body") as string) == "ok";
+    }
+    if (outbox >= 0) {
+        var _send_ok1 = syncChannelSend(outbox, ok1 as any, 5000);
+    }
+    if (!ok1) {
+        return false;
+    }
+
+    var r2 = httpRequestWithOptions("GET",
+                                    url2,
+                                    nil,
+                                    nil,
+                                    5000,
+                                    {"connectionPool": true} as map<string, any>);
+    var ok2: bool = r2.1 == nil;
+    if (ok2) {
+        var resp2: map<string, any> = r2.0;
+        ok2 = (mapGet(resp2, "status") as int) == 200 && (mapGet(resp2, "body") as string) == "yo";
+    }
+    if (outbox >= 0) {
+        var _send_ok2 = syncChannelSend(outbox, ok2 as any, 5000);
+    }
+
+    return ok1 && ok2;
+}
+
+func main(): void {
+    var ports: array<int> = [19231, 19232, 19233, 19234];
+    var listener: any = nil;
+    var selected_port: int = 0;
+
+    foreach (p in ports) {
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            listener = lr.0;
+            selected_port = p;
+            break;
+        }
+    }
+
+    println(listener != nil);
+    if (listener == nil) {
+        return;
+    }
+
+    var outbox_r = syncChannelCreate(16);
+    println(outbox_r.1 == nil);
+    if (outbox_r.1 != nil) {
+        tcpClose(listener);
+        return;
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var spawn_r = syncThreadSpawnTyped("connectionPoolClientWorker", selected_port as any, "int", -1, outbox_id);
+    println(spawn_r.1 == nil);
+    if (spawn_r.1 != nil) {
+        tcpClose(listener);
+        var _close_outbox = syncChannelClose(outbox_id);
+        return;
+    }
+    var thread_id: int = spawn_r.0;
+
+    var accept_r = tcpAccept(listener, 5000);
+    println(accept_r.1 == nil);
+    if (accept_r.1 != nil) {
+        var join_fail = syncThreadJoinTyped(thread_id, "bool", 5000);
+        println(join_fail.1 == nil);
+        if (join_fail.1 == nil) {
+            println(join_fail.0 as bool);
+        }
+        tcpClose(listener);
+        var _close_outbox_2 = syncChannelClose(outbox_id);
+        return;
+    }
+    var client: any = accept_r.0;
+
+    var read_1 = httpReadRequest(client, 4096);
+    println(read_1.1 == nil);
+    if (read_1.1 == nil) {
+        var req1: map<string, any> = read_1.0 as map<string, any>;
+        var req1_headers: map<string, string> = mapGet(req1, "headers") as map<string, string>;
+        println(mapGet(req1, "method") == "GET");
+        println(mapGet(req1, "path") == "/one");
+        println(mapGet(req1_headers, "Connection") == "keep-alive");
+    }
+
+    var response_1 = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nConnection: keep-alive\r\n\r\nok";
+    var send_1 = tcpSend(client, response_1);
+    println(send_1.1 == nil);
+
+    var read_2 = httpReadRequest(client, 4096);
+    println(read_2.1 == nil);
+    if (read_2.1 == nil) {
+        var req2: map<string, any> = read_2.0 as map<string, any>;
+        var req2_headers: map<string, string> = mapGet(req2, "headers") as map<string, string>;
+        println(mapGet(req2, "method") == "GET");
+        println(mapGet(req2, "path") == "/two");
+        println(mapGet(req2_headers, "Connection") == "keep-alive");
+    }
+
+    var response_2 = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nyo";
+    var send_2 = tcpSend(client, response_2);
+    println(send_2.1 == nil);
+
+    tcpClose(client);
+    tcpClose(listener);
+
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+
+    var join_r = syncThreadJoinTyped(thread_id, "bool", 5000);
+    println(join_r.1 == nil);
+    if (join_r.1 == nil) {
+        println(join_r.0 as bool);
+    }
+
+    var _close_outbox_final = syncChannelClose(outbox_id);
+}

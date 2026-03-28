@@ -1,0 +1,342 @@
+import "fixtures/io.tblo";
+
+func main(): void {
+    delete("io_std_src.txt");
+    delete("io_std_dst.txt");
+    delete("io_std_copy.txt");
+    delete("io_std_buf_dst.txt");
+    delete("io_std_buf_copy.txt");
+    delete("io_std_bytes_dst.bin");
+
+    var seed = write_all("io_std_src.txt", "one\ntwo\nthree\n");
+    println(seed.1 == nil);
+
+    var open_r1 = ioOpenReader("io_std_src.txt");
+    println(open_r1.1 == nil);
+    if (open_r1.1 == nil) {
+        var lines_all = ioLines(open_r1.0, 0);
+        println(lines_all.1 == nil);
+        if (lines_all.1 == nil) {
+            println(len(lines_all.0) == 3);
+            println(lines_all.0[0] == "one");
+            println(lines_all.0[1] == "two");
+            println(lines_all.0[2] == "three");
+        }
+        ioCloseReader(open_r1.0);
+    }
+
+    var open_r2 = ioOpenReader("io_std_src.txt");
+    println(open_r2.1 == nil);
+    if (open_r2.1 == nil) {
+        var lines_two = ioLines(open_r2.0, 2);
+        println(lines_two.1 == nil);
+        if (lines_two.1 == nil) {
+            println(len(lines_two.0) == 2);
+            println(lines_two.0[0] == "one");
+            println(lines_two.0[1] == "two");
+        }
+        ioCloseReader(open_r2.0);
+    }
+
+    var open_r3 = ioOpenReader("io_std_src.txt");
+    println(open_r3.1 == nil);
+    if (open_r3.1 == nil) {
+        var all = ioReadAllFrom(open_r3.0);
+        println(all.1 == nil);
+        if (all.1 == nil) {
+            println(all.0 == "one\ntwo\nthree\n");
+        }
+        ioCloseReader(open_r3.0);
+    }
+
+    var open_r4 = ioOpenReader("io_std_src.txt");
+    println(open_r4.1 == nil);
+    if (open_r4.1 == nil) {
+        var c1 = ioReadChunkFrom(open_r4.0, 4);
+        println(c1.1 == nil);
+        if (c1.1 == nil) {
+            println(c1.0 == "one\n");
+        }
+
+        var c2 = ioReadChunkFrom(open_r4.0, 4);
+        println(c2.1 == nil);
+        if (c2.1 == nil) {
+            println(c2.0 == "two\n");
+        }
+
+        var c3 = ioReadChunkFrom(open_r4.0, 4);
+        println(c3.1 == nil);
+        if (c3.1 == nil) {
+            println(c3.0 == "thre");
+        }
+
+        var c4 = ioReadChunkFrom(open_r4.0, 4);
+        println(c4.1 == nil);
+        if (c4.1 == nil) {
+            println(c4.0 == "e\n");
+        }
+
+        var c5 = ioReadChunkFrom(open_r4.0, 4);
+        println(c5.0 == nil && c5.1 == nil);
+        ioCloseReader(open_r4.0);
+    }
+
+    var open_r5 = ioOpenReader("io_std_src.txt");
+    println(open_r5.1 == nil);
+    if (open_r5.1 == nil) {
+        var b1 = ioReadChunkBytesFrom(open_r5.0, 5);
+        println(b1.1 == nil);
+        if (b1.1 == nil) {
+            println(bytesToHex(b1.0 as bytes).0 == "6f6e650a74");
+        }
+
+        var b2 = ioReadChunkBytesFrom(open_r5.0, 5);
+        println(b2.1 == nil);
+        if (b2.1 == nil) {
+            println(bytesToHex(b2.0 as bytes).0 == "776f0a7468");
+        }
+
+        var b3 = ioReadChunkBytesFrom(open_r5.0, 5);
+        println(b3.1 == nil);
+        if (b3.1 == nil) {
+            println(bytesToHex(b3.0 as bytes).0 == "7265650a");
+        }
+
+        var b4 = ioReadChunkBytesFrom(open_r5.0, 5);
+        println(b4.0 == nil && b4.1 == nil);
+        ioCloseReader(open_r5.0);
+    }
+
+    var open_w = ioOpenWriter("io_std_dst.txt");
+    println(open_w.1 == nil);
+    if (open_w.1 == nil) {
+        var wrote = ioWriteAllTo(open_w.0, "payload");
+        println(wrote.1 == nil);
+        if (wrote.1 == nil) {
+            println(wrote.0 == 7);
+        }
+        ioCloseWriter(open_w.0);
+    }
+
+    var open_a = ioOpenAppender("io_std_dst.txt");
+    println(open_a.1 == nil);
+    if (open_a.1 == nil) {
+        var app = ioWriteAllTo(open_a.0, "\nmore");
+        println(app.1 == nil);
+        if (app.1 == nil) {
+            println(app.0 == 5);
+        }
+        ioCloseWriter(open_a.0);
+    }
+
+    var dst = read_all("io_std_dst.txt");
+    println(dst.1 == nil);
+    if (dst.1 == nil) {
+        println(dst.0 == "payload\nmore");
+    }
+
+    var open_wb = ioOpenWriter("io_std_bytes_dst.bin");
+    println(open_wb.1 == nil);
+    if (open_wb.1 == nil) {
+        var wrote_b = ioWriteBytesAllTo(open_wb.0, hexToBytes("00 ff 10 20").0);
+        println(wrote_b.1 == nil);
+        if (wrote_b.1 == nil) {
+            println(wrote_b.0 == 4);
+        }
+        ioCloseWriter(open_wb.0);
+    }
+
+    var dst_b = readBytes("io_std_bytes_dst.bin");
+    println(dst_b.1 == nil);
+    if (dst_b.1 == nil) {
+        println(bytesToHex(dst_b.0).0 == "00ff1020");
+    }
+
+    var copied = ioCopyFile("io_std_src.txt", "io_std_copy.txt", 4);
+    println(copied.1 == nil);
+    if (copied.1 == nil) {
+        println(copied.0 == 14);
+    }
+
+    var copied_data = read_all("io_std_copy.txt");
+    println(copied_data.1 == nil);
+    if (copied_data.1 == nil) {
+        println(copied_data.0 == "one\ntwo\nthree\n");
+    }
+
+    var open_br1 = ioOpenReader("io_std_src.txt");
+    println(open_br1.1 == nil);
+    if (open_br1.1 == nil) {
+        var br1 = ioBufferedReaderFrom(open_br1.0, 3);
+        println(br1.1 == nil);
+        if (br1.1 == nil) {
+            var b1 = ioBufferedReadLineFrom(br1.0);
+            println(b1.2 == nil);
+            if (b1.2 == nil) {
+                println(b1.1 == "one");
+            }
+
+            var b2 = ioBufferedReadLineFrom(b1.0);
+            println(b2.2 == nil);
+            if (b2.2 == nil) {
+                println(b2.1 == "two");
+            }
+
+            var b3 = ioBufferedReadLineFrom(b2.0);
+            println(b3.2 == nil);
+            if (b3.2 == nil) {
+                println(b3.1 == "three");
+            }
+
+            var b4 = ioBufferedReadLineFrom(b3.0);
+            println(b4.2 == nil);
+            if (b4.2 == nil) {
+                println(b4.1 == nil);
+            }
+        }
+        ioCloseReader(open_br1.0);
+    }
+
+    var open_br2 = ioOpenReader("io_std_src.txt");
+    println(open_br2.1 == nil);
+    if (open_br2.1 == nil) {
+        var br2 = ioBufferedReaderFromDefault(open_br2.0);
+        println(br2.1 == nil);
+        if (br2.1 == nil) {
+            var all_buf = ioBufferedReadAllFrom(br2.0);
+            println(all_buf.2 == nil);
+            if (all_buf.2 == nil) {
+                println(all_buf.1 == "one\ntwo\nthree\n");
+            }
+        }
+        ioCloseReader(open_br2.0);
+    }
+
+    var open_br3 = ioOpenReader("io_std_src.txt");
+    println(open_br3.1 == nil);
+    if (open_br3.1 == nil) {
+        var br3 = ioBufferedReaderFrom(open_br3.0, 2);
+        println(br3.1 == nil);
+        if (br3.1 == nil) {
+            var lines_buf = ioBufferedLinesFrom(br3.0, 2);
+            println(lines_buf.2 == nil);
+            if (lines_buf.2 == nil) {
+                println(len(lines_buf.1) == 2);
+                println(lines_buf.1[0] == "one");
+                println(lines_buf.1[1] == "two");
+            }
+        }
+        ioCloseReader(open_br3.0);
+    }
+
+    var open_bw = ioOpenWriter("io_std_buf_dst.txt");
+    println(open_bw.1 == nil);
+    if (open_bw.1 == nil) {
+        var bw = ioBufferedWriterFrom(open_bw.0, 32);
+        println(bw.1 == nil);
+        if (bw.1 == nil) {
+            var bw1 = ioBufferedWriteAllTo(bw.0, "ab");
+            println(bw1.2 == nil);
+            if (bw1.2 == nil) {
+                println(bw1.1 == 2);
+            }
+
+            var bw2 = ioBufferedWriteAllTo(bw1.0, "cde");
+            println(bw2.2 == nil);
+            if (bw2.2 == nil) {
+                println(bw2.1 == 3);
+            }
+
+            var bw3 = ioBufferedWriteAllTo(bw2.0, "fg");
+            println(bw3.2 == nil);
+            if (bw3.2 == nil) {
+                println(bw3.1 == 2);
+            }
+
+            var flushed = ioBufferedFlushTo(bw3.0);
+            println(flushed.2 == nil);
+            if (flushed.2 == nil) {
+                println(flushed.1 == 7);
+            }
+        }
+        ioCloseWriter(open_bw.0);
+    }
+
+    var buf_dst = read_all("io_std_buf_dst.txt");
+    println(buf_dst.1 == nil);
+    if (buf_dst.1 == nil) {
+        println(buf_dst.0 == "abcdefg");
+    }
+
+    var copied_buf = ioBufferedCopyFile("io_std_src.txt", "io_std_buf_copy.txt", 4, 6);
+    println(copied_buf.1 == nil);
+    if (copied_buf.1 == nil) {
+        println(copied_buf.0 == 14);
+    }
+
+    var copied_buf_data = read_all("io_std_buf_copy.txt");
+    println(copied_buf_data.1 == nil);
+    if (copied_buf_data.1 == nil) {
+        println(copied_buf_data.0 == "one\ntwo\nthree\n");
+    }
+
+    var raw_file = file_open("io_std_src.txt", "rb");
+    println(raw_file.1 == nil);
+    if (raw_file.1 == nil) {
+        var rr: Reader = ioReaderFromHandle(raw_file.0);
+        var first = ioReadLineFrom(rr);
+        println(first.1 == nil);
+        if (first.1 == nil) {
+            println(first.0 == "one");
+        }
+        ioCloseReader(rr);
+    }
+
+    var missing = ioOpenReader("io_std_missing.txt");
+    println(missing.1 != nil);
+    if (missing.1 != nil) {
+        println(missing.1.code == ERR_IO);
+    }
+
+    var bad_writer = ioWriterFromHandle(123 as any);
+    var bad = ioWriteAllTo(bad_writer, "x");
+    println(bad.1 != nil);
+    if (bad.1 != nil) {
+        println(bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+    var bad_b = ioWriteBytesAllTo(bad_writer, hexToBytes("aa").0);
+    println(bad_b.1 != nil);
+    if (bad_b.1 != nil) {
+        println(bad_b.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_reader = ioReaderFromHandle(123 as any);
+    var bad_br = ioBufferedReaderFrom(bad_reader, 8);
+    println(bad_br.1 != nil);
+    if (bad_br.1 != nil) {
+        println(bad_br.1.code == ERR_INVALID_ARGUMENT);
+    }
+    var bad_chunk = ioReadChunkFrom(bad_reader, 4);
+    println(bad_chunk.1 != nil);
+    if (bad_chunk.1 != nil) {
+        println(bad_chunk.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_bw_open = ioOpenWriter("io_std_buf_dst.txt");
+    println(bad_bw_open.1 == nil);
+    if (bad_bw_open.1 == nil) {
+        var bad_bw = ioBufferedWriterFrom(bad_bw_open.0, 0);
+        println(bad_bw.1 != nil);
+        if (bad_bw.1 != nil) {
+            println(bad_bw.1.code == ERR_INVALID_ARGUMENT);
+        }
+        ioCloseWriter(bad_bw_open.0);
+    }
+
+    println(delete("io_std_src.txt").0);
+    println(delete("io_std_dst.txt").0);
+    println(delete("io_std_copy.txt").0);
+    println(delete("io_std_buf_dst.txt").0);
+    println(delete("io_std_buf_copy.txt").0);
+    println(delete("io_std_bytes_dst.bin").0);
+}

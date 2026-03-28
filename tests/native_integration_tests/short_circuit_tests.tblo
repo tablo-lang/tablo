@@ -1,0 +1,60 @@
+var side_effect_calls: int = 0;
+
+func markTrue(): bool {
+    side_effect_calls = side_effect_calls + 1;
+    return true;
+}
+
+func markFalse(): bool {
+    side_effect_calls = side_effect_calls + 1;
+    return false;
+}
+
+func explode(): bool {
+    panic("explode should not be called");
+    return false;
+}
+
+func main(): void {
+    side_effect_calls = 0;
+    var and_skip: bool = false && markTrue();
+    println(!and_skip);
+    println(side_effect_calls == 0);
+
+    side_effect_calls = 0;
+    var or_skip: bool = true || markTrue();
+    println(or_skip);
+    println(side_effect_calls == 0);
+
+    side_effect_calls = 0;
+    var and_eval: bool = true && markFalse();
+    println(!and_eval);
+    println(side_effect_calls == 1);
+
+    side_effect_calls = 0;
+    var or_eval: bool = false || markTrue();
+    println(or_eval);
+    println(side_effect_calls == 1);
+
+    var safe_and: bool = false && ((1 / 0) == 0);
+    println(!safe_and);
+
+    var safe_or: bool = true || ((1 / 0) == 0);
+    println(safe_or);
+
+    var no_panic_and: bool = false && explode();
+    println(!no_panic_and);
+
+    var no_panic_or: bool = true || explode();
+    println(no_panic_or);
+
+    side_effect_calls = 0;
+    var nested_or: bool = true || (false && markTrue());
+    println(nested_or);
+    println(side_effect_calls == 0);
+
+    side_effect_calls = 0;
+    var nested_and: bool = false && (true || markTrue());
+    println(!nested_and);
+    println(side_effect_calls == 0);
+}

@@ -1,0 +1,1204 @@
+// TOML helpers for modern configuration files.
+// Supports practical subset: key/value pairs, dotted keys, [sections], strings, ints, bools, arrays.
+
+func tomlStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func tomlError(code: int,
+               message: string,
+               context: string,
+               line: int,
+               column: int,
+               detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "line": line,
+        "column": column
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return tomlStdError(code, message, data);
+}
+
+func tomlIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func tomlIsBareKeyChar(ch: string): bool {
+    if (ch == "") {
+        return false;
+    }
+    return find("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", ch) >= 0;
+}
+
+func tomlSkipSpaces(text: string, start: int): int {
+    var i: int = start;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch != " " && ch != "\t") {
+            break;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+func tomlCopyPath(parts: array<string>): array<string> {
+    var out: array<string> = [];
+    foreach (part in parts) {
+        push(out, part);
+    }
+    return out;
+}
+
+func tomlJoinPath(parts: array<string>): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(parts)) {
+        if (i > 0) {
+            out = out + ".";
+        }
+        out = out + parts[i];
+        i = i + 1;
+    }
+    return out;
+}
+
+func tomlPathWith(parts: array<string>, tail: string): array<string> {
+    var out: array<string> = tomlCopyPath(parts);
+    push(out, tail);
+    return out;
+}
+
+func tomlStripInlineComment(line: string): string {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+    var depth: int = 0;
+    var i: int = 0;
+    while (i < len(line)) {
+        var ch: string = substring(line, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+        } else if (ch == "'") {
+            in_single = true;
+        } else if (ch == "[") {
+            depth = depth + 1;
+        } else if (ch == "]") {
+            if (depth > 0) {
+                depth = depth - 1;
+            }
+        } else if (ch == "#" && depth == 0) {
+            return trim(substring(line, 0, i));
+        }
+
+        i = i + 1;
+    }
+
+    return trim(line);
+}
+
+func tomlParseDoubleQuoted(input: string,
+                           start: int,
+                           line: int,
+                           column: int,
+                           context: string): (string, int, Error?) {
+    if (start >= len(input) || substring(input, start, 1) != "\"") {
+        return ("",
+                start,
+                tomlError(ERR_PARSE,
+                          "expected opening double quote",
+                          context + ".doubleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "\"") {
+            return (out, i + 1, nil);
+        }
+
+        if (ch == "\\") {
+            if ((i + 1) >= len(input)) {
+                return ("",
+                        i,
+                        tomlError(ERR_PARSE,
+                                  "trailing escape sequence",
+                                  context + ".doubleQuote.escape",
+                                  line,
+                                  column + i,
+                                  input));
+            }
+
+            var esc: string = substring(input, i + 1, 1);
+            if (esc == "n") {
+                out = out + "\n";
+            } else if (esc == "r") {
+                out = out + "\r";
+            } else if (esc == "t") {
+                out = out + "\t";
+            } else if (esc == "\"") {
+                out = out + "\"";
+            } else if (esc == "\\") {
+                out = out + "\\";
+            } else {
+                return ("",
+                        i,
+                        tomlError(ERR_PARSE,
+                                  "unsupported escape sequence",
+                                  context + ".doubleQuote.escape",
+                                  line,
+                                  column + i,
+                                  esc));
+            }
+
+            i = i + 2;
+            continue;
+        }
+
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            tomlError(ERR_PARSE,
+                      "unterminated double-quoted string",
+                      context + ".doubleQuote.unterminated",
+                      line,
+                      column + i,
+                      input));
+}
+
+func tomlParseSingleQuoted(input: string,
+                           start: int,
+                           line: int,
+                           column: int,
+                           context: string): (string, int, Error?) {
+    if (start >= len(input) || substring(input, start, 1) != "'") {
+        return ("",
+                start,
+                tomlError(ERR_PARSE,
+                          "expected opening single quote",
+                          context + ".singleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "'") {
+            return (out, i + 1, nil);
+        }
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            tomlError(ERR_PARSE,
+                      "unterminated single-quoted string",
+                      context + ".singleQuote.unterminated",
+                      line,
+                      column + i,
+                      input));
+}
+
+func tomlSplitDottedPath(path: string, line: int, context: string): (array<string>, Error?) {
+    var out: array<string> = [];
+    var i: int = 0;
+    while (i < len(path)) {
+        i = tomlSkipSpaces(path, i);
+        if (i >= len(path)) {
+            break;
+        }
+
+        var segment: string = "";
+        var ch: string = substring(path, i, 1);
+        if (ch == "\"") {
+            var quoted = tomlParseDoubleQuoted(path, i, line, i + 1, context + ".path");
+            if (quoted.2 != nil) {
+                return (out, quoted.2);
+            }
+            segment = quoted.0;
+            i = quoted.1;
+        } else {
+            var start: int = i;
+            while (i < len(path) && tomlIsBareKeyChar(substring(path, i, 1))) {
+                i = i + 1;
+            }
+            if (i == start) {
+                return (out,
+                        tomlError(ERR_PARSE,
+                                  "invalid key segment",
+                                  context + ".path.segment",
+                                  line,
+                                  start + 1,
+                                  path));
+            }
+            segment = substring(path, start, i - start);
+        }
+
+        if (segment == "") {
+            return (out,
+                    tomlError(ERR_PARSE,
+                              "empty key segment",
+                              context + ".path.empty",
+                              line,
+                              i + 1,
+                              path));
+        }
+        push(out, segment);
+
+        i = tomlSkipSpaces(path, i);
+        if (i >= len(path)) {
+            break;
+        }
+
+        if (substring(path, i, 1) != ".") {
+            return (out,
+                    tomlError(ERR_PARSE,
+                              "expected '.' between key segments",
+                              context + ".path.dot",
+                              line,
+                              i + 1,
+                              path));
+        }
+
+        i = i + 1;
+        var after_dot: int = tomlSkipSpaces(path, i);
+        if (after_dot >= len(path)) {
+            return (out,
+                    tomlError(ERR_PARSE,
+                              "key path cannot end with '.'",
+                              context + ".path.trailingDot",
+                              line,
+                              i + 1,
+                              path));
+        }
+        i = after_dot;
+    }
+
+    if (len(out) == 0) {
+        return (out,
+                tomlError(ERR_PARSE,
+                          "empty key path",
+                          context + ".path.empty",
+                          line,
+                          1,
+                          path));
+    }
+
+    return (out, nil);
+}
+func tomlFindEquals(line: string): int {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+    var i: int = 0;
+    while (i < len(line)) {
+        var ch: string = substring(line, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+        } else if (ch == "'") {
+            in_single = true;
+        } else if (ch == "=") {
+            return i;
+        }
+
+        i = i + 1;
+    }
+
+    return -1;
+}
+
+func tomlRemoveUnderscores(value: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(value)) {
+        var ch: string = substring(value, i, 1);
+        if (ch != "_") {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func tomlParseIntValue(value: string,
+                       line: int,
+                       column: int,
+                       context: string): (int, Error?) {
+    var s: string = trim(value);
+    if (s == "") {
+        return (0,
+                tomlError(ERR_PARSE,
+                          "integer value cannot be empty",
+                          context + ".int.empty",
+                          line,
+                          column,
+                          value));
+    }
+
+    var sign: int = 1;
+    var i: int = 0;
+    var sign_offset: int = 0;
+    if (startsWith(s, "+")) {
+        i = 1;
+        sign_offset = 1;
+    } else if (startsWith(s, "-")) {
+        sign = -1;
+        i = 1;
+        sign_offset = 1;
+    }
+
+    if (i >= len(s)) {
+        return (0,
+                tomlError(ERR_PARSE,
+                          "integer sign without digits",
+                          context + ".int.sign",
+                          line,
+                          column,
+                          value));
+    }
+
+    var prev_underscore: bool = false;
+    while (i < len(s)) {
+        var ch: string = substring(s, i, 1);
+        if (ch == "_") {
+            if (prev_underscore || i == sign_offset || i == (len(s) - 1)) {
+                return (0,
+                        tomlError(ERR_PARSE,
+                                  "invalid underscore in integer",
+                                  context + ".int.underscore",
+                                  line,
+                                  column + i,
+                                  value));
+            }
+            prev_underscore = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (!tomlIsDigit(ch)) {
+            return (0,
+                    tomlError(ERR_PARSE,
+                              "integer contains invalid character",
+                              context + ".int.digit",
+                              line,
+                              column + i,
+                              value));
+        }
+
+        prev_underscore = false;
+        i = i + 1;
+    }
+
+    var clean: string = s;
+    if (startsWith(clean, "+")) {
+        clean = substring(clean, 1, len(clean) - 1);
+    }
+    clean = tomlRemoveUnderscores(clean);
+
+    var parsed: int = toInt(clean);
+    if (sign < 0 && !startsWith(clean, "-")) {
+        parsed = 0 - parsed;
+    }
+
+    return (parsed, nil);
+}
+
+func tomlParseValue(value: string,
+                    line: int,
+                    column: int,
+                    context: string): (any, Error?) {
+    var s: string = trim(value);
+    if (s == "") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value cannot be empty",
+                          context + ".value.empty",
+                          line,
+                          column,
+                          value));
+    }
+
+    if (startsWith(s, "\"")) {
+        var quoted = tomlParseDoubleQuoted(s, 0, line, column, context + ".value");
+        if (quoted.2 != nil) {
+            return (nil, quoted.2);
+        }
+        var tail: string = trim(substring(s, quoted.1, len(s) - quoted.1));
+        if (tail != "") {
+            return (nil,
+                    tomlError(ERR_PARSE,
+                              "unexpected characters after string value",
+                              context + ".value.trailing",
+                              line,
+                              column + quoted.1,
+                              tail));
+        }
+        return (quoted.0, nil);
+    }
+
+    if (startsWith(s, "'")) {
+        var literal = tomlParseSingleQuoted(s, 0, line, column, context + ".value");
+        if (literal.2 != nil) {
+            return (nil, literal.2);
+        }
+        var literal_tail: string = trim(substring(s, literal.1, len(s) - literal.1));
+        if (literal_tail != "") {
+            return (nil,
+                    tomlError(ERR_PARSE,
+                              "unexpected characters after string value",
+                              context + ".value.trailing",
+                              line,
+                              column + literal.1,
+                              literal_tail));
+        }
+        return (literal.0, nil);
+    }
+
+    if (startsWith(s, "[")) {
+        if (!endsWith(s, "]")) {
+            return (nil,
+                    tomlError(ERR_PARSE,
+                              "unterminated array value",
+                              context + ".value.array",
+                              line,
+                              column,
+                              s));
+        }
+
+        var out: array<any> = [];
+        var inner: string = substring(s, 1, len(s) - 2);
+        var i: int = 0;
+        var token_start: int = 0;
+        var depth: int = 0;
+        var in_double: bool = false;
+        var in_single: bool = false;
+        var escaped: bool = false;
+        while (i < len(inner)) {
+            var ch: string = substring(inner, i, 1);
+
+            if (in_double) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == "\\") {
+                    escaped = true;
+                } else if (ch == "\"") {
+                    in_double = false;
+                }
+                i = i + 1;
+                continue;
+            }
+
+            if (in_single) {
+                if (ch == "'") {
+                    in_single = false;
+                }
+                i = i + 1;
+                continue;
+            }
+
+            if (ch == "\"") {
+                in_double = true;
+                i = i + 1;
+                continue;
+            }
+
+            if (ch == "'") {
+                in_single = true;
+                i = i + 1;
+                continue;
+            }
+
+            if (ch == "[") {
+                depth = depth + 1;
+                i = i + 1;
+                continue;
+            }
+
+            if (ch == "]") {
+                if (depth == 0) {
+                    return (nil,
+                            tomlError(ERR_PARSE,
+                                      "array contains unmatched closing bracket",
+                                      context + ".value.array.bracket",
+                                      line,
+                                      column + i,
+                                      s));
+                }
+                depth = depth - 1;
+                i = i + 1;
+                continue;
+            }
+
+            if (ch == "," && depth == 0) {
+                var raw_part: string = trim(substring(inner, token_start, i - token_start));
+                if (raw_part == "") {
+                    return (nil,
+                            tomlError(ERR_PARSE,
+                                      "array contains empty element",
+                                      context + ".value.array.empty",
+                                      line,
+                                      column + i,
+                                      s));
+                }
+
+                var item = tomlParseValue(raw_part, line, column + token_start + 1, context + ".value.array");
+                if (item.1 != nil) {
+                    return (nil, item.1);
+                }
+                push(out, item.0);
+                token_start = i + 1;
+            }
+
+            i = i + 1;
+        }
+
+        if (in_double || in_single || depth != 0) {
+            return (nil,
+                    tomlError(ERR_PARSE,
+                              "unterminated array value",
+                              context + ".value.array.unterminated",
+                              line,
+                              column,
+                              s));
+        }
+
+        var tail: string = trim(substring(inner, token_start, len(inner) - token_start));
+        if (tail != "") {
+            var last_item = tomlParseValue(tail, line, column + token_start + 1, context + ".value.array");
+            if (last_item.1 != nil) {
+                return (nil, last_item.1);
+            }
+            push(out, last_item.0);
+        } else {
+            var inner_trimmed: string = trim(inner);
+            if (inner_trimmed != "" && !endsWith(inner_trimmed, ",")) {
+                return (nil,
+                        tomlError(ERR_PARSE,
+                                  "array parse failed near end",
+                                  context + ".value.array.tail",
+                                  line,
+                                  column + len(s),
+                                  s));
+            }
+        }
+
+        return (out as any, nil);
+    }
+
+    if (s == "true") {
+        return (true, nil);
+    }
+    if (s == "false") {
+        return (false, nil);
+    }
+
+    var parsed_int = tomlParseIntValue(s, line, column, context + ".value");
+    if (parsed_int.1 == nil) {
+        return (parsed_int.0, nil);
+    }
+
+    return (nil,
+            tomlError(ERR_PARSE,
+                      "unsupported TOML value type",
+                      context + ".value.type",
+                      line,
+                      column,
+                      s));
+}
+func tomlEnsureTablePath(root: map<string, any>,
+                         parts: array<string>,
+                         line: int,
+                         context: string): (map<string, any>, Error?) {
+    var current: map<string, any> = root;
+    var i: int = 0;
+    while (i < len(parts)) {
+        var segment: string = parts[i];
+        var existing: any = mapGetString(current, segment);
+        if (existing == nil) {
+            var child: map<string, any> = {};
+            mapSetString(current, segment, child as any);
+            current = child;
+            i = i + 1;
+            continue;
+        }
+
+        if (typeOf(existing) != "map") {
+            return ({},
+                    tomlError(ERR_PARSE,
+                              "path segment is not a table",
+                              context + ".table.segment",
+                              line,
+                              1,
+                              tomlJoinPath(tomlPathWith([], segment))));
+        }
+
+        current = existing as map<string, any>;
+        i = i + 1;
+    }
+
+    return (current, nil);
+}
+
+func tomlSetValueAtPath(root: map<string, any>,
+                        full_path: array<string>,
+                        value: any,
+                        line: int,
+                        context: string): Error? {
+    if (len(full_path) == 0) {
+        return tomlError(ERR_PARSE,
+                         "empty key path",
+                         context + ".set.empty",
+                         line,
+                         1,
+                         nil);
+    }
+
+    var parent_path: array<string> = [];
+    var i: int = 0;
+    while (i < (len(full_path) - 1)) {
+        push(parent_path, full_path[i]);
+        i = i + 1;
+    }
+
+    var ensured = tomlEnsureTablePath(root, parent_path, line, context + ".set.parent");
+    if (ensured.1 != nil) {
+        return ensured.1;
+    }
+
+    var table: map<string, any> = ensured.0;
+    var leaf: string = full_path[len(full_path) - 1];
+    if (mapHasString(table, leaf)) {
+        return tomlError(ERR_PARSE,
+                         "duplicate key in TOML document",
+                         context + ".set.duplicate",
+                         line,
+                         1,
+                         tomlJoinPath(full_path));
+    }
+
+    mapSetString(table, leaf, value);
+    return nil;
+}
+
+func tomlParse(text: string): (map<string, any>, Error?) {
+    var root: map<string, any> = {};
+    var current_section: array<string> = [];
+    var declared_sections: map<string, bool> = {};
+
+    if (text == "") {
+        return (root, nil);
+    }
+
+    var lines: array<string> = split(text, "\n");
+    var line_no: int = 1;
+    foreach (raw_line in lines) {
+        var line: string = raw_line;
+        if (endsWith(line, "\r")) {
+            line = substring(line, 0, len(line) - 1);
+        }
+
+        line = tomlStripInlineComment(line);
+        if (trim(line) == "") {
+            line_no = line_no + 1;
+            continue;
+        }
+
+        var trimmed: string = trim(line);
+        if (startsWith(trimmed, "[")) {
+            if (!endsWith(trimmed, "]")) {
+                return (root,
+                        tomlError(ERR_PARSE,
+                                  "unterminated table header",
+                                  "toml.parse.section",
+                                  line_no,
+                                  1,
+                                  trimmed));
+            }
+            if (startsWith(trimmed, "[[")) {
+                return (root,
+                        tomlError(ERR_PARSE,
+                                  "array-of-tables is not supported",
+                                  "toml.parse.section.arrayOfTables",
+                                  line_no,
+                                  1,
+                                  trimmed));
+            }
+
+            var section_raw: string = trim(substring(trimmed, 1, len(trimmed) - 2));
+            var section_parts = tomlSplitDottedPath(section_raw, line_no, "toml.parse.section");
+            if (section_parts.1 != nil) {
+                return (root, section_parts.1);
+            }
+
+            var section_key: string = tomlJoinPath(section_parts.0);
+            if (mapHasString(declared_sections, section_key)) {
+                return (root,
+                        tomlError(ERR_PARSE,
+                                  "duplicate table header",
+                                  "toml.parse.section.duplicate",
+                                  line_no,
+                                  1,
+                                  section_key));
+            }
+
+            var ensured = tomlEnsureTablePath(root, section_parts.0, line_no, "toml.parse.section");
+            if (ensured.1 != nil) {
+                return (root, ensured.1);
+            }
+
+            mapSetString(declared_sections, section_key, true);
+            current_section = tomlCopyPath(section_parts.0);
+            line_no = line_no + 1;
+            continue;
+        }
+
+        var eq: int = tomlFindEquals(line);
+        if (eq < 0) {
+            return (root,
+                    tomlError(ERR_PARSE,
+                              "expected key=value entry",
+                              "toml.parse.assignment",
+                              line_no,
+                              1,
+                              line));
+        }
+
+        var key_part: string = trim(substring(line, 0, eq));
+        var value_part: string = trim(substring(line, eq + 1, len(line) - (eq + 1)));
+        if (key_part == "") {
+            return (root,
+                    tomlError(ERR_PARSE,
+                              "missing key before '='",
+                              "toml.parse.assignment.key",
+                              line_no,
+                              1,
+                              line));
+        }
+
+        var key_parts = tomlSplitDottedPath(key_part, line_no, "toml.parse.key");
+        if (key_parts.1 != nil) {
+            return (root, key_parts.1);
+        }
+
+        var parsed_value = tomlParseValue(value_part, line_no, eq + 2, "toml.parse");
+        if (parsed_value.1 != nil) {
+            return (root, parsed_value.1);
+        }
+
+        var full_path: array<string> = tomlCopyPath(current_section);
+        foreach (segment in key_parts.0) {
+            push(full_path, segment);
+        }
+
+        var set_err: Error? = tomlSetValueAtPath(root,
+                                                 full_path,
+                                                 parsed_value.0,
+                                                 line_no,
+                                                 "toml.parse");
+        if (set_err != nil) {
+            return (root, set_err);
+        }
+
+        line_no = line_no + 1;
+    }
+
+    return (root, nil);
+}
+
+func tomlGet(doc: map<string, any>, path: string): (any, Error?) {
+    var parts_r = tomlSplitDottedPath(path, -1, "toml.get");
+    if (parts_r.1 != nil) {
+        return (nil, parts_r.1);
+    }
+
+    var current: any = doc as any;
+    var i: int = 0;
+    while (i < len(parts_r.0)) {
+        if (typeOf(current) != "map") {
+            return (nil,
+                    tomlError(ERR_PARSE,
+                              "encountered non-table while traversing path",
+                              "toml.get.path",
+                              -1,
+                              1,
+                              tomlJoinPath(parts_r.0)));
+        }
+
+        var table: map<string, any> = current as map<string, any>;
+        var segment: string = parts_r.0[i];
+        if (!mapHasString(table, segment)) {
+            return (nil, nil);
+        }
+
+        current = mapGetString(table, segment);
+        i = i + 1;
+    }
+
+    return (current, nil);
+}
+
+func tomlGetString(doc: map<string, any>, path: string): (string?, Error?) {
+    var got = tomlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "string") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value is not a string",
+                          "toml.getString.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as string, nil);
+}
+
+func tomlGetInt(doc: map<string, any>, path: string): (int?, Error?) {
+    var got = tomlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "int") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value is not an int",
+                          "toml.getInt.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as int, nil);
+}
+
+func tomlGetBool(doc: map<string, any>, path: string): (bool?, Error?) {
+    var got = tomlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "bool") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value is not a bool",
+                          "toml.getBool.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as bool, nil);
+}
+
+func tomlGetArray(doc: map<string, any>, path: string): (array<any>?, Error?) {
+    var got = tomlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "array") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value is not an array",
+                          "toml.getArray.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as array<any>, nil);
+}
+
+func tomlGetTable(doc: map<string, any>, path: string): (map<string, any>?, Error?) {
+    var got = tomlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "map") {
+        return (nil,
+                tomlError(ERR_PARSE,
+                          "value is not a table",
+                          "toml.getTable.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as map<string, any>, nil);
+}
+func tomlKeyNeedsQuotes(key: string): bool {
+    if (key == "") {
+        return true;
+    }
+    var i: int = 0;
+    while (i < len(key)) {
+        if (!tomlIsBareKeyChar(substring(key, i, 1))) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+func tomlEscapeString(input: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "\\") {
+            out = out + "\\\\";
+        } else if (ch == "\"") {
+            out = out + "\\\"";
+        } else if (ch == "\n") {
+            out = out + "\\n";
+        } else if (ch == "\r") {
+            out = out + "\\r";
+        } else if (ch == "\t") {
+            out = out + "\\t";
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func tomlFormatKey(key: string): string {
+    if (!tomlKeyNeedsQuotes(key)) {
+        return key;
+    }
+    return "\"" + tomlEscapeString(key) + "\"";
+}
+
+func tomlFormatPath(path: array<string>): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(path)) {
+        if (i > 0) {
+            out = out + ".";
+        }
+        out = out + tomlFormatKey(path[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+func tomlStringifyArray(items: array<any>, depth: int): (string, Error?) {
+    var out: string = "[";
+    var i: int = 0;
+    foreach (value_any in items) {
+        if (i > 0) {
+            out = out + ", ";
+        }
+        var value_r = tomlStringifyValue(value_any, depth + 1);
+        if (value_r.1 != nil) {
+            return ("", value_r.1);
+        }
+        out = out + value_r.0;
+        i = i + 1;
+    }
+    out = out + "]";
+    return (out, nil);
+}
+
+func tomlStringifyValue(value: any, depth: int): (string, Error?) {
+    if (depth > 64) {
+        return ("", tomlError(ERR_LIMIT, "TOML stringify nesting depth exceeded", "toml.stringify.depth", -1, 1, depth));
+    }
+
+    if (value == nil) {
+        return ("", tomlError(ERR_INVALID_ARGUMENT, "TOML stringify does not support nil", "toml.stringify.value.nil", -1, 1, nil));
+    }
+
+    var t: string = typeOf(value);
+    if (t == "string") {
+        return ("\"" + tomlEscapeString(value as string) + "\"", nil);
+    }
+    if (t == "int") {
+        return (str(value as int), nil);
+    }
+    if (t == "bool") {
+        if (value as bool) {
+            return ("true", nil);
+        }
+        return ("false", nil);
+    }
+    if (t == "array") {
+        return tomlStringifyArray(value as array<any>, depth + 1);
+    }
+
+    return ("",
+            tomlError(ERR_INVALID_ARGUMENT,
+                      "unsupported TOML value type during stringify",
+                      "toml.stringify.value.type",
+                      -1,
+                      1,
+                      t));
+}
+
+func tomlStringifyTableInternal(table: map<string, any>,
+                                path: array<string>,
+                                depth: int): (string, Error?) {
+    if (depth > 64) {
+        return ("", tomlError(ERR_LIMIT, "TOML stringify nesting depth exceeded", "toml.stringify.table.depth", -1, 1, depth));
+    }
+
+    var value_lines: array<string> = [];
+    var child_keys: array<string> = [];
+    foreach (key_any in keys(table)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            return ("",
+                    tomlError(ERR_INVALID_ARGUMENT,
+                              "table key must be string",
+                              "toml.stringify.key.type",
+                              -1,
+                              1,
+                              key_any));
+        }
+
+        var key: string = key_any as string;
+        var value: any = mapGetString(table, key);
+        if (value == nil) {
+            return ("",
+                    tomlError(ERR_INVALID_ARGUMENT,
+                              "TOML stringify does not support nil table values",
+                              "toml.stringify.value.nil",
+                              -1,
+                              1,
+                              key));
+        }
+
+        if (typeOf(value) == "map") {
+            push(child_keys, key);
+            continue;
+        }
+
+        var encoded = tomlStringifyValue(value, depth + 1);
+        if (encoded.1 != nil) {
+            return ("", encoded.1);
+        }
+
+        push(value_lines, tomlFormatKey(key) + " = " + encoded.0);
+    }
+
+    var out: string = "";
+    if (len(path) > 0) {
+        out = out + "[" + tomlFormatPath(path) + "]\n";
+    }
+
+    var i: int = 0;
+    while (i < len(value_lines)) {
+        out = out + value_lines[i] + "\n";
+        i = i + 1;
+    }
+
+    var child_idx: int = 0;
+    while (child_idx < len(child_keys)) {
+        var child_key: string = child_keys[child_idx];
+        var child_any: any = mapGetString(table, child_key);
+        if (typeOf(child_any) != "map") {
+            return ("",
+                    tomlError(ERR_INVALID_ARGUMENT,
+                              "expected child table",
+                              "toml.stringify.child.type",
+                              -1,
+                              1,
+                              child_key));
+        }
+
+        if (out != "" && !endsWith(out, "\n\n")) {
+            out = out + "\n";
+        }
+
+        var child_path: array<string> = tomlCopyPath(path);
+        push(child_path, child_key);
+        var child_block = tomlStringifyTableInternal(child_any as map<string, any>, child_path, depth + 1);
+        if (child_block.1 != nil) {
+            return ("", child_block.1);
+        }
+        out = out + child_block.0;
+
+        child_idx = child_idx + 1;
+    }
+
+    return (out, nil);
+}
+
+func tomlStringify(doc: map<string, any>): (string, Error?) {
+    var encoded = tomlStringifyTableInternal(doc, [], 0);
+    if (encoded.1 != nil) {
+        return ("", encoded.1);
+    }
+    var out: string = encoded.0;
+    while (endsWith(out, "\n")) {
+        out = substring(out, 0, len(out) - 1);
+    }
+    return (out, nil);
+}

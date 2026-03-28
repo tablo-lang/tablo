@@ -1,0 +1,463 @@
+// Validation helpers for common backend payload and config checks.
+
+var VALIDATE_ASCII_LOWER: string = "abcdefghijklmnopqrstuvwxyz";
+var VALIDATE_ASCII_UPPER: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+var VALIDATE_ASCII_DIGITS: string = "0123456789";
+
+func validateStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func validateError(code: int,
+                   message: string,
+                   context: string,
+                   field: string,
+                   detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "field": field,
+        "detail": detail
+    };
+    return validateStdError(code, message, data);
+}
+
+func validateIsAsciiLower(ch: string): bool {
+    return find(VALIDATE_ASCII_LOWER, ch) >= 0;
+}
+
+func validateIsAsciiUpper(ch: string): bool {
+    return find(VALIDATE_ASCII_UPPER, ch) >= 0;
+}
+
+func validateIsAsciiLetter(ch: string): bool {
+    return validateIsAsciiLower(ch) || validateIsAsciiUpper(ch);
+}
+
+func validateIsAsciiDigit(ch: string): bool {
+    return find(VALIDATE_ASCII_DIGITS, ch) >= 0;
+}
+
+func validateIsAsciiAlnum(ch: string): bool {
+    return validateIsAsciiLetter(ch) || validateIsAsciiDigit(ch);
+}
+
+func validateIsAsciiHex(ch: string): bool {
+    return validateIsAsciiDigit(ch) || find("abcdefABCDEF", ch) >= 0;
+}
+
+func validateDomainLabel(label: string): bool {
+    if (label == "") {
+        return false;
+    }
+    if (!validateIsAsciiAlnum(substring(label, 0, 1))) {
+        return false;
+    }
+    if (!validateIsAsciiAlnum(substring(label, len(label) - 1, 1))) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(label)) {
+        var ch: string = substring(label, i, 1);
+        if (!(validateIsAsciiAlnum(ch) || ch == "-")) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func validateDomainName(domain: string): bool {
+    if (domain == "") {
+        return false;
+    }
+    if (startsWith(domain, ".") || endsWith(domain, ".")) {
+        return false;
+    }
+    if (find(domain, "..") >= 0) {
+        return false;
+    }
+
+    var labels: array<string> = split(domain, ".");
+    if (len(labels) < 2) {
+        return false;
+    }
+
+    foreach (label in labels) {
+        if (!validateDomainLabel(label)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func validateIpv4(text: string): bool {
+    var parts: array<string> = split(text, ".");
+    if (len(parts) != 4) {
+        return false;
+    }
+
+    foreach (part in parts) {
+        if (part == "") {
+            return false;
+        }
+
+        var i: int = 0;
+        while (i < len(part)) {
+            if (!validateIsAsciiDigit(substring(part, i, 1))) {
+                return false;
+            }
+            i = i + 1;
+        }
+
+        var n: int = toInt(part);
+        if (n < 0 || n > 255) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+func validateHost(host: string): bool {
+    if (host == "") {
+        return false;
+    }
+    if (host == "localhost") {
+        return true;
+    }
+    if (validateIpv4(host)) {
+        return true;
+    }
+    return validateDomainName(host);
+}
+
+func validateEmail(value: string): bool {
+    var s: string = trim(value);
+    if (s == "" || find(s, " ") >= 0 || find(s, "\t") >= 0 || find(s, "\n") >= 0 || find(s, "\r") >= 0) {
+        return false;
+    }
+
+    var at: int = find(s, "@");
+    if (at <= 0 || at >= (len(s) - 1)) {
+        return false;
+    }
+    if (find(substring(s, at + 1, len(s) - (at + 1)), "@") >= 0) {
+        return false;
+    }
+
+    var local: string = substring(s, 0, at);
+    var domain: string = substring(s, at + 1, len(s) - (at + 1));
+
+    if (startsWith(local, ".") || endsWith(local, ".") || find(local, "..") >= 0) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(local)) {
+        var ch: string = substring(local, i, 1);
+        if (!(validateIsAsciiAlnum(ch) || ch == "." || ch == "_" || ch == "%" || ch == "+" || ch == "-")) {
+            return false;
+        }
+        i = i + 1;
+    }
+
+    return validateHost(domain);
+}
+
+func validateParsePort(text: string): int {
+    if (text == "") {
+        return -1;
+    }
+    var i: int = 0;
+    while (i < len(text)) {
+        if (!validateIsAsciiDigit(substring(text, i, 1))) {
+            return -1;
+        }
+        i = i + 1;
+    }
+
+    var p: int = toInt(text);
+    if (p < 1 || p > 65535) {
+        return -1;
+    }
+    return p;
+}
+
+func validateUrlHttp(value: string): bool {
+    var s: string = trim(value);
+    if (s == "") {
+        return false;
+    }
+
+    var scheme_len: int = 0;
+    if (startsWith(s, "http://")) {
+        scheme_len = 7;
+    } else if (startsWith(s, "https://")) {
+        scheme_len = 8;
+    } else {
+        return false;
+    }
+
+    var rest: string = substring(s, scheme_len, len(s) - scheme_len);
+    if (rest == "") {
+        return false;
+    }
+
+    var stop: int = len(rest);
+    var slash: int = find(rest, "/");
+    var qm: int = find(rest, "?");
+    var hash: int = find(rest, "#");
+
+    if (slash >= 0 && slash < stop) stop = slash;
+    if (qm >= 0 && qm < stop) stop = qm;
+    if (hash >= 0 && hash < stop) stop = hash;
+
+    var host_port: string = substring(rest, 0, stop);
+    if (host_port == "" || find(host_port, " ") >= 0 || find(host_port, "\t") >= 0) {
+        return false;
+    }
+
+    var colon: int = find(host_port, ":");
+    if (colon < 0) {
+        return validateHost(host_port);
+    }
+
+    if (find(substring(host_port, colon + 1, len(host_port) - (colon + 1)), ":") >= 0) {
+        return false;
+    }
+
+    var host: string = substring(host_port, 0, colon);
+    var port_text: string = substring(host_port, colon + 1, len(host_port) - (colon + 1));
+    if (!validateHost(host)) {
+        return false;
+    }
+
+    return validateParsePort(port_text) > 0;
+}
+
+func validateUuid(value: string): bool {
+    var s: string = trim(value);
+    if (len(s) != 36) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < 36) {
+        var ch: string = substring(s, i, 1);
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (ch != "-") {
+                return false;
+            }
+        } else {
+            if (!validateIsAsciiHex(ch)) {
+                return false;
+            }
+        }
+        i = i + 1;
+    }
+
+    return true;
+}
+
+func validateRequiredString(value: string, field_name: string): Error? {
+    if (trim(field_name) == "") {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredString: fieldName must be non-empty",
+                             "validate.requiredString.fieldName",
+                             field_name,
+                             nil);
+    }
+
+    if (trim(value) == "") {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredString: value is required",
+                             "validate.requiredString.empty",
+                             field_name,
+                             value);
+    }
+
+    return nil;
+}
+
+func validateStringMinLen(value: string, field_name: string, min_len: int): Error? {
+    if (min_len < 0) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateStringMinLen: minLen must be >= 0",
+                             "validate.stringMinLen.min",
+                             field_name,
+                             min_len);
+    }
+
+    var required_err: Error? = validateRequiredString(value, field_name);
+    if (required_err != nil) {
+        return required_err;
+    }
+
+    if (len(value) < min_len) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateStringMinLen: value shorter than minLen",
+                             "validate.stringMinLen.short",
+                             field_name,
+                             min_len);
+    }
+
+    return nil;
+}
+
+func validateStringMaxLen(value: string, field_name: string, max_len: int): Error? {
+    if (max_len < 0) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateStringMaxLen: maxLen must be >= 0",
+                             "validate.stringMaxLen.max",
+                             field_name,
+                             max_len);
+    }
+
+    if (len(value) > max_len) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateStringMaxLen: value longer than maxLen",
+                             "validate.stringMaxLen.long",
+                             field_name,
+                             max_len);
+    }
+
+    return nil;
+}
+
+func validateIntRange(value: int, field_name: string, min_value: int, max_value: int): Error? {
+    if (min_value > max_value) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateIntRange: minValue must be <= maxValue",
+                             "validate.intRange.bounds",
+                             field_name,
+                             min_value);
+    }
+
+    if (value < min_value || value > max_value) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateIntRange: value out of range",
+                             "validate.intRange.value",
+                             field_name,
+                             value);
+    }
+
+    return nil;
+}
+
+func validateRequiredEmail(value: string, field_name: string): Error? {
+    var required_err: Error? = validateRequiredString(value, field_name);
+    if (required_err != nil) {
+        return required_err;
+    }
+
+    if (!validateEmail(value)) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredEmail: invalid email",
+                             "validate.requiredEmail.invalid",
+                             field_name,
+                             value);
+    }
+
+    return nil;
+}
+
+func validateRequiredHttpUrl(value: string, field_name: string): Error? {
+    var required_err: Error? = validateRequiredString(value, field_name);
+    if (required_err != nil) {
+        return required_err;
+    }
+
+    if (!validateUrlHttp(value)) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredHttpUrl: invalid HTTP/HTTPS URL",
+                             "validate.requiredHttpUrl.invalid",
+                             field_name,
+                             value);
+    }
+
+    return nil;
+}
+
+func validateRequiredUuid(value: string, field_name: string): Error? {
+    var required_err: Error? = validateRequiredString(value, field_name);
+    if (required_err != nil) {
+        return required_err;
+    }
+
+    if (!validateUuid(value)) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredUuid: invalid UUID",
+                             "validate.requiredUuid.invalid",
+                             field_name,
+                             value);
+    }
+
+    return nil;
+}
+
+func validateRequiredOneOf(value: string, field_name: string, allowed: array<string>): Error? {
+    var required_err: Error? = validateRequiredString(value, field_name);
+    if (required_err != nil) {
+        return required_err;
+    }
+
+    if (len(allowed) == 0) {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredOneOf: allowed list must be non-empty",
+                             "validate.requiredOneOf.allowed",
+                             field_name,
+                             nil);
+    }
+
+    foreach (candidate in allowed) {
+        if (value == candidate) {
+            return nil;
+        }
+    }
+
+    return validateError(ERR_INVALID_ARGUMENT,
+                         "validateRequiredOneOf: value not in allowed set",
+                         "validate.requiredOneOf.invalid",
+                         field_name,
+                         value);
+}
+
+func validateRequiredKeys(payload: map<string, any>, required_keys: array<string>, context: string): Error? {
+    if (trim(context) == "") {
+        return validateError(ERR_INVALID_ARGUMENT,
+                             "validateRequiredKeys: context must be non-empty",
+                             "validate.requiredKeys.context",
+                             "",
+                             nil);
+    }
+
+    foreach (key in required_keys) {
+        if (trim(key) == "") {
+            return validateError(ERR_INVALID_ARGUMENT,
+                                 "validateRequiredKeys: required key must be non-empty",
+                                 "validate.requiredKeys.key",
+                                 "",
+                                 key);
+        }
+
+        if (!mapHasString(payload, key)) {
+            return validateError(ERR_INVALID_ARGUMENT,
+                                 "validateRequiredKeys: missing required key",
+                                 "validate.requiredKeys.missing",
+                                 key,
+                                 context);
+        }
+
+        if (mapGetString(payload, key) == nil) {
+            return validateError(ERR_INVALID_ARGUMENT,
+                                 "validateRequiredKeys: required key is nil",
+                                 "validate.requiredKeys.nil",
+                                 key,
+                                 context);
+        }
+    }
+
+    return nil;
+}

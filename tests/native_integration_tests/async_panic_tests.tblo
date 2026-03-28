@@ -1,0 +1,122 @@
+async func deferBefore(task: Future[int]): int {
+    println("enter-before");
+    defer println("cleanup-before");
+    var value: int = await task;
+    println("after-before");
+    return value;
+}
+
+async func deferAfter(task: Future[int]): int {
+    println("enter-after");
+    var value: int = await task;
+    defer println("cleanup-after");
+    println("after-after");
+    return value;
+}
+
+async func asyncTry(text: string): (bigint, Error?) {
+    println("try-start-" + text);
+    defer println("cleanup-" + text);
+    var n: bigint = toBigInt(text)?;
+    println("try-ok-" + text);
+    return (n, nil);
+}
+
+async func awaitTry(task: Future[(bigint, Error?)]): (bigint, Error?) {
+    println("await-start");
+    defer println("await-cleanup");
+    var pair: (bigint, Error?) = await task;
+    var n: bigint = pair?;
+    println("await-ok");
+    return (n, nil);
+}
+
+async func panicAfterAwait(task: Future[int]): int {
+    println("panic-enter");
+    defer println("panic-cleanup");
+    var value: int = await task;
+    println(str(value));
+    panic("boom");
+    return value;
+}
+
+async func panicNoAwait(): int {
+    println("panic-noawait-enter");
+    defer println("panic-noawait-cleanup");
+    panic("boom-now");
+    return 0;
+}
+
+async func inner(task: Future[int]): int {
+    defer println("inner-cleanup");
+    var value: int = await task;
+    println(str(value));
+    panic("inner-boom");
+    return value;
+}
+
+async func outer(task: Future[int]): int {
+    defer println("outer-cleanup");
+    return await inner(task);
+}
+
+func main(): void {
+    println("defer-before");
+    var first = futurePending<int>();
+    var before = deferBefore(first);
+    println(str(!futureIsReady(before)));
+    println(str(futureComplete(first, 11)));
+    println(str(futureIsReady(before)));
+    println(str(futureGet(before)));
+
+    println("defer-after");
+    var second = futurePending<int>();
+    var after = deferAfter(second);
+    println(str(!futureIsReady(after)));
+    println(str(futureComplete(second, 22)));
+    println(str(futureIsReady(after)));
+    println(str(futureGet(after)));
+
+    println("try-ok");
+    var ok = asyncTry("123");
+    var okv: (bigint, Error?) = futureGet(ok);
+    println(okv.0);
+    println(okv.1 == nil);
+
+    println("try-bad");
+    var bad = asyncTry("12x");
+    var badv: (bigint, Error?) = futureGet(bad);
+    println(badv.1 != nil);
+    if (badv.1 != nil) {
+        println(badv.1.code == ERR_PARSE);
+    }
+
+    println("await-try-bad");
+    var awaitedBad = awaitTry(futureResolved(toBigInt("45x")));
+    var awaitedBadv: (bigint, Error?) = futureGet(awaitedBad);
+    println(awaitedBadv.1 != nil);
+    if (awaitedBadv.1 != nil) {
+        println(awaitedBadv.1.code == ERR_PARSE);
+    }
+
+    println("panic-after-await");
+    var pendingPanic = futurePending<int>();
+    var panicked = panicAfterAwait(pendingPanic);
+    println(str(!futureIsReady(panicked)));
+    println(str(futureComplete(pendingPanic, 9)));
+    println(str(futureIsReady(panicked)));
+    println("after-panic-complete");
+
+    println("panic-noawait");
+    var noAwait = panicNoAwait();
+    println(str(futureIsReady(noAwait)));
+    println("after-noawait");
+
+    println("panic-inner-await");
+    var innerPending = futurePending<int>();
+    var outerTask = outer(innerPending);
+    println(str(!futureIsReady(outerTask)));
+    println(str(futureComplete(innerPending, 12)));
+    println(str(futureIsReady(outerTask)));
+    println("after-inner-panic");
+}

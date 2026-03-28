@@ -1,0 +1,5 @@
+import "circular_b.tblo";
+
+func main(): void {
+    println(1);
+}

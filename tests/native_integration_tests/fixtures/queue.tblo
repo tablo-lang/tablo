@@ -1,0 +1,341 @@
+// Queue/deque helpers with optional bounded capacity and typed wrappers.
+// State is explicit and immutable-style: operations return updated QueueStore.
+
+record QueueStore {
+    slots: map<string, any>,
+    head: int,
+    tail: int,
+    size: int,
+    maxSize: int,
+    droppedCount: int
+};
+
+record QueueStats {
+    size: int,
+    maxSize: int,
+    droppedCount: int,
+    head: int,
+    tail: int
+};
+
+func queueStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func queueError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return queueStdError(code, message, data);
+}
+
+func queueWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return queueStdError(err.code, err.message, data);
+}
+
+func queueDefaultStore(): QueueStore {
+    var store: QueueStore = {
+        slots: {},
+        head: 0,
+        tail: 0,
+        size: 0,
+        maxSize: 0,
+        droppedCount: 0
+    };
+    return store;
+}
+
+func queueSlotKey(index: int): string {
+    return str(index);
+}
+
+func queueValidateMaxSize(max_size: int): Error? {
+    if (max_size < 0 || max_size > 1000000) {
+        return queueError(ERR_INVALID_ARGUMENT,
+                          "maxSize must be between 0 and 1000000",
+                          "queue.config.maxSize",
+                          max_size);
+    }
+    return nil;
+}
+
+func queueHasCapacity(store: QueueStore, additional: int): bool {
+    if (store.maxSize == 0) {
+        return true;
+    }
+    return (store.size + additional) <= store.maxSize;
+}
+
+func queueNormalizeEmpty(store: QueueStore): QueueStore {
+    var next: QueueStore = store;
+    if (next.size == 0) {
+        next.head = 0;
+        next.tail = 0;
+    }
+    return next;
+}
+
+func queueNew(max_size: int): (QueueStore, Error?) {
+    var empty: QueueStore = queueDefaultStore();
+    var cfg_err = queueValidateMaxSize(max_size);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var store: QueueStore = {
+        slots: {},
+        head: 0,
+        tail: 0,
+        size: 0,
+        maxSize: max_size,
+        droppedCount: 0
+    };
+    return (store, nil);
+}
+
+func queueNewWithSeed(max_size: int, seed_items: array<any>): (QueueStore, Error?) {
+    var opened = queueNew(max_size);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    if (max_size > 0 && len(seed_items) > max_size) {
+        return (opened.0,
+                queueError(ERR_INVALID_ARGUMENT,
+                           "seed size exceeds maxSize",
+                           "queue.config.seedItems",
+                           len(seed_items)));
+    }
+
+    var next: QueueStore = opened.0;
+    foreach (item in seed_items) {
+        mapSetString(next.slots, queueSlotKey(next.tail), item);
+        next.tail = next.tail + 1;
+        next.size = next.size + 1;
+    }
+    return (next, nil);
+}
+
+func queueEnqueue(store: QueueStore, value: any): (QueueStore, Error?) {
+    var next: QueueStore = store;
+    if (!queueHasCapacity(next, 1)) {
+        return (next,
+                queueError(ERR_LIMIT,
+                           "queue full: maxSize reached",
+                           "queue.enqueue.full",
+                           {
+                               "maxSize": next.maxSize,
+                               "size": next.size
+                           } as any));
+    }
+
+    mapSetString(next.slots, queueSlotKey(next.tail), value);
+    next.tail = next.tail + 1;
+    next.size = next.size + 1;
+    return (next, nil);
+}
+
+func queuePushBack(store: QueueStore, value: any): (QueueStore, Error?) {
+    return queueEnqueue(store, value);
+}
+
+func queueTryEnqueue(store: QueueStore, value: any): (QueueStore, bool) {
+    var next: QueueStore = store;
+    if (!queueHasCapacity(next, 1)) {
+        next.droppedCount = next.droppedCount + 1;
+        return (next, false);
+    }
+
+    mapSetString(next.slots, queueSlotKey(next.tail), value);
+    next.tail = next.tail + 1;
+    next.size = next.size + 1;
+    return (next, true);
+}
+
+func queueEnqueueDropOldest(store: QueueStore, value: any): (QueueStore, bool) {
+    var next: QueueStore = store;
+    var dropped_oldest: bool = false;
+
+    if (!queueHasCapacity(next, 1) && next.size > 0) {
+        mapDeleteString(next.slots, queueSlotKey(next.head));
+        next.head = next.head + 1;
+        next.size = next.size - 1;
+        next.droppedCount = next.droppedCount + 1;
+        dropped_oldest = true;
+    }
+
+    mapSetString(next.slots, queueSlotKey(next.tail), value);
+    next.tail = next.tail + 1;
+    next.size = next.size + 1;
+    return (next, dropped_oldest);
+}
+
+func queuePushFront(store: QueueStore, value: any): (QueueStore, Error?) {
+    var next: QueueStore = store;
+    if (!queueHasCapacity(next, 1)) {
+        return (next,
+                queueError(ERR_LIMIT,
+                           "queue full: maxSize reached",
+                           "queue.pushFront.full",
+                           {
+                               "maxSize": next.maxSize,
+                               "size": next.size
+                           } as any));
+    }
+
+    if (next.size == 0) {
+        next.head = 0;
+        next.tail = 1;
+    } else {
+        next.head = next.head - 1;
+    }
+    mapSetString(next.slots, queueSlotKey(next.head), value);
+    next.size = next.size + 1;
+    return (next, nil);
+}
+
+func queueDequeue(store: QueueStore): (QueueStore, any, bool) {
+    var next: QueueStore = store;
+    if (next.size == 0) {
+        return (next, nil, false);
+    }
+
+    var key: string = queueSlotKey(next.head);
+    var value: any = mapGetString(next.slots, key);
+    mapDeleteString(next.slots, key);
+    next.head = next.head + 1;
+    next.size = next.size - 1;
+    next = queueNormalizeEmpty(next);
+    return (next, value, true);
+}
+
+func queuePopFront(store: QueueStore): (QueueStore, any, bool) {
+    return queueDequeue(store);
+}
+
+func queuePopBack(store: QueueStore): (QueueStore, any, bool) {
+    var next: QueueStore = store;
+    if (next.size == 0) {
+        return (next, nil, false);
+    }
+
+    var index: int = next.tail - 1;
+    var key: string = queueSlotKey(index);
+    var value: any = mapGetString(next.slots, key);
+    mapDeleteString(next.slots, key);
+    next.tail = index;
+    next.size = next.size - 1;
+    next = queueNormalizeEmpty(next);
+    return (next, value, true);
+}
+
+func queuePeekFront(store: QueueStore): (any, bool) {
+    if (store.size == 0) {
+        return (nil, false);
+    }
+    return (mapGetString(store.slots, queueSlotKey(store.head)), true);
+}
+
+func queuePeekBack(store: QueueStore): (any, bool) {
+    if (store.size == 0) {
+        return (nil, false);
+    }
+    return (mapGetString(store.slots, queueSlotKey(store.tail - 1)), true);
+}
+
+func queueEnqueueTyped(store: QueueStore, value: any, schema: any): (QueueStore, Error?) {
+    var decoded = jsonDecode(value, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                queueWrapError(decoded.1,
+                               "queue.enqueueTyped.schema",
+                               nil));
+    }
+    return queueEnqueue(store, decoded.0);
+}
+
+func queuePushFrontTyped(store: QueueStore, value: any, schema: any): (QueueStore, Error?) {
+    var decoded = jsonDecode(value, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                queueWrapError(decoded.1,
+                               "queue.pushFrontTyped.schema",
+                               nil));
+    }
+    return queuePushFront(store, decoded.0);
+}
+
+func queueDequeueTyped(store: QueueStore,
+                       schema: any): (QueueStore, any, bool, Error?) {
+    if (store.size == 0) {
+        return (store, nil, false, nil);
+    }
+
+    var front_any: any = mapGetString(store.slots, queueSlotKey(store.head));
+    var decoded = jsonDecode(front_any, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                nil,
+                false,
+                queueWrapError(decoded.1,
+                               "queue.dequeueTyped.schema",
+                               nil));
+    }
+
+    var popped = queueDequeue(store);
+    return (popped.0, decoded.0, popped.2, nil);
+}
+
+func queueLen(store: QueueStore): int {
+    return store.size;
+}
+
+func queueIsEmpty(store: QueueStore): bool {
+    return store.size == 0;
+}
+
+func queueClear(store: QueueStore): (QueueStore, int) {
+    var next: QueueStore = store;
+    var removed: int = next.size;
+    next.slots = {};
+    next.size = 0;
+    next.head = 0;
+    next.tail = 0;
+    return (next, removed);
+}
+
+func queueStats(store: QueueStore): QueueStats {
+    var stats: QueueStats = {
+        size: store.size,
+        maxSize: store.maxSize,
+        droppedCount: store.droppedCount,
+        head: store.head,
+        tail: store.tail
+    };
+    return stats;
+}
+
+func queueToArray(store: QueueStore): array<any> {
+    var out: array<any> = [];
+    if (store.size == 0) {
+        return out;
+    }
+
+    var i: int = store.head;
+    while (i < store.tail) {
+        var v: any = mapGetString(store.slots, queueSlotKey(i));
+        push(out, v);
+        i = i + 1;
+    }
+    return out;
+}

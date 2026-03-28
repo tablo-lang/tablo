@@ -1,0 +1,149 @@
+// Template stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_template_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_template_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/template.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func buildTemplateText(): string {
+    return "service={{service}} env={{env}} request={{request.id}} user={{user.name}} city={{user.city}} role={{user.role}} attempt={{attempt}} ts={{ts}} service2={{service}}";
+}
+
+func buildTemplateValuesFull(): map<string, any> {
+    var value_map: map<string, any> = {};
+    mapSetString(value_map, "service", "checkout");
+    mapSetString(value_map, "env", "prod");
+    mapSetString(value_map, "request.id", "req-2026-0001");
+    mapSetString(value_map, "user.name", "alex");
+    mapSetString(value_map, "user.city", "seattle");
+    mapSetString(value_map, "user.role", "admin");
+    mapSetString(value_map, "attempt", 3);
+    mapSetString(value_map, "ts", "2026-02-19T12:00:00Z");
+    return value_map;
+}
+
+func buildTemplateValuesPartial(): map<string, any> {
+    var value_map: map<string, any> = {};
+    mapSetString(value_map, "service", "checkout");
+    mapSetString(value_map, "env", "staging");
+    mapSetString(value_map, "request.id", "req-2026-0002");
+    mapSetString(value_map, "user.name", "sam");
+    return value_map;
+}
+
+func benchTemplateExtractKeys(iters: int): void {
+    var templateText: string = buildTemplateText();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = templateExtractKeys(templateText);
+        if (r_w.1 != nil) panic("templateExtractKeys warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = templateExtractKeys(templateText);
+        if (r.1 != nil) panic("templateExtractKeys failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf templateExtractKeys", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchTemplateRender(iters: int): void {
+    var templateText: string = buildTemplateText();
+    var value_map = buildTemplateValuesFull();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = templateRender(templateText, value_map);
+        if (r_w.1 != nil) panic("templateRender warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = templateRender(templateText, value_map);
+        if (r.1 != nil) panic("templateRender failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf templateRender", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchTemplateRenderWithDefault(iters: int): void {
+    var templateText: string = buildTemplateText();
+    var value_map = buildTemplateValuesPartial();
+    var missingDefault: string = "<missing>";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = templateRenderWithDefault(templateText, value_map, missingDefault);
+        if (r_w.1 != nil) panic("templateRenderWithDefault warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = templateRenderWithDefault(templateText, value_map, missingDefault);
+        if (r.1 != nil) panic("templateRenderWithDefault failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf templateRenderWithDefault", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Template Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchTemplateExtractKeys(140000 * scale);
+    benchTemplateRender(120000 * scale);
+    benchTemplateRenderWithDefault(130000 * scale);
+
+    println("Template stdlib benchmark complete!");
+}

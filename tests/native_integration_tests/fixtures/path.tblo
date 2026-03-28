@@ -1,0 +1,240 @@
+// Cross-platform path helpers for stdlib users.
+// Normalizes separators to '/' and supports Windows drive prefixes (e.g. C:/).
+
+func pathHasDrivePrefix(path: string): bool {
+    if (len(path) < 2) {
+        return false;
+    }
+    return substring(path, 1, 1) == ":";
+}
+
+func pathToSlash(path: string): string {
+    return replace(path, "\\", "/");
+}
+
+func pathLastSepIndex(path: string): int {
+    var i: int = 0;
+    var last: int = -1;
+    while (i < len(path)) {
+        if (substring(path, i, 1) == "/") {
+            last = i;
+        }
+        i = i + 1;
+    }
+    return last;
+}
+
+func pathClean(path: string): string {
+    if (path == "") {
+        return ".";
+    }
+
+    var p: string = pathToSlash(path);
+    var drive: string = "";
+    if (pathHasDrivePrefix(p)) {
+        drive = substring(p, 0, 2);
+        if (len(p) > 2) {
+            p = substring(p, 2, len(p) - 2);
+        } else {
+            p = "";
+        }
+    }
+
+    var rooted: bool = startsWith(p, "/");
+    var segments: array<string> = split(p, "/");
+    var out: array<string> = [];
+    foreach (segment in segments) {
+        if (segment == "" || segment == ".") {
+            continue;
+        }
+        if (segment == "..") {
+            if (len(out) > 0) {
+                var tail: string = out[len(out) - 1];
+                if (tail != "..") {
+                    pop(out);
+                } else {
+                    if (!rooted) {
+                        push(out, "..");
+                    }
+                }
+            } else {
+                if (!rooted) {
+                    push(out, "..");
+                }
+            }
+            continue;
+        }
+        push(out, segment);
+    }
+
+    var cleaned: string = ".";
+    if (len(out) == 0) {
+        if (rooted) {
+            cleaned = "/";
+        }
+    } else {
+        cleaned = join(out, "/");
+        if (rooted) {
+            cleaned = "/" + cleaned;
+        }
+    }
+
+    if (drive != "") {
+        if (cleaned == ".") {
+            if (rooted) {
+                return drive + "/";
+            }
+            return drive;
+        }
+        return drive + cleaned;
+    }
+
+    return cleaned;
+}
+
+func pathIsAbs(path: string): bool {
+    if (path == "") {
+        return false;
+    }
+
+    var p: string = pathToSlash(path);
+    if (startsWith(p, "/")) {
+        return true;
+    }
+    if (pathHasDrivePrefix(p)) {
+        if (len(p) >= 3) {
+            return substring(p, 2, 1) == "/";
+        }
+    }
+    return false;
+}
+
+func pathJoin(parts: array<string>): string {
+    var merged: string = "";
+    foreach (part in parts) {
+        if (part == "") {
+            continue;
+        }
+
+        var next: string = pathToSlash(part);
+        if (merged == "") {
+            merged = next;
+            continue;
+        }
+
+        if (pathIsAbs(next) || pathHasDrivePrefix(next)) {
+            merged = next;
+            continue;
+        }
+
+        if (!endsWith(merged, "/")) {
+            merged = merged + "/";
+        }
+        merged = merged + next;
+    }
+
+    if (merged == "") {
+        return ".";
+    }
+    return pathClean(merged);
+}
+
+func pathBase(path: string): string {
+    var clean: string = pathClean(path);
+    var p: string = clean;
+    if (pathHasDrivePrefix(p)) {
+        if (len(p) <= 2) {
+            return p;
+        }
+        p = substring(p, 2, len(p) - 2);
+    }
+
+    if (p == "/") {
+        return "/";
+    }
+
+    var idx: int = pathLastSepIndex(p);
+    if (idx < 0) {
+        return p;
+    }
+    var start: int = idx + 1;
+    return substring(p, start, len(p) - start);
+}
+
+func pathDir(path: string): string {
+    var clean: string = pathClean(path);
+    var p: string = clean;
+    var drive: string = "";
+    if (pathHasDrivePrefix(p)) {
+        drive = substring(p, 0, 2);
+        if (len(p) > 2) {
+            p = substring(p, 2, len(p) - 2);
+        } else {
+            p = "";
+        }
+    }
+
+    if (p == "/") {
+        if (drive != "") {
+            return drive + "/";
+        }
+        return "/";
+    }
+
+    var idx: int = pathLastSepIndex(p);
+    if (idx < 0) {
+        if (drive != "") {
+            return drive;
+        }
+        return ".";
+    }
+    if (idx == 0) {
+        if (drive != "") {
+            return drive + "/";
+        }
+        return "/";
+    }
+
+    var dir_part: string = substring(p, 0, idx);
+    if (drive != "") {
+        return drive + dir_part;
+    }
+    return dir_part;
+}
+
+func pathExtFromBase(base: string): string {
+    if (base == "" || base == "/" || base == "." || base == "..") {
+        return "";
+    }
+
+    var dot: int = -1;
+    var i: int = 0;
+    while (i < len(base)) {
+        if (substring(base, i, 1) == ".") {
+            dot = i;
+        }
+        i = i + 1;
+    }
+
+    if (dot <= 0) {
+        return "";
+    }
+    return substring(base, dot, len(base) - dot);
+}
+
+func pathExt(path: string): string {
+    return pathExtFromBase(pathBase(path));
+}
+
+func pathStem(path: string): string {
+    var base: string = pathBase(path);
+    var ext: string = pathExtFromBase(base);
+    if (ext == "") {
+        return base;
+    }
+    return substring(base, 0, len(base) - len(ext));
+}
+
+func pathSplit(path: string): (string, string) {
+    return (pathDir(path), pathBase(path));
+}

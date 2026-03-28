@@ -1,0 +1,46 @@
+import "fixtures/path.tblo";
+
+func main(): void {
+    println(pathClean("") == ".");
+    println(pathClean(".") == ".");
+    println(pathClean("./a/./b/../c") == "a/c");
+    println(pathClean("a//b///c") == "a/b/c");
+    println(pathClean("/a//b/../c/") == "/a/c");
+    println(pathClean("../a/../../b") == "../../b");
+    println(pathClean("C:\\tmp\\..\\logs\\app.txt") == "C:/logs/app.txt");
+
+    println(pathIsAbs("/a/b"));
+    println(pathIsAbs("C:\\a\\b"));
+    println(!pathIsAbs("a/b"));
+    println(!pathIsAbs("C:relative\\path"));
+
+    println(pathJoin(["api", "v1", "users"]) == "api/v1/users");
+    println(pathJoin(["/srv", "app", "..", "logs"]) == "/srv/logs");
+    println(pathJoin(["C:\\tmp", "data", "file.txt"]) == "C:/tmp/data/file.txt");
+    println(pathJoin(["a/b", "/override", "x"]) == "/override/x");
+
+    println(pathBase("/a/b/c.txt") == "c.txt");
+    println(pathBase("/") == "/");
+    println(pathBase("C:\\logs\\") == "logs");
+
+    println(pathDir("/a/b/c.txt") == "/a/b");
+    println(pathDir("note.txt") == ".");
+    println(pathDir("C:\\logs\\app.txt") == "C:/logs");
+    println(pathDir("C:note.txt") == "C:");
+
+    println(pathExt("archive.tar.gz") == ".gz");
+    println(pathExt(".gitignore") == "");
+    println(pathExt("/a/b/c") == "");
+
+    println(pathStem("/a/b/archive.tar.gz") == "archive.tar");
+    println(pathStem(".env") == ".env");
+    println(pathStem("/a/b/") == "b");
+
+    var split1 = pathSplit("/a/b/c.txt");
+    println(split1.0 == "/a/b");
+    println(split1.1 == "c.txt");
+
+    var split2 = pathSplit("C:\\tmp\\x");
+    println(split2.0 == "C:/tmp");
+    println(split2.1 == "x");
+}

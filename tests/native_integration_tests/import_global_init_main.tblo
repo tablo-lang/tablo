@@ -1,0 +1,5 @@
+import "fixtures/import_global_init.tblo";
+
+func main() {
+    println(imported);
+}

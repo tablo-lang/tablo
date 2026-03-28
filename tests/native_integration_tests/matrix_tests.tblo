@@ -1,0 +1,36 @@
+func row_sums(m: array<array<int>>): array<int> {
+    var sums: array<int> = [];
+    foreach (row in m) {
+        var s: int = 0;
+        foreach (x in row) {
+            s = s + x;
+        }
+        push(sums, s);
+    }
+    return sums;
+}
+
+func transpose(m: array<array<int>>): array<array<int>> {
+    var out: array<array<int>> = [];
+    if (len(m) == 0) { return out; }
+
+    var cols: int = len(m[0]);
+    var c: int = 0;
+    while (c < cols) {
+        var new_row: array<int> = [];
+        foreach (row in m) {
+            push(new_row, row[c]);
+        }
+        push(out, new_row);
+        c = c + 1;
+    }
+
+    return out;
+}
+
+func main() {
+    var m: array<array<int>> = [[1, 2, 3], [4, 5, 6]];
+    println(row_sums(m));
+    println(transpose(m));
+}
+

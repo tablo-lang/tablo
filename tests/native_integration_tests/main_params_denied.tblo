@@ -1,0 +1,3 @@
+func main(x: int): void {
+    println(x);
+}

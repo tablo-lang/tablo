@@ -1,0 +1,148 @@
+// Context stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_context_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_context_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/context.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchContextErrBackground(iters: int): void {
+    var bg: Context = contextBackground();
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var err_w = contextErr(bg);
+        if (err_w == nil) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var err = contextErr(bg);
+        if (err == nil) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf contextErrBackground", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchContextErrCanceled(iters: int): void {
+    var created = contextWithCancel(contextBackground());
+    if (created.1 != nil) {
+        println("perf contextErrCanceled: setup failed");
+        return;
+    }
+    var ctx: Context = created.0;
+    var cancel_err = contextCancel(ctx, nil);
+    if (cancel_err != nil) {
+        println("perf contextErrCanceled: cancel failed");
+        return;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var err_w = contextErr(ctx);
+        if (err_w != nil) {
+            sink = sink + err_w.code;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var err = contextErr(ctx);
+        if (err != nil) {
+            sink = sink + err.code;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf contextErrCanceled", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchContextTimeoutSliceMs(iters: int): void {
+    var now_ms: int = timeMonotonicMillis();
+    var created = contextWithDeadlineMs(contextBackground(), now_ms + 60000);
+    if (created.1 != nil) {
+        println("perf contextTimeoutSliceMs: setup failed");
+        return;
+    }
+    var ctx: Context = created.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var slice_w: int = contextTimeoutSliceMs(ctx, 250);
+        if (slice_w > 0) {
+            sink = sink + slice_w;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var slice_ms: int = contextTimeoutSliceMs(ctx, 250);
+        if (slice_ms > 0) {
+            sink = sink + slice_ms;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf contextTimeoutSliceMs", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Context Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchContextErrBackground(220000 * scale);
+    benchContextErrCanceled(180000 * scale);
+    benchContextTimeoutSliceMs(200000 * scale);
+
+    println("Context stdlib benchmark complete!");
+}

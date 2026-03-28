@@ -1,0 +1,69 @@
+async func recvLater(channelId: int): (any, Error?) {
+    return await asyncChannelRecv(channelId);
+}
+
+async func sendLater(channelId: int, value: any): (bool, Error?) {
+    return await asyncChannelSend(channelId, value);
+}
+
+async func recvTypedInt(channelId: int): (any, Error?) {
+    return await asyncChannelRecvTyped(channelId, "int" as any);
+}
+
+func main(): void {
+    var created = syncChannelCreate(1);
+    var ch = created.0 as int;
+    var recvTask = recvLater(ch);
+    println(str(futureIsReady(recvTask)));
+    var sent = syncChannelSend(ch, 41 as any, 5000);
+    println(str(sent.0 as bool));
+    while (!futureIsReady(recvTask)) {
+    }
+    var recvResult = futureGet(recvTask);
+    println(str(recvResult.0 as int));
+    println(str(recvResult.1 == nil));
+
+    var created2 = syncChannelCreate(1);
+    var ch2 = created2.0 as int;
+    var preload = syncChannelSend(ch2, 1 as any, 5000);
+    var sendTask = sendLater(ch2, 2 as any);
+    println(str(futureIsReady(sendTask)));
+    var first = syncChannelRecv(ch2, 5000);
+    println(str(first.0 as int));
+    while (!futureIsReady(sendTask)) {
+    }
+    var sendResult = futureGet(sendTask);
+    println(str(sendResult.0 as bool));
+    var second = syncChannelRecv(ch2, 5000);
+    println(str(second.0 as int));
+
+    var created3 = syncChannelCreate(1);
+    var ch3 = created3.0 as int;
+    var typedTask = recvTypedInt(ch3);
+    var typedSend = syncChannelSendTyped(ch3, 12 as any, "int" as any, 5000);
+    while (!futureIsReady(typedTask)) {
+    }
+    var typedResult = futureGet(typedTask);
+    println(str(typedResult.0 as int));
+
+    var created4 = syncChannelCreate(1);
+    var ch4 = created4.0 as int;
+    var closedRecvTask = recvLater(ch4);
+    var closeRecv = syncChannelClose(ch4);
+    while (!futureIsReady(closedRecvTask)) {
+    }
+    var closedRecv = futureGet(closedRecvTask);
+    println(str(closedRecv.0 == nil));
+    println(str(closedRecv.1 != nil));
+
+    var created5 = syncChannelCreate(1);
+    var ch5 = created5.0 as int;
+    var preload2 = syncChannelSend(ch5, 1 as any, 5000);
+    var blockedSendTask = sendLater(ch5, 2 as any);
+    var closeSend = syncChannelClose(ch5);
+    while (!futureIsReady(blockedSendTask)) {
+    }
+    var blockedSend = futureGet(blockedSendTask);
+    println(str(blockedSend.0 as bool));
+    println(str(blockedSend.1 != nil));
+}

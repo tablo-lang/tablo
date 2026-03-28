@@ -1,0 +1,799 @@
+// SemVer helpers for package/version workflows.
+// Supports strict semver parsing, comparison, and constraint checks.
+
+record SemverVersion {
+    major: int,
+    minor: int,
+    patch: int,
+    prerelease: string,
+    build: string
+}
+
+record SemverConstraintVersion {
+    version: SemverVersion,
+    coreParts: int
+}
+
+var SEMVER_LEX_ORDER: string = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+func semverStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func semverError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return semverStdError(code, message, data);
+}
+
+func semverEmpty(): SemverVersion {
+    var out: SemverVersion = {
+        major: 0,
+        minor: 0,
+        patch: 0,
+        prerelease: "",
+        build: ""
+    };
+    return out;
+}
+
+func semverIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func semverIsLetter(ch: string): bool {
+    return find("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", ch) >= 0;
+}
+
+func semverIsIdentifierChar(ch: string): bool {
+    return semverIsDigit(ch) || semverIsLetter(ch) || ch == "-";
+}
+
+func semverIsNumericIdentifier(text: string): bool {
+    if (text == "") {
+        return false;
+    }
+    var i: int = 0;
+    while (i < len(text)) {
+        if (!semverIsDigit(substring(text, i, 1))) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func semverValidateMetadata(text: string, context: string, enforceNumericLeadingZeroRule: bool): Error? {
+    if (text == "") {
+        return semverError(ERR_PARSE, "metadata segment cannot be empty", context + ".empty", text);
+    }
+
+    var parts: array<string> = split(text, ".");
+    var i: int = 0;
+    while (i < len(parts)) {
+        var part: string = parts[i];
+        if (part == "") {
+            return semverError(ERR_PARSE,
+                               "metadata identifiers cannot be empty",
+                               context + ".identifier",
+                               text);
+        }
+
+        var j: int = 0;
+        while (j < len(part)) {
+            var ch: string = substring(part, j, 1);
+            if (!semverIsIdentifierChar(ch)) {
+                var invalid_data: map<string, any> = {
+                    "identifier": part,
+                    "charIndex": j,
+                    "char": ch
+                };
+                return semverError(ERR_PARSE,
+                                   "metadata identifier contains invalid character",
+                                   context + ".character",
+                                   invalid_data);
+            }
+            j = j + 1;
+        }
+
+        if (enforceNumericLeadingZeroRule &&
+            semverIsNumericIdentifier(part) &&
+            len(part) > 1 &&
+            startsWith(part, "0")) {
+            return semverError(ERR_PARSE,
+                               "numeric metadata identifier cannot contain leading zero",
+                               context + ".leadingZero",
+                               part);
+        }
+
+        i = i + 1;
+    }
+
+    return nil;
+}
+
+func semverParseCorePart(part: string, context: string): (int, Error?) {
+    if (part == "") {
+        return (0, semverError(ERR_PARSE, "core segment cannot be empty", context + ".empty", part));
+    }
+
+    var i: int = 0;
+    while (i < len(part)) {
+        var ch: string = substring(part, i, 1);
+        if (!semverIsDigit(ch)) {
+            var invalid_data: map<string, any> = {
+                "segment": part,
+                "index": i,
+                "char": ch
+            };
+            return (0,
+                    semverError(ERR_PARSE,
+                                "core segment must contain only digits",
+                                context + ".digit",
+                                invalid_data));
+        }
+        i = i + 1;
+    }
+
+    if (len(part) > 1 && startsWith(part, "0")) {
+        return (0,
+                semverError(ERR_PARSE,
+                            "numeric core segment cannot contain leading zero",
+                            context + ".leadingZero",
+                            part));
+    }
+
+    return (toInt(part), nil);
+}
+
+func semverParseCore(core: string, minParts: int, maxParts: int, context: string): (array<int>, Error?) {
+    var out: array<int> = [];
+    var parts: array<string> = split(core, ".");
+    if (len(parts) < minParts || len(parts) > maxParts) {
+        var detail: map<string, any> = {
+            "core": core,
+            "parts": len(parts),
+            "minParts": minParts,
+            "maxParts": maxParts
+        };
+        return (out,
+                semverError(ERR_PARSE,
+                            "invalid core part count",
+                            context + ".parts",
+                            detail));
+    }
+
+    var i: int = 0;
+    while (i < len(parts)) {
+        var p = semverParseCorePart(parts[i], context + ".part");
+        if (p.1 != nil) {
+            return (out, p.1);
+        }
+        push(out, p.0);
+        i = i + 1;
+    }
+    return (out, nil);
+}
+
+func semverParseInternal(text: string, minCoreParts: int, maxCoreParts: int): (SemverConstraintVersion, Error?) {
+    var empty: SemverConstraintVersion = {
+        version: semverEmpty(),
+        coreParts: 0
+    };
+
+    var raw: string = trim(text);
+    if (raw == "") {
+        return (empty,
+                semverError(ERR_INVALID_ARGUMENT,
+                            "version text cannot be empty",
+                            "semver.parse.empty",
+                            text));
+    }
+
+    var main: string = raw;
+    var build: string = "";
+    var plus_idx: int = find(main, "+");
+    if (plus_idx >= 0) {
+        var after_plus: string = substring(main, plus_idx + 1, len(main) - (plus_idx + 1));
+        if (after_plus == "") {
+            return (empty,
+                    semverError(ERR_PARSE,
+                                "build metadata must not be empty",
+                                "semver.parse.build",
+                                raw));
+        }
+        if (find(after_plus, "+") >= 0) {
+            return (empty,
+                    semverError(ERR_PARSE,
+                                "build metadata may only contain one '+' separator",
+                                "semver.parse.buildSeparator",
+                                raw));
+        }
+
+        build = after_plus;
+        main = substring(main, 0, plus_idx);
+
+        var build_err: Error? = semverValidateMetadata(build, "semver.parse.build", false);
+        if (build_err != nil) {
+            return (empty, build_err);
+        }
+    }
+
+    var core: string = main;
+    var prerelease: string = "";
+    var dash_idx: int = find(main, "-");
+    if (dash_idx >= 0) {
+        prerelease = substring(main, dash_idx + 1, len(main) - (dash_idx + 1));
+        core = substring(main, 0, dash_idx);
+        if (prerelease == "") {
+            return (empty,
+                    semverError(ERR_PARSE,
+                                "prerelease metadata must not be empty",
+                                "semver.parse.prerelease",
+                                raw));
+        }
+        var pre_err: Error? = semverValidateMetadata(prerelease, "semver.parse.prerelease", true);
+        if (pre_err != nil) {
+            return (empty, pre_err);
+        }
+    }
+
+    var core_parts = semverParseCore(core, minCoreParts, maxCoreParts, "semver.parse.core");
+    if (core_parts.1 != nil) {
+        return (empty, core_parts.1);
+    }
+
+    if (len(core_parts.0) < 3 && (prerelease != "" || build != "")) {
+        return (empty,
+                semverError(ERR_PARSE,
+                            "prerelease/build requires full major.minor.patch core",
+                            "semver.parse.partialCoreMeta",
+                            raw));
+    }
+
+    var major: int = core_parts.0[0];
+    var minor: int = 0;
+    var patch: int = 0;
+    if (len(core_parts.0) >= 2) {
+        minor = core_parts.0[1];
+    }
+    if (len(core_parts.0) >= 3) {
+        patch = core_parts.0[2];
+    }
+
+    var out_version: SemverVersion = {
+        major: major,
+        minor: minor,
+        patch: patch,
+        prerelease: prerelease,
+        build: build
+    };
+    var out: SemverConstraintVersion = {
+        version: out_version,
+        coreParts: len(core_parts.0)
+    };
+    return (out, nil);
+}
+
+func semverParse(text: string): (SemverVersion, Error?) {
+    var r = semverParseInternal(text, 3, 3);
+    if (r.1 != nil) {
+        return (semverEmpty(), r.1);
+    }
+    return (r.0.version, nil);
+}
+
+func semverString(version: SemverVersion): string {
+    var out: string = str(version.major) + "." + str(version.minor) + "." + str(version.patch);
+    if (version.prerelease != "") {
+        out = out + "-" + version.prerelease;
+    }
+    if (version.build != "") {
+        out = out + "+" + version.build;
+    }
+    return out;
+}
+
+func semverNormalize(text: string): (string, Error?) {
+    var parsed = semverParse(text);
+    if (parsed.1 != nil) {
+        return ("", parsed.1);
+    }
+    return (semverString(parsed.0), nil);
+}
+
+func semverIsValid(text: string): bool {
+    var parsed = semverParse(text);
+    return parsed.1 == nil;
+}
+
+func semverCompareIdentifier(left: string, right: string): int {
+    var left_num: bool = semverIsNumericIdentifier(left);
+    var right_num: bool = semverIsNumericIdentifier(right);
+
+    if (left_num && right_num) {
+        var l: int = toInt(left);
+        var r: int = toInt(right);
+        if (l < r) return -1;
+        if (l > r) return 1;
+        return 0;
+    }
+    if (left_num && !right_num) {
+        return -1;
+    }
+    if (!left_num && right_num) {
+        return 1;
+    }
+
+    var i: int = 0;
+    var min_len: int = len(left);
+    if (len(right) < min_len) {
+        min_len = len(right);
+    }
+    while (i < min_len) {
+        var lch: string = substring(left, i, 1);
+        var rch: string = substring(right, i, 1);
+        if (lch != rch) {
+            var li: int = find(SEMVER_LEX_ORDER, lch);
+            var ri: int = find(SEMVER_LEX_ORDER, rch);
+            if (li < ri) return -1;
+            return 1;
+        }
+        i = i + 1;
+    }
+    if (len(left) < len(right)) return -1;
+    if (len(left) > len(right)) return 1;
+    return 0;
+}
+
+func semverComparePrerelease(left: string, right: string): int {
+    if (left == "" && right == "") {
+        return 0;
+    }
+    if (left == "") {
+        return 1;
+    }
+    if (right == "") {
+        return -1;
+    }
+
+    var left_parts: array<string> = split(left, ".");
+    var right_parts: array<string> = split(right, ".");
+    var i: int = 0;
+    while (i < len(left_parts) && i < len(right_parts)) {
+        var cmp: int = semverCompareIdentifier(left_parts[i], right_parts[i]);
+        if (cmp != 0) {
+            return cmp;
+        }
+        i = i + 1;
+    }
+
+    if (len(left_parts) < len(right_parts)) {
+        return -1;
+    }
+    if (len(left_parts) > len(right_parts)) {
+        return 1;
+    }
+    return 0;
+}
+
+func semverCompareParsed(left: SemverVersion, right: SemverVersion): int {
+    if (left.major < right.major) return -1;
+    if (left.major > right.major) return 1;
+
+    if (left.minor < right.minor) return -1;
+    if (left.minor > right.minor) return 1;
+
+    if (left.patch < right.patch) return -1;
+    if (left.patch > right.patch) return 1;
+
+    return semverComparePrerelease(left.prerelease, right.prerelease);
+}
+
+func semverCompare(left: string, right: string): (int, Error?) {
+    var l = semverParse(left);
+    if (l.1 != nil) {
+        return (0,
+                semverError(ERR_PARSE,
+                            "invalid left version for semverCompare",
+                            "semverCompare.left",
+                            left));
+    }
+    var r = semverParse(right);
+    if (r.1 != nil) {
+        return (0,
+                semverError(ERR_PARSE,
+                            "invalid right version for semverCompare",
+                            "semverCompare.right",
+                            right));
+    }
+    return (semverCompareParsed(l.0, r.0), nil);
+}
+
+func semverIsWildcardSegment(segment: string): bool {
+    return segment == "x" || segment == "X" || segment == "*";
+}
+
+func semverTokenHasWildcard(token: string): bool {
+    return find(token, "x") >= 0 || find(token, "X") >= 0 || find(token, "*") >= 0;
+}
+
+func semverLooksPartialCore(token: string): bool {
+    if (find(token, "-") >= 0 || find(token, "+") >= 0) {
+        return false;
+    }
+    var parts: array<string> = split(token, ".");
+    return len(parts) < 3;
+}
+
+func semverMatchWildcard(version: SemverVersion, token: string): (bool, Error?) {
+    var raw: string = trim(token);
+    if (raw == "" || semverIsWildcardSegment(raw)) {
+        return (true, nil);
+    }
+
+    if (find(raw, "-") >= 0 || find(raw, "+") >= 0) {
+        return (false,
+                semverError(ERR_PARSE,
+                            "wildcard constraints cannot include prerelease/build metadata",
+                            "semverMatchWildcard.metadata",
+                            raw));
+    }
+
+    var parts: array<string> = split(raw, ".");
+    if (len(parts) < 1 || len(parts) > 3) {
+        return (false,
+                semverError(ERR_PARSE,
+                            "wildcard constraints must have 1..3 core segments",
+                            "semverMatchWildcard.parts",
+                            raw));
+    }
+
+    var seen_wildcard: bool = false;
+    var i: int = 0;
+    while (i < len(parts)) {
+        var part: string = parts[i];
+        if (semverIsWildcardSegment(part)) {
+            seen_wildcard = true;
+            i = i + 1;
+            continue;
+        }
+        if (seen_wildcard) {
+            return (false,
+                    semverError(ERR_PARSE,
+                                "wildcards must be trailing segments",
+                                "semverMatchWildcard.trailing",
+                                raw));
+        }
+        var parsed = semverParseCorePart(part, "semverMatchWildcard.part");
+        if (parsed.1 != nil) {
+            return (false, parsed.1);
+        }
+
+        if (i == 0 && version.major != parsed.0) return (false, nil);
+        if (i == 1 && version.minor != parsed.0) return (false, nil);
+        if (i == 2 && version.patch != parsed.0) return (false, nil);
+        i = i + 1;
+    }
+
+    return (true, nil);
+}
+
+func semverComparatorValue(token: string, op: string): string {
+    return trim(substring(token, len(op), len(token) - len(op)));
+}
+
+func semverUpperBoundForTilde(base: SemverConstraintVersion): SemverVersion {
+    var upper: SemverVersion = {
+        major: base.version.major,
+        minor: base.version.minor,
+        patch: base.version.patch,
+        prerelease: "",
+        build: ""
+    };
+
+    if (base.coreParts <= 1) {
+        upper.major = upper.major + 1;
+        upper.minor = 0;
+        upper.patch = 0;
+    } else {
+        upper.minor = upper.minor + 1;
+        upper.patch = 0;
+    }
+    upper.prerelease = "";
+    upper.build = "";
+    return upper;
+}
+
+func semverUpperBoundForCaret(base: SemverConstraintVersion): SemverVersion {
+    var upper: SemverVersion = {
+        major: base.version.major,
+        minor: base.version.minor,
+        patch: base.version.patch,
+        prerelease: "",
+        build: ""
+    };
+
+    if (base.coreParts <= 1) {
+        upper.major = upper.major + 1;
+        upper.minor = 0;
+        upper.patch = 0;
+        return upper;
+    }
+
+    if (base.coreParts == 2) {
+        if (upper.major > 0) {
+            upper.major = upper.major + 1;
+            upper.minor = 0;
+            upper.patch = 0;
+        } else {
+            upper.minor = upper.minor + 1;
+            upper.patch = 0;
+        }
+        return upper;
+    }
+
+    if (upper.major > 0) {
+        upper.major = upper.major + 1;
+        upper.minor = 0;
+        upper.patch = 0;
+    } else if (upper.minor > 0) {
+        upper.minor = upper.minor + 1;
+        upper.patch = 0;
+    } else {
+        upper.patch = upper.patch + 1;
+    }
+    return upper;
+}
+
+func semverEvaluateComparator(version: SemverVersion, token: string): (bool, Error?) {
+    var raw: string = trim(token);
+    if (raw == "") {
+        return (true, nil);
+    }
+
+    var op: string = "";
+    var value: string = raw;
+
+    if (startsWith(raw, ">=")) {
+        op = ">=";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "<=")) {
+        op = "<=";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "==")) {
+        op = "==";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "!=")) {
+        op = "!=";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, ">")) {
+        op = ">";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "<")) {
+        op = "<";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "=")) {
+        op = "=";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "^")) {
+        op = "^";
+        value = semverComparatorValue(raw, op);
+    } else if (startsWith(raw, "~")) {
+        op = "~";
+        value = semverComparatorValue(raw, op);
+    }
+
+    if (value == "") {
+        return (false,
+                semverError(ERR_PARSE,
+                            "comparator is missing version value",
+                            "semverEvaluateComparator.value",
+                            raw));
+    }
+
+    if (op == "") {
+        if (semverTokenHasWildcard(value) || semverLooksPartialCore(value)) {
+            return semverMatchWildcard(version, value);
+        }
+        var strict = semverParse(value);
+        if (strict.1 != nil) {
+            return (false, strict.1);
+        }
+        return (semverCompareParsed(version, strict.0) == 0, nil);
+    }
+
+    var target = semverParseInternal(value, 1, 3);
+    if (target.1 != nil) {
+        return (false, target.1);
+    }
+
+    if (op == "^") {
+        var upper_caret: SemverVersion = semverUpperBoundForCaret(target.0);
+        var cmp_lower_caret: int = semverCompareParsed(version, target.0.version);
+        var cmp_upper_caret: int = semverCompareParsed(version, upper_caret);
+        return (cmp_lower_caret >= 0 && cmp_upper_caret < 0, nil);
+    }
+
+    if (op == "~") {
+        var upper_tilde: SemverVersion = semverUpperBoundForTilde(target.0);
+        var cmp_lower_tilde: int = semverCompareParsed(version, target.0.version);
+        var cmp_upper_tilde: int = semverCompareParsed(version, upper_tilde);
+        return (cmp_lower_tilde >= 0 && cmp_upper_tilde < 0, nil);
+    }
+
+    var cmp: int = semverCompareParsed(version, target.0.version);
+    if (op == ">" ) return (cmp > 0, nil);
+    if (op == ">=") return (cmp >= 0, nil);
+    if (op == "<" ) return (cmp < 0, nil);
+    if (op == "<=") return (cmp <= 0, nil);
+    if (op == "==" || op == "=") return (cmp == 0, nil);
+    if (op == "!=") return (cmp != 0, nil);
+
+    return (false,
+            semverError(ERR_PARSE,
+                        "unsupported comparator operator",
+                        "semverEvaluateComparator.operator",
+                        op));
+}
+
+func semverConstraintTokens(group: string): array<string> {
+    var normalized: string = replace(group, ",", " ");
+    normalized = replace(normalized, "\t", " ");
+    normalized = replace(normalized, "\n", " ");
+    normalized = replace(normalized, "\r", " ");
+
+    var raw: array<string> = split(normalized, " ");
+    var out: array<string> = [];
+    foreach (item in raw) {
+        if (item != "") {
+            push(out, item);
+        }
+    }
+    return out;
+}
+
+func semverEvaluateGroup(version: SemverVersion, group: string): (bool, Error?) {
+    var tokens: array<string> = semverConstraintTokens(group);
+    if (len(tokens) == 0) {
+        return (false,
+                semverError(ERR_PARSE,
+                            "constraint group cannot be empty",
+                            "semverEvaluateGroup.empty",
+                            group));
+    }
+
+    if (len(tokens) == 3) {
+        if (tokens[1] == "-") {
+            var left = semverParseInternal(tokens[0], 1, 3);
+            if (left.1 != nil) {
+                return (false, left.1);
+            }
+            var right = semverParseInternal(tokens[2], 1, 3);
+            if (right.1 != nil) {
+                return (false, right.1);
+            }
+
+            if (semverCompareParsed(left.0.version, right.0.version) > 0) {
+                return (false,
+                        semverError(ERR_PARSE,
+                                    "hyphen range lower bound exceeds upper bound",
+                                    "semverEvaluateGroup.hyphenOrder",
+                                    group));
+            }
+
+            var cmp_left: int = semverCompareParsed(version, left.0.version);
+            var cmp_right: int = semverCompareParsed(version, right.0.version);
+            return (cmp_left >= 0 && cmp_right <= 0, nil);
+        }
+    }
+
+    foreach (token in tokens) {
+        var comparator_result = semverEvaluateComparator(version, token);
+        if (comparator_result.1 != nil) {
+            return (false, comparator_result.1);
+        }
+        if (!comparator_result.0) {
+            return (false, nil);
+        }
+    }
+    return (true, nil);
+}
+
+func semverSatisfies(versionText: string, constraintText: string): (bool, Error?) {
+    var version = semverParse(versionText);
+    if (version.1 != nil) {
+        return (false,
+                semverError(ERR_PARSE,
+                            "invalid version in semverSatisfies",
+                            "semverSatisfies.version",
+                            versionText));
+    }
+
+    var raw_constraint: string = trim(constraintText);
+    if (raw_constraint == "") {
+        return (false,
+                semverError(ERR_INVALID_ARGUMENT,
+                            "constraint cannot be empty",
+                            "semverSatisfies.constraint",
+                            constraintText));
+    }
+
+    var groups: array<string> = split(raw_constraint, "||");
+    var has_non_empty_group: bool = false;
+    foreach (group in groups) {
+        var g: string = trim(group);
+        if (g == "") {
+            continue;
+        }
+        has_non_empty_group = true;
+
+        var r = semverEvaluateGroup(version.0, g);
+        if (r.1 != nil) {
+            return (false, r.1);
+        }
+        if (r.0) {
+            return (true, nil);
+        }
+    }
+
+    if (!has_non_empty_group) {
+        return (false,
+                semverError(ERR_PARSE,
+                            "constraint contains no valid groups",
+                            "semverSatisfies.groups",
+                            constraintText));
+    }
+    return (false, nil);
+}
+
+func semverBumpMajor(text: string): (string, Error?) {
+    var parsed = semverParse(text);
+    if (parsed.1 != nil) {
+        return ("", parsed.1);
+    }
+
+    var next: SemverVersion = {
+        major: parsed.0.major + 1,
+        minor: 0,
+        patch: 0,
+        prerelease: "",
+        build: ""
+    };
+    return (semverString(next), nil);
+}
+
+func semverBumpMinor(text: string): (string, Error?) {
+    var parsed = semverParse(text);
+    if (parsed.1 != nil) {
+        return ("", parsed.1);
+    }
+
+    var next: SemverVersion = {
+        major: parsed.0.major,
+        minor: parsed.0.minor + 1,
+        patch: 0,
+        prerelease: "",
+        build: ""
+    };
+    return (semverString(next), nil);
+}
+
+func semverBumpPatch(text: string): (string, Error?) {
+    var parsed = semverParse(text);
+    if (parsed.1 != nil) {
+        return ("", parsed.1);
+    }
+
+    var next: SemverVersion = {
+        major: parsed.0.major,
+        minor: parsed.0.minor,
+        patch: parsed.0.patch + 1,
+        prerelease: "",
+        build: ""
+    };
+    return (semverString(next), nil);
+}

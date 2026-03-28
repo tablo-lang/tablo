@@ -1,0 +1,46 @@
+// Tuple Return Tests - Tests functions returning multiple values
+
+// Test 1: Simple function returning a pair
+func make_point(x: int, y: int): (int, int) {
+    return (x, y);
+}
+
+// Test 2: Function returning triple
+func get_dimensions(): (int, int, string) {
+    return (1920, 1080, "Full HD");
+}
+
+// Test 3: Function returning mixed types
+func get_user(): (string, int) {
+    return ("Alice", 30);
+}
+
+// Test 4: Divide with remainder
+func divide(dividend: int, divisor: int): (int, int) {
+    var quotient: int = dividend / divisor;
+    var remainder: int = dividend % divisor;
+    return (quotient, remainder);
+}
+
+func main(): void {
+    // Test make_point
+    var p: (int, int) = make_point(10, 20);
+    println(p.0);
+    println(p.1);
+
+    // Test get_dimensions
+    var dims: (int, int, string) = get_dimensions();
+    println(dims.0);
+    println(dims.1);
+    println(dims.2);
+
+    // Test get_user
+    var user: (string, int) = get_user();
+    println(user.0);
+    println(user.1);
+
+    // Test divide
+    var result: (int, int) = divide(17, 5);
+    println(result.0);
+    println(result.1);
+}

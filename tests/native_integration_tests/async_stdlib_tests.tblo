@@ -1,0 +1,184 @@
+import "fixtures/async.tblo";
+
+async func completeAfter(task: Future[int], value: int, delayMs: int): bool {
+    await asyncSleep(delayMs);
+    return futureComplete(task, value);
+}
+
+func main(): void {
+    var left = futurePending<int>();
+    var right = futurePending<int>();
+    var all = asyncAwaitAll([left, futureResolved(2), right]);
+    println(!futureIsReady(all));
+    println(futureComplete(right, 30));
+    println(!futureIsReady(all));
+    println(futureComplete(left, 10));
+    while (!futureIsReady(all)) {
+    }
+    var allValues = futureGet(all);
+    println(len(allValues) == 3);
+    println(allValues[0] == 10);
+    println(allValues[1] == 2);
+    println(allValues[2] == 30);
+
+    var emptyAll = asyncAwaitAll<int>([]);
+    while (!futureIsReady(emptyAll)) {
+    }
+    println(len(futureGet(emptyAll)) == 0);
+
+    var pairLeft = futurePending<int>();
+    var pair = asyncAwaitAll2(pairLeft, futureResolved("z"));
+    println(!futureIsReady(pair));
+    println(futureComplete(pairLeft, 7));
+    while (!futureIsReady(pair)) {
+    }
+    var pairValue = futureGet(pair);
+    println(pairValue.0 == 7);
+    println(pairValue.1 == "z");
+
+    var triple = asyncAwaitAll3(futureResolved(1), futureResolved(2), futureResolved("ok"));
+    println(futureIsReady(triple));
+    var tripleValue = futureGet(triple);
+    println(tripleValue.0 == 1);
+    println(tripleValue.1 == 2);
+    println(tripleValue.2 == "ok");
+
+    var race = asyncAwaitAny([futurePending<int>(), futureResolved(9)], 1);
+    while (!futureIsReady(race)) {
+    }
+    var raceResult = futureGet(race);
+    println(raceResult.error == nil);
+    println(raceResult.ready);
+    println(!raceResult.timedOut);
+    println(raceResult.index == 1);
+    println(raceResult.value != nil);
+    if (raceResult.value != nil) {
+        println((raceResult.value as int) == 9);
+    }
+
+    var first = futurePending<int>();
+    var second = futurePending<int>();
+    var anyTask = asyncAwaitAnyDefault([first, second]);
+    println(!futureIsReady(anyTask));
+    println(futureComplete(second, 22));
+    while (!futureIsReady(anyTask)) {
+    }
+    var anyResult = futureGet(anyTask);
+    println(anyResult.error == nil);
+    println(anyResult.ready);
+    println(!anyResult.timedOut);
+    println(anyResult.index == 1);
+    println(anyResult.value != nil);
+    if (anyResult.value != nil) {
+        println((anyResult.value as int) == 22);
+    }
+
+    var delayed = futurePending<int>();
+    var delayedResolver = completeAfter(delayed, 44, 2);
+    var delayedTimeout = asyncAwaitWithTimeoutDefault(delayed, 10);
+    while (!futureIsReady(delayedTimeout)) {
+    }
+    var delayedResult = futureGet(delayedTimeout);
+    println(delayedResult.error == nil);
+    println(delayedResult.ready);
+    println(!delayedResult.timedOut);
+    println(delayedResult.value != nil);
+    if (delayedResult.value != nil) {
+        println((delayedResult.value as int) == 44);
+    }
+    while (!futureIsReady(delayedResolver)) {
+    }
+    println(futureGet(delayedResolver));
+
+    var instantTimeout = asyncAwaitWithTimeout(futureResolved(5), 0, 1);
+    while (!futureIsReady(instantTimeout)) {
+    }
+    var instantTimeoutResult = futureGet(instantTimeout);
+    println(instantTimeoutResult.error == nil);
+    println(instantTimeoutResult.ready);
+    println(!instantTimeoutResult.timedOut);
+    println((instantTimeoutResult.value as int) == 5);
+
+    var expired = asyncAwaitWithTimeoutDefault(futurePending<int>(), 0);
+    while (!futureIsReady(expired)) {
+    }
+    var expiredResult = futureGet(expired);
+    println(expiredResult.error == nil);
+    println(!expiredResult.ready);
+    println(expiredResult.timedOut);
+    println(expiredResult.value == nil);
+
+    var badTimeout = asyncAwaitWithTimeout(futureResolved(1), -1, 1);
+    while (!futureIsReady(badTimeout)) {
+    }
+    var badTimeoutResult = futureGet(badTimeout);
+    println(badTimeoutResult.error != nil);
+    println(!badTimeoutResult.ready);
+    println(!badTimeoutResult.timedOut);
+    if (badTimeoutResult.error != nil) {
+        println(badTimeoutResult.error.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var badTimeoutPoll = asyncAwaitWithTimeout(futureResolved(1), 1, 0);
+    while (!futureIsReady(badTimeoutPoll)) {
+    }
+    var badTimeoutPollResult = futureGet(badTimeoutPoll);
+    println(badTimeoutPollResult.error != nil);
+    println(!badTimeoutPollResult.ready);
+    println(!badTimeoutPollResult.timedOut);
+    if (badTimeoutPollResult.error != nil) {
+        println(badTimeoutPollResult.error.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var anyTimeoutPending = futurePending<int>();
+    var anyTimeout = asyncAwaitAnyWithTimeoutDefault([anyTimeoutPending], 0);
+    while (!futureIsReady(anyTimeout)) {
+    }
+    var anyTimeoutResult = futureGet(anyTimeout);
+    println(anyTimeoutResult.error == nil);
+    println(!anyTimeoutResult.ready);
+    println(anyTimeoutResult.timedOut);
+    println(anyTimeoutResult.index == -1);
+    println(anyTimeoutResult.value == nil);
+
+    var raceLaterLeft = futurePending<int>();
+    var raceLaterRight = futurePending<int>();
+    var raceLaterResolver = completeAfter(raceLaterRight, 88, 2);
+    var anyDelayed = asyncAwaitAnyWithTimeout([raceLaterLeft, raceLaterRight], 10, 1);
+    while (!futureIsReady(anyDelayed)) {
+    }
+    var anyDelayedResult = futureGet(anyDelayed);
+    println(anyDelayedResult.error == nil);
+    println(anyDelayedResult.ready);
+    println(!anyDelayedResult.timedOut);
+    println(anyDelayedResult.index == 1);
+    println((anyDelayedResult.value as int) == 88);
+    while (!futureIsReady(raceLaterResolver)) {
+    }
+    println(futureGet(raceLaterResolver));
+
+    var emptyAny = asyncAwaitAny<int>([], 1);
+    while (!futureIsReady(emptyAny)) {
+    }
+    var emptyAnyResult = futureGet(emptyAny);
+    println(emptyAnyResult.error != nil);
+    println(!emptyAnyResult.ready);
+    println(!emptyAnyResult.timedOut);
+    println(emptyAnyResult.index == -1);
+    if (emptyAnyResult.error != nil) {
+        println(emptyAnyResult.error.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var badPoll = asyncAwaitAny([futureResolved(1)], 0);
+    while (!futureIsReady(badPoll)) {
+    }
+    var badPollResult = futureGet(badPoll);
+    println(badPollResult.error != nil);
+    println(!badPollResult.ready);
+    println(!badPollResult.timedOut);
+    println(badPollResult.index == -1);
+    if (badPollResult.error != nil) {
+        println(badPollResult.error.code == ERR_INVALID_ARGUMENT);
+    }
+
+}

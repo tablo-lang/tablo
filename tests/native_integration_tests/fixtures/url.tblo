@@ -1,0 +1,173 @@
+// URL/query helpers built on top of urlEncode/urlDecode builtins.
+// Focused on backend query-string parsing/stringifying with structured errors.
+
+func urlStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func urlQueryError(code: int,
+                   message: string,
+                   context: string,
+                   segment: string,
+                   index: int,
+                   cause: Error?): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "segment": segment,
+        "index": index
+    };
+    if (cause != nil) {
+        mapSetString(data, "cause", cause as any);
+    }
+    return urlStdError(code, message, data);
+}
+
+func queryParse(rawQuery: string): (map<string, string>, Error?) {
+    var out: map<string, string> = {};
+    var query: string = rawQuery;
+
+    if (startsWith(query, "?")) {
+        if (len(query) <= 1) {
+            return (out, nil);
+        }
+        query = substring(query, 1, len(query) - 1);
+    }
+
+    if (query == "") {
+        return (out, nil);
+    }
+
+    var segments: array<string> = split(query, "&");
+    var i: int = 0;
+    while (i < len(segments)) {
+        var segment: string = segments[i];
+        i = i + 1;
+        if (segment == "") {
+            continue;
+        }
+
+        var eq_index: int = find(segment, "=");
+        var raw_key: string = segment;
+        var raw_value: string = "";
+        if (eq_index >= 0) {
+            raw_key = substring(segment, 0, eq_index);
+            var value_start: int = eq_index + 1;
+            raw_value = substring(segment, value_start, len(segment) - value_start);
+        }
+
+        // Support common x-www-form-urlencoded query strings.
+        raw_key = replace(raw_key, "+", " ");
+        raw_value = replace(raw_value, "+", " ");
+
+        var key_r = urlDecode(raw_key);
+        if (key_r.1 != nil) {
+            return (out,
+                    urlQueryError(key_r.1.code,
+                                  "queryParse: failed to decode key",
+                                  "queryParse.key",
+                                  segment,
+                                  i - 1,
+                                  key_r.1));
+        }
+
+        var key: string = key_r.0;
+        if (key == "") {
+            return (out,
+                    urlQueryError(ERR_PARSE,
+                                  "queryParse: empty query key is not allowed",
+                                  "queryParse.key",
+                                  segment,
+                                  i - 1,
+                                  nil));
+        }
+
+        var value_r = urlDecode(raw_value);
+        if (value_r.1 != nil) {
+            return (out,
+                    urlQueryError(value_r.1.code,
+                                  "queryParse: failed to decode value",
+                                  "queryParse.value",
+                                  segment,
+                                  i - 1,
+                                  value_r.1));
+        }
+
+        mapSetString(out, key, value_r.0);
+    }
+
+    return (out, nil);
+}
+
+func queryStringify(params: map<string, string>): (string, Error?) {
+    var out: string = "";
+    var first: bool = true;
+    var key_list: array<any> = keys(params);
+    foreach (key_any in key_list) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            return ("",
+                    urlQueryError(ERR_INVALID_ARGUMENT,
+                                  "queryStringify: map key must be string",
+                                  "queryStringify.key",
+                                  "",
+                                  -1,
+                                  nil));
+        }
+
+        var key: string = key_any as string;
+        if (key == "") {
+            return ("",
+                    urlQueryError(ERR_INVALID_ARGUMENT,
+                                  "queryStringify: empty query key is not allowed",
+                                  "queryStringify.key",
+                                  "",
+                                  -1,
+                                  nil));
+        }
+
+        var value_any: any = mapGetString(params, key);
+        var value: string = "";
+        if (value_any != nil) {
+            if (typeOf(value_any) != "string") {
+                return ("",
+                        urlQueryError(ERR_INVALID_ARGUMENT,
+                                      "queryStringify: map value must be string",
+                                      "queryStringify.value",
+                                      key,
+                                      -1,
+                                      nil));
+            }
+            value = value_any as string;
+        }
+
+        var key_enc = urlEncode(key);
+        if (key_enc.1 != nil) {
+            return ("",
+                    urlQueryError(key_enc.1.code,
+                                  "queryStringify: failed to encode key",
+                                  "queryStringify.key",
+                                  key,
+                                  -1,
+                                  key_enc.1));
+        }
+
+        var value_enc = urlEncode(value);
+        if (value_enc.1 != nil) {
+            return ("",
+                    urlQueryError(value_enc.1.code,
+                                  "queryStringify: failed to encode value",
+                                  "queryStringify.value",
+                                  key,
+                                  -1,
+                                  value_enc.1));
+        }
+
+        if (!first) {
+            out = out + "&";
+        }
+        first = false;
+        out = out + key_enc.0 + "=" + value_enc.0;
+    }
+
+    return (out, nil);
+}

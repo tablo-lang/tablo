@@ -1,0 +1,136 @@
+import "fixtures/uuid.tblo";
+
+func main(): void {
+    println(uuidNil() == "00000000-0000-0000-0000-000000000000");
+
+    println(uuidIsValid("550e8400-e29b-41d4-a716-446655440000"));
+    println(uuidIsValid("550E8400-E29B-41D4-A716-446655440000"));
+    println(uuidIsValid("550e8400e29b41d4a716446655440000"));
+    println(!uuidIsValid("550e8400-e29b-41d4-a716-44665544zzzz"));
+
+    println(uuidIsCanonical("550e8400-e29b-41d4-a716-446655440000"));
+    println(!uuidIsCanonical("550E8400-E29B-41D4-A716-446655440000"));
+    println(!uuidIsCanonical("550e8400e29b41d4a716446655440000"));
+
+    var norm_upper = uuidNormalize("550E8400-E29B-41D4-A716-446655440000");
+    println(norm_upper.1 == nil);
+    if (norm_upper.1 == nil) {
+        println(norm_upper.0 == "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    var norm_compact = uuidNormalize("550e8400e29b41d4a716446655440000");
+    println(norm_compact.1 == nil);
+    if (norm_compact.1 == nil) {
+        println(norm_compact.0 == "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    var b = uuidToBytes("550e8400-e29b-41d4-a716-446655440000");
+    println(b.1 == nil);
+    if (b.1 == nil) {
+        println(len(b.0) == 16);
+        var h = bytesToHex(b.0);
+        println(h.1 == nil);
+        if (h.1 == nil) {
+            println(h.0 == "550e8400e29b41d4a716446655440000");
+        }
+
+        var back = uuidFromBytes(b.0);
+        println(back.1 == nil);
+        if (back.1 == nil) {
+            println(back.0 == "550e8400-e29b-41d4-a716-446655440000");
+        }
+    }
+
+    var bad_bytes = uuidFromBytes(bytesWithSize(15, 0).0);
+    println(bad_bytes.1 != nil);
+    if (bad_bytes.1 != nil) {
+        println(bad_bytes.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var v_nil = uuidVersion(uuidNil());
+    println(v_nil.1 == nil);
+    if (v_nil.1 == nil) {
+        println(v_nil.0 == 0);
+    }
+
+    var vr_nil = uuidVariant(uuidNil());
+    println(vr_nil.1 == nil);
+    if (vr_nil.1 == nil) {
+        println(vr_nil.0 == "ncs");
+    }
+
+    var vr_rfc = uuidVariant("00000000-0000-0000-8000-000000000000");
+    println(vr_rfc.1 == nil);
+    if (vr_rfc.1 == nil) {
+        println(vr_rfc.0 == "rfc4122");
+    }
+
+    var vr_ms = uuidVariant("00000000-0000-0000-c000-000000000000");
+    println(vr_ms.1 == nil);
+    if (vr_ms.1 == nil) {
+        println(vr_ms.0 == "microsoft");
+    }
+
+    var vr_future = uuidVariant("00000000-0000-0000-e000-000000000000");
+    println(vr_future.1 == nil);
+    if (vr_future.1 == nil) {
+        println(vr_future.0 == "future");
+    }
+
+    var v4 = uuidV4();
+    println(v4.1 == nil);
+    if (v4.1 == nil) {
+        println(uuidIsCanonical(v4.0));
+        var v4_ver = uuidVersion(v4.0);
+        println(v4_ver.1 == nil);
+        if (v4_ver.1 == nil) {
+            println(v4_ver.0 == 4);
+        }
+
+        var v4_variant = uuidVariant(v4.0);
+        println(v4_variant.1 == nil);
+        if (v4_variant.1 == nil) {
+            println(v4_variant.0 == "rfc4122");
+        }
+    }
+
+    var batch = uuidV4Batch(8);
+    println(batch.1 == nil);
+    if (batch.1 == nil) {
+        println(len(batch.0) == 8);
+        var seen: map<string, bool> = {};
+        var unique_ok: bool = true;
+        var canonical_ok: bool = true;
+        foreach (id in batch.0) {
+            if (!uuidIsCanonical(id)) {
+                canonical_ok = false;
+            }
+            if (mapHasString(seen, id)) {
+                unique_ok = false;
+            } else {
+                mapSetString(seen, id, true);
+            }
+        }
+        println(canonical_ok);
+        println(unique_ok);
+    }
+
+    var bad_batch = uuidV4Batch(-1);
+    println(bad_batch.1 != nil);
+    if (bad_batch.1 != nil) {
+        println(bad_batch.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_parse = uuidToBytes("not-a-uuid");
+    println(bad_parse.1 != nil);
+    if (bad_parse.1 != nil) {
+        println(bad_parse.1.code == ERR_PARSE);
+        println(find(bad_parse.1.message, "uuidToBytes.uuidCompactHex") >= 0);
+        if (bad_parse.1.data != nil && typeOf(bad_parse.1.data) == "map") {
+            var data: map<string, any> = bad_parse.1.data as map<string, any>;
+            println(mapGetString(data, "context") == "uuidToBytes.uuidCompactHex");
+        } else {
+            println(false);
+        }
+    }
+}

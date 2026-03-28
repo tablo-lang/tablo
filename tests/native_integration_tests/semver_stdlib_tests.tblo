@@ -1,0 +1,118 @@
+import "fixtures/semver.tblo";
+
+func main(): void {
+    println(semverIsValid("1.2.3"));
+    println(semverIsValid("1.2.3-alpha.1"));
+    println(semverIsValid("1.2.3-alpha.1+build.7"));
+    println(!semverIsValid("1.2"));
+    println(!semverIsValid("01.2.3"));
+
+    var p = semverParse("1.2.3-alpha.1+build.7");
+    println(p.1 == nil);
+    if (p.1 == nil) {
+        println(p.0.major == 1);
+        println(p.0.minor == 2);
+        println(p.0.patch == 3);
+        println(p.0.prerelease == "alpha.1");
+        println(p.0.build == "build.7");
+        println(semverString(p.0) == "1.2.3-alpha.1+build.7");
+    }
+
+    var n = semverNormalize("1.2.3-alpha.1+build.7");
+    println(n.1 == nil);
+    if (n.1 == nil) {
+        println(n.0 == "1.2.3-alpha.1+build.7");
+    }
+
+    var c1 = semverCompare("1.2.3", "1.2.4");
+    println(c1.1 == nil);
+    if (c1.1 == nil) println(c1.0 < 0);
+
+    var c2 = semverCompare("2.0.0", "1.9.9");
+    println(c2.1 == nil);
+    if (c2.1 == nil) println(c2.0 > 0);
+
+    var c3 = semverCompare("1.0.0-alpha", "1.0.0");
+    println(c3.1 == nil);
+    if (c3.1 == nil) println(c3.0 < 0);
+
+    var c4 = semverCompare("1.0.0-alpha.1", "1.0.0-alpha.beta");
+    println(c4.1 == nil);
+    if (c4.1 == nil) println(c4.0 < 0);
+
+    var c5 = semverCompare("1.0.0+build1", "1.0.0+build2");
+    println(c5.1 == nil);
+    if (c5.1 == nil) println(c5.0 == 0);
+
+    var s1 = semverSatisfies("1.5.2", ">=1.0.0 <2.0.0");
+    println(s1.1 == nil);
+    if (s1.1 == nil) println(s1.0);
+
+    var s2 = semverSatisfies("1.5.2", "^1.2.3");
+    println(s2.1 == nil);
+    if (s2.1 == nil) println(s2.0);
+
+    var s3 = semverSatisfies("1.5.2", "^2.0.0");
+    println(s3.1 == nil);
+    if (s3.1 == nil) println(!s3.0);
+
+    var s4 = semverSatisfies("1.5.2", "~1.5.0");
+    println(s4.1 == nil);
+    if (s4.1 == nil) println(s4.0);
+
+    var s5 = semverSatisfies("1.5.2", "1.5.x");
+    println(s5.1 == nil);
+    if (s5.1 == nil) println(s5.0);
+
+    var s6 = semverSatisfies("1.5.2", "1.x");
+    println(s6.1 == nil);
+    if (s6.1 == nil) println(s6.0);
+
+    var s7 = semverSatisfies("1.5.2", "2.x");
+    println(s7.1 == nil);
+    if (s7.1 == nil) println(!s7.0);
+
+    var s8 = semverSatisfies("1.5.2", "1.5.2 || 2.0.0");
+    println(s8.1 == nil);
+    if (s8.1 == nil) println(s8.0);
+
+    var s9 = semverSatisfies("1.5.2", "1.0.0 - 1.9.9");
+    println(s9.1 == nil);
+    if (s9.1 == nil) println(s9.0);
+
+    var s10 = semverSatisfies("1.5.2", ">=1.0.0, <1.5.0");
+    println(s10.1 == nil);
+    if (s10.1 == nil) println(!s10.0);
+
+    var s11 = semverSatisfies("1.5.2", "*");
+    println(s11.1 == nil);
+    if (s11.1 == nil) println(s11.0);
+
+    var s12 = semverSatisfies("1.5.2", "1.5");
+    println(s12.1 == nil);
+    if (s12.1 == nil) println(s12.0);
+
+    var s13 = semverSatisfies("1.5.2", "1");
+    println(s13.1 == nil);
+    if (s13.1 == nil) println(s13.0);
+
+    var b1 = semverBumpMajor("1.2.3-alpha+build");
+    println(b1.1 == nil);
+    if (b1.1 == nil) println(b1.0 == "2.0.0");
+
+    var b2 = semverBumpMinor("1.2.3");
+    println(b2.1 == nil);
+    if (b2.1 == nil) println(b2.0 == "1.3.0");
+
+    var b3 = semverBumpPatch("1.2.3");
+    println(b3.1 == nil);
+    if (b3.1 == nil) println(b3.0 == "1.2.4");
+
+    var bad_constraint = semverSatisfies("1.2.3", ">= ");
+    println(bad_constraint.1 != nil);
+    if (bad_constraint.1 != nil) println(bad_constraint.1.code == ERR_PARSE);
+
+    var bad_version = semverCompare("1.2", "1.2.3");
+    println(bad_version.1 != nil);
+    if (bad_version.1 != nil) println(bad_version.1.code == ERR_PARSE);
+}

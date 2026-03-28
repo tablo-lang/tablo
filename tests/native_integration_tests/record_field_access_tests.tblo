@@ -1,0 +1,80 @@
+// Record Field Access Tests - Tests field access operations
+
+record Point {
+    x: int;
+    y: int
+}
+
+record Rectangle {
+    top_left: Point;
+    bottom_right: Point;
+    width: int;
+    height: int
+}
+
+record Config {
+    debug: int;
+    max_count: int;
+    threshold: double;
+    label: string
+}
+
+func main() {
+    // Test 1: Basic field access
+    var p: Point = { x: 5, y: 10 };
+    println(p.x);
+    println(p.y);
+
+    // Test 2: Field access in arithmetic expressions
+    var area: int = p.x * p.y;
+    println(area);
+
+    // Test 3: Chained field access
+    var rect: Rectangle = {
+        top_left: { x: 0, y: 0 },
+        bottom_right: { x: 100, y: 50 },
+        width: 100,
+        height: 50
+    };
+    println(rect.top_left.x);
+    println(rect.bottom_right.y);
+    println(rect.width);
+    println(rect.height);
+
+    // Test 4: Complex chained access in expressions
+    var center_x: int = rect.top_left.x + (rect.width / 2);
+    var center_y: int = rect.top_left.y + (rect.height / 2);
+    println(center_x);
+    println(center_y);
+
+    // Test 5: Field access with different types
+    var config: Config = { debug: 1, max_count: 100, threshold: 0.75, label: "test" };
+    println(config.debug);
+    println(config.max_count);
+    println(config.threshold);
+    println(config.label);
+
+    // Test 6: Field access in conditions
+    if (config.debug == 1) {
+        println("Debug enabled");
+    }
+    if (config.max_count > 50) {
+        println("Count is high");
+    }
+
+    // Test 7: Multiple access to same field
+    var total: int = 0;
+    total = total + p.x;
+    total = total + p.x;
+    total = total + p.x;
+    println(total);
+
+    // Test 8: Field access with function return
+    var result: Point = create_point(7, 14);
+    println(result.x);
+    println(result.y);
+}
+
+func create_point(x: int, y: int): Point {
+    return { x: x, y: y };
+}

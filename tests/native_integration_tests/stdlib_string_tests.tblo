@@ -1,0 +1,29 @@
+// Standard Library Tests - String Functions
+
+func main(): void {
+    // Test substring
+    var s: string = "Hello, World!";
+    println(substring(s, 0, 5));    // Hello
+    println(substring(s, 7, 5));    // World
+    println(substring(s, 0, 100));  // Hello, World! (clamped)
+    
+    // Test find
+    println(find(s, "World"));      // 7
+    println(find(s, "Z"));          // -1
+    
+    // Test split
+    var parts: array<string> = split("a,b,c", ",");
+    println(parts[0]);              // a
+    println(parts[1]);              // b
+    println(parts[2]);              // c
+    
+    // Test trim
+    println(trim("  hello  "));      // hello
+    
+    // Test startsWith/endsWith
+    println(startsWith(s, "Hello")); // 1 (true)
+    println(endsWith(s, "World!"));  // 1 (true)
+    
+    // Test replace
+    println(replace(s, "World", "Universe")); // Hello, Universe!
+}

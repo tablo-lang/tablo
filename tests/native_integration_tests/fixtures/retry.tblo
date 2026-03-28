@@ -1,0 +1,302 @@
+// Retry + circuit-breaker helpers for resilient backend flows.
+
+record RetryPolicy {
+    maxAttempts: int,
+    initialDelayMs: int,
+    maxDelayMs: int,
+    multiplierPercent: int,
+    jitterPercent: int
+};
+
+record RetryCircuit {
+    failureThreshold: int,
+    cooldownMs: int,
+    halfOpenSuccessThreshold: int,
+    state: string,
+    failureCount: int,
+    halfOpenSuccesses: int,
+    openUntilMs: int
+};
+
+func retryStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func retryError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return retryStdError(code, message, data);
+}
+
+func retryDefaultPolicy(): RetryPolicy {
+    var policy: RetryPolicy = {
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        maxDelayMs: 5000,
+        multiplierPercent: 200,
+        jitterPercent: 0
+    };
+    return policy;
+}
+
+func retryValidatePolicy(policy: RetryPolicy): Error? {
+    if (policy.maxAttempts < 1 || policy.maxAttempts > 1000) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy maxAttempts must be between 1 and 1000",
+                          "retry.policy.maxAttempts",
+                          policy.maxAttempts);
+    }
+    if (policy.initialDelayMs < 0 || policy.initialDelayMs > 3600000) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy initialDelayMs must be between 0 and 3600000",
+                          "retry.policy.initialDelayMs",
+                          policy.initialDelayMs);
+    }
+    if (policy.maxDelayMs < 0 || policy.maxDelayMs > 3600000) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy maxDelayMs must be between 0 and 3600000",
+                          "retry.policy.maxDelayMs",
+                          policy.maxDelayMs);
+    }
+    if (policy.maxDelayMs < policy.initialDelayMs) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy maxDelayMs must be >= initialDelayMs",
+                          "retry.policy.maxDelayMs",
+                          policy.maxDelayMs);
+    }
+    if (policy.multiplierPercent < 100 || policy.multiplierPercent > 1000) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy multiplierPercent must be between 100 and 1000",
+                          "retry.policy.multiplierPercent",
+                          policy.multiplierPercent);
+    }
+    if (policy.jitterPercent < 0 || policy.jitterPercent > 100) {
+        return retryError(ERR_INVALID_ARGUMENT,
+                          "retry policy jitterPercent must be between 0 and 100",
+                          "retry.policy.jitterPercent",
+                          policy.jitterPercent);
+    }
+    return nil;
+}
+
+func retryClamp(value: int, minValue: int, maxValue: int): int {
+    if (value < minValue) {
+        return minValue;
+    }
+    if (value > maxValue) {
+        return maxValue;
+    }
+    return value;
+}
+
+func retryCanAttempt(policy: RetryPolicy, attemptNumber: int): bool {
+    if (retryValidatePolicy(policy) != nil) {
+        return false;
+    }
+    return attemptNumber >= 1 && attemptNumber <= policy.maxAttempts;
+}
+
+func retryComputeDelayMs(policy: RetryPolicy, retryNumber: int): (int, Error?) {
+    var policy_err = retryValidatePolicy(policy);
+    if (policy_err != nil) {
+        return (0, policy_err);
+    }
+
+    if (retryNumber < 1) {
+        return (0,
+                retryError(ERR_INVALID_ARGUMENT,
+                           "retryNumber must be >= 1",
+                           "retry.delay.retryNumber",
+                           retryNumber));
+    }
+
+    var delay: int = policy.initialDelayMs;
+    var step: int = 1;
+    while (step < retryNumber) {
+        var next_delay: int = (delay * policy.multiplierPercent) / 100;
+        if (next_delay < delay) {
+            next_delay = policy.maxDelayMs;
+        }
+        delay = retryClamp(next_delay, 0, policy.maxDelayMs);
+        step = step + 1;
+    }
+
+    if (policy.jitterPercent > 0 && delay > 0) {
+        var jitter_span: int = (delay * policy.jitterPercent) / 100;
+        if (jitter_span < 1) {
+            jitter_span = 1;
+        }
+
+        var jitter: int = randomInt(0 - jitter_span, jitter_span);
+        delay = retryClamp(delay + jitter, 0, policy.maxDelayMs);
+    }
+
+    return (delay, nil);
+}
+
+func retryNextDelayMs(policy: RetryPolicy, attemptsMade: int): (int, Error?) {
+    if (attemptsMade < 1) {
+        return (0,
+                retryError(ERR_INVALID_ARGUMENT,
+                           "attemptsMade must be >= 1",
+                           "retry.delay.attemptsMade",
+                           attemptsMade));
+    }
+    return retryComputeDelayMs(policy, attemptsMade);
+}
+
+func retryIsTransientError(err: Error): bool {
+    if (err.code == ERR_NETWORK) {
+        return true;
+    }
+    if (err.code == ERR_IO) {
+        return true;
+    }
+    if (err.code == ERR_LIMIT) {
+        return true;
+    }
+    return false;
+}
+
+func retryShouldRetry(policy: RetryPolicy, attemptsMade: int, err: Error?): bool {
+    if (err == nil) {
+        return false;
+    }
+
+    if (!retryCanAttempt(policy, attemptsMade + 1)) {
+        return false;
+    }
+
+    return retryIsTransientError(err as Error);
+}
+
+func retryCircuitNew(failureThreshold: int,
+                     cooldownMs: int,
+                     halfOpenSuccessThreshold: int): (RetryCircuit, Error?) {
+    var empty: RetryCircuit = {
+        failureThreshold: 0,
+        cooldownMs: 0,
+        halfOpenSuccessThreshold: 0,
+        state: "closed",
+        failureCount: 0,
+        halfOpenSuccesses: 0,
+        openUntilMs: 0
+    };
+
+    if (failureThreshold < 1 || failureThreshold > 1000000) {
+        return (empty,
+                retryError(ERR_INVALID_ARGUMENT,
+                           "failureThreshold must be between 1 and 1000000",
+                           "retry.circuit.failureThreshold",
+                           failureThreshold));
+    }
+    if (cooldownMs < 1 || cooldownMs > 3600000) {
+        return (empty,
+                retryError(ERR_INVALID_ARGUMENT,
+                           "cooldownMs must be between 1 and 3600000",
+                           "retry.circuit.cooldownMs",
+                           cooldownMs));
+    }
+    if (halfOpenSuccessThreshold < 1 || halfOpenSuccessThreshold > 1000000) {
+        return (empty,
+                retryError(ERR_INVALID_ARGUMENT,
+                           "halfOpenSuccessThreshold must be between 1 and 1000000",
+                           "retry.circuit.halfOpenSuccessThreshold",
+                           halfOpenSuccessThreshold));
+    }
+
+    var circuit: RetryCircuit = {
+        failureThreshold: failureThreshold,
+        cooldownMs: cooldownMs,
+        halfOpenSuccessThreshold: halfOpenSuccessThreshold,
+        state: "closed",
+        failureCount: 0,
+        halfOpenSuccesses: 0,
+        openUntilMs: 0
+    };
+    return (circuit, nil);
+}
+
+func retryCircuitOpenRemainingMs(circuit: RetryCircuit, nowMs: int): int {
+    if (circuit.state != "open") {
+        return 0;
+    }
+    var remaining: int = circuit.openUntilMs - nowMs;
+    if (remaining < 0) {
+        return 0;
+    }
+    return remaining;
+}
+
+func retryCircuitAllow(circuit: RetryCircuit, nowMs: int): (RetryCircuit, bool) {
+    var next: RetryCircuit = circuit;
+    var now_clamped: int = nowMs;
+    if (now_clamped < 0) {
+        now_clamped = 0;
+    }
+
+    if (next.state == "open") {
+        if (now_clamped >= next.openUntilMs) {
+            next.state = "half_open";
+            next.failureCount = 0;
+            next.halfOpenSuccesses = 0;
+            return (next, true);
+        }
+        return (next, false);
+    }
+
+    return (next, true);
+}
+
+func retryCircuitOnSuccess(circuit: RetryCircuit): RetryCircuit {
+    var next: RetryCircuit = circuit;
+
+    if (next.state == "half_open") {
+        next.halfOpenSuccesses = next.halfOpenSuccesses + 1;
+        if (next.halfOpenSuccesses >= next.halfOpenSuccessThreshold) {
+            next.state = "closed";
+            next.failureCount = 0;
+            next.halfOpenSuccesses = 0;
+            next.openUntilMs = 0;
+        }
+        return next;
+    }
+
+    next.state = "closed";
+    next.failureCount = 0;
+    next.halfOpenSuccesses = 0;
+    next.openUntilMs = 0;
+    return next;
+}
+
+func retryCircuitOnFailure(circuit: RetryCircuit, nowMs: int): RetryCircuit {
+    var next: RetryCircuit = circuit;
+    var now_clamped: int = nowMs;
+    if (now_clamped < 0) {
+        now_clamped = 0;
+    }
+
+    if (next.state == "half_open") {
+        next.state = "open";
+        next.failureCount = next.failureThreshold;
+        next.halfOpenSuccesses = 0;
+        next.openUntilMs = now_clamped + next.cooldownMs;
+        return next;
+    }
+
+    if (next.state == "open") {
+        next.openUntilMs = now_clamped + next.cooldownMs;
+        return next;
+    }
+
+    next.failureCount = next.failureCount + 1;
+    if (next.failureCount >= next.failureThreshold) {
+        next.state = "open";
+        next.halfOpenSuccesses = 0;
+        next.openUntilMs = now_clamped + next.cooldownMs;
+    }
+    return next;
+}

@@ -1,0 +1,6 @@
+// Strict truthiness: record in condition (should fail)
+func main(): void {
+    if ({ x: 1 }) {
+        println("no");
+    }
+}

@@ -1,0 +1,15 @@
+type UserId = int;
+type DisplayName = string;
+
+const ROOT_ID: UserId = 1;
+const APP_NAME: DisplayName = "tablo";
+
+func formatUser(id: UserId, name: DisplayName): string {
+    return APP_NAME + ":" + str(id) + ":" + name;
+}
+
+func main(): void {
+    var userId: UserId = ROOT_ID;
+    var name: DisplayName = "admin";
+    println(formatUser(userId, name));
+}

@@ -1,0 +1,15 @@
+record Point { x: int, y: int }
+
+func helper(value: int): int {
+    var point: Point = { x: value, y: value + 1 };
+    var numbers = [value, value + 2];
+    println(point.x);
+    return numbers[1];
+}
+
+func main(): void {
+    var total: int = helper(4);
+    println(total);
+}
+
+var seed: int = 2;

@@ -1,0 +1,61 @@
+import "fixtures/testing.tblo";
+
+func sampleCallback(): int {
+    return 7;
+}
+
+func main(): void {
+    var forced: Error = fail("forced failure");
+    println(forced.code == TESTING_ASSERT_FAILED_CODE);
+    println(forced.data != nil && typeOf(forced.data) == "map");
+
+    var ok_true = assertTrue(true, "should pass");
+    println(ok_true == nil);
+
+    var bad_true = assertTrue(false, "should fail");
+    println(bad_true != nil);
+    println(assertErrorCode(bad_true, TESTING_ASSERT_FAILED_CODE, "assertTrue failure code") == nil);
+
+    var ok_nil = assertNil(nil, "nil should pass");
+    println(ok_nil == nil);
+
+    var bad_nil = assertNil(0, "non-nil should fail");
+    println(bad_nil != nil);
+    println(assertErrorCode(bad_nil, TESTING_ASSERT_FAILED_CODE, "assertNil failure code") == nil);
+
+    println(assertEq(42, 42, "int equality") == nil);
+    println(assertEq("a", "a", "string equality") == nil);
+    println(assertEq([1, 2, 3], [1, 2, 3], "array equality") == nil);
+    println(assertEq({"a": 1, "b": 2}, {"a": 1, "b": 2}, "map equality") == nil);
+
+    var b1 = hexToBytes("00ff10");
+    var b2 = hexToBytes("00ff10");
+    println(b1.1 == nil && b2.1 == nil);
+    if (b1.1 == nil && b2.1 == nil) {
+        println(assertEq(b1.0, b2.0, "bytes equality") == nil);
+    }
+
+    var bad_eq = assertEq("left", "right", "string mismatch");
+    println(bad_eq != nil);
+    println(assertErrorCode(bad_eq, TESTING_ASSERT_FAILED_CODE, "assertEq mismatch code") == nil);
+
+    var bad_type = assertEq("1", 1, "type mismatch");
+    println(bad_type != nil);
+    println(assertErrorCode(bad_type, TESTING_ASSERT_FAILED_CODE, "assertEq type mismatch code") == nil);
+
+    println(assertEq(nil, nil, "nil equals nil") == nil);
+    println(assertEq(nil, "x", "nil mismatch") != nil);
+
+    var no_err = assertErrorCode(nil, ERR_IO, "should fail for nil error");
+    println(no_err != nil);
+
+    var wrong_code = assertErrorCode(forced, ERR_IO, "wrong code");
+    println(wrong_code != nil);
+
+    var exact_code = assertErrorCode(forced, TESTING_ASSERT_FAILED_CODE, "exact code");
+    println(exact_code == nil);
+
+    var fn_eq = assertEq(sampleCallback as any, sampleCallback as any, "function not comparable");
+    println(fn_eq != nil);
+    println(assertErrorCode(fn_eq, TESTING_ASSERT_FAILED_CODE, "assertEq stringify failure code") == nil);
+}

@@ -1,0 +1,7 @@
+// Test peephole optimizer patterns
+
+// Pattern 1: Redundant load/store should be eliminated
+var x: int = 10;
+x = x;
+println(x);
+

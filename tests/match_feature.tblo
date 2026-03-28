@@ -1,0 +1,23 @@
+enum Status {
+    Ok = 200,
+    NotFound = 404,
+    Retry = 429
+};
+
+func describe(code: int): string {
+    var label: string = "unknown";
+    match (code) {
+        Status.Ok: label = "ok";
+        Status.NotFound: label = "missing";
+        500: label = "error";
+        else: label = "other";
+    }
+    return label;
+}
+
+func main(): void {
+    println("ok=" + describe(Status.Ok));
+    println("nf=" + describe(Status.NotFound));
+    println("rt=" + describe(Status.Retry));
+    println("e=" + describe(500));
+}

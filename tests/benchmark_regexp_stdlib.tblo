@@ -1,0 +1,133 @@
+// Regexp stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_regexp_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_regexp_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/regexp.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 500) {
+        w = 500;
+    }
+    return w;
+}
+
+func benchRegexpCompile(iters: int): void {
+    var p1: string = "^user-[A-Za-z0-9_]+\\s+id=\\d+$";
+    var p2: string = "^[^0-9]+$";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = p1;
+        if ((w % 2) == 1) src_w = p2;
+        var c_w = regexpCompile(src_w);
+        if (c_w.1 != nil) panic("benchRegexpCompile warmup failed: " + c_w.1.message);
+        sink = sink + len(c_w.0.tokens);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = p1;
+        if ((i % 2) == 1) src = p2;
+        var c = regexpCompile(src);
+        if (c.1 != nil) panic("benchRegexpCompile failed: " + c.1.message);
+        sink = sink + len(c.0.tokens);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf regexpCompile", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchRegexpIsMatch(iters: int): void {
+    var pattern: string = "^hello\\d+$";
+    var t1: string = "hello12345";
+    var t2: string = "hello-abcd";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var text_w: string = t1;
+        if ((w % 2) == 1) text_w = t2;
+        var m_w = regexpIsMatch(text_w, pattern);
+        if (m_w.1 != nil) panic("benchRegexpIsMatch warmup failed: " + m_w.1.message);
+        if (m_w.0) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var text: string = t1;
+        if ((i % 2) == 1) text = t2;
+        var m = regexpIsMatch(text, pattern);
+        if (m.1 != nil) panic("benchRegexpIsMatch failed: " + m.1.message);
+        if (m.0) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf regexpIsMatch", iters, start, end);
+    if (sink < 0) println("error");
+}
+
+func benchRegexpReplaceAll(iters: int): void {
+    var pattern: string = "\\d+";
+    var text: string = "item=123 cost=456 code=789";
+    var replacement: string = "#";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = regexpReplaceAll(text, pattern, replacement);
+        if (r_w.1 != nil) panic("benchRegexpReplaceAll warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = regexpReplaceAll(text, pattern, replacement);
+        if (r.1 != nil) panic("benchRegexpReplaceAll failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf regexpReplaceAll", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Regexp Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchRegexpCompile(90000 * scale);
+    benchRegexpIsMatch(90000 * scale);
+    benchRegexpReplaceAll(70000 * scale);
+
+    println("Regexp stdlib benchmark complete!");
+}

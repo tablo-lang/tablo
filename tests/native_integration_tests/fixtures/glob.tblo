@@ -1,0 +1,237 @@
+// Glob helpers for matching file/path patterns in CLI/backend workflows.
+// Supported tokens:
+// - *   : any characters within one path segment
+// - ?   : exactly one character within one path segment
+// - **  : zero or more full path segments
+
+import "path.tblo";
+
+func globStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func globError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return globStdError(code, message, data);
+}
+
+func globWrapError(err: Error?, context: string, detail: any): Error? {
+    if (err == nil) {
+        return nil;
+    }
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    if (err.data != nil) {
+        mapSetString(data, "cause", err.data);
+    }
+    var message: string = context;
+    if (err.message != "") {
+        message = context + ": " + err.message;
+    }
+    return globStdError(err.code, message, data);
+}
+
+func globNormalize(value: string): string {
+    return pathClean(pathToSlash(value));
+}
+
+func globValidatePattern(pattern: string): Error? {
+    if (trim(pattern) == "") {
+        return globError(ERR_INVALID_ARGUMENT,
+                         "glob pattern must be non-empty",
+                         "glob.pattern",
+                         pattern);
+    }
+    return nil;
+}
+
+func globSplitSegments(value: string): array<string> {
+    return split(globNormalize(value), "/");
+}
+
+func globMatchSegment(pattern_segment: string, path_segment: string): bool {
+    var p: int = 0;
+    var s: int = 0;
+    var star_index: int = -1;
+    var star_match: int = 0;
+
+    while (s < len(path_segment)) {
+        if (p < len(pattern_segment)) {
+            var token: string = substring(pattern_segment, p, 1);
+            var ch: string = substring(path_segment, s, 1);
+
+            if (token == "?" || token == ch) {
+                p = p + 1;
+                s = s + 1;
+                continue;
+            }
+
+            if (token == "*") {
+                star_index = p;
+                star_match = s;
+                p = p + 1;
+                continue;
+            }
+        }
+
+        if (star_index >= 0) {
+            p = star_index + 1;
+            star_match = star_match + 1;
+            s = star_match;
+            continue;
+        }
+
+        return false;
+    }
+
+    while (p < len(pattern_segment)) {
+        if (substring(pattern_segment, p, 1) != "*") {
+            break;
+        }
+        p = p + 1;
+    }
+
+    return p == len(pattern_segment);
+}
+
+func globMatchSegments(pattern_segments: array<string>,
+                       pattern_index: int,
+                       path_segments: array<string>,
+                       path_index: int): bool {
+    if (pattern_index >= len(pattern_segments)) {
+        return path_index >= len(path_segments);
+    }
+
+    var segment: string = pattern_segments[pattern_index];
+    if (segment == "**") {
+        var next_pattern: int = pattern_index + 1;
+        while (next_pattern < len(pattern_segments)) {
+            if (pattern_segments[next_pattern] != "**") {
+                break;
+            }
+            next_pattern = next_pattern + 1;
+        }
+
+        if (next_pattern >= len(pattern_segments)) {
+            return true;
+        }
+
+        var probe: int = path_index;
+        while (probe <= len(path_segments)) {
+            if (globMatchSegments(pattern_segments, next_pattern, path_segments, probe)) {
+                return true;
+            }
+            probe = probe + 1;
+        }
+        return false;
+    }
+
+    if (path_index >= len(path_segments)) {
+        return false;
+    }
+
+    if (!globMatchSegment(segment, path_segments[path_index])) {
+        return false;
+    }
+
+    return globMatchSegments(pattern_segments, pattern_index + 1, path_segments, path_index + 1);
+}
+
+func globMatch(pattern: string, path_value: string): (bool, Error?) {
+    var pattern_err = globValidatePattern(pattern);
+    if (pattern_err != nil) {
+        return (false, pattern_err);
+    }
+
+    var pattern_segments: array<string> = globSplitSegments(pattern);
+    var path_segments: array<string> = globSplitSegments(path_value);
+    return (globMatchSegments(pattern_segments, 0, path_segments, 0), nil);
+}
+
+func globMatchAny(patterns: array<string>, path_value: string): (bool, Error?) {
+    if (len(patterns) == 0) {
+        return (false,
+                globError(ERR_INVALID_ARGUMENT,
+                          "glob patterns must contain at least one pattern",
+                          "glob.matchAny.patterns",
+                          nil));
+    }
+
+    var i: int = 0;
+    while (i < len(patterns)) {
+        var pattern: string = patterns[i];
+        var matched = globMatch(pattern, path_value);
+        if (matched.1 != nil) {
+            return (false,
+                    globWrapError(matched.1,
+                                  "globMatchAny item failed",
+                                  {
+                                      "index": i,
+                                      "pattern": pattern,
+                                      "path": path_value
+                                  } as any));
+        }
+        if (matched.0) {
+            return (true, nil);
+        }
+        i = i + 1;
+    }
+    return (false, nil);
+}
+
+func globFilter(pattern: string, path_values: array<string>): (array<string>, Error?) {
+    var out: array<string> = [];
+
+    var i: int = 0;
+    while (i < len(path_values)) {
+        var path_value: string = path_values[i];
+        var matched = globMatch(pattern, path_value);
+        if (matched.1 != nil) {
+            return (out,
+                    globWrapError(matched.1,
+                                  "globFilter failed",
+                                  {
+                                      "pattern": pattern,
+                                      "index": i,
+                                      "path": path_value
+                                  } as any));
+        }
+        if (matched.0) {
+            push(out, path_value);
+        }
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func globFilterAny(patterns: array<string>, path_values: array<string>): (array<string>, Error?) {
+    var out: array<string> = [];
+
+    var i: int = 0;
+    while (i < len(path_values)) {
+        var path_value: string = path_values[i];
+        var matched = globMatchAny(patterns, path_value);
+        if (matched.1 != nil) {
+            return (out,
+                    globWrapError(matched.1,
+                                  "globFilterAny failed",
+                                  {
+                                      "index": i,
+                                      "path": path_value
+                                  } as any));
+        }
+        if (matched.0) {
+            push(out, path_value);
+        }
+        i = i + 1;
+    }
+
+    return (out, nil);
+}

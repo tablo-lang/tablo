@@ -1,0 +1,119 @@
+import "fixtures/validate.tblo";
+
+func main(): void {
+    println(validateEmail("alice@example.com"));
+    println(validateEmail("user.name+tag@sub.example.co"));
+    println(!validateEmail(""));
+    println(!validateEmail("alice@"));
+    println(!validateEmail("@example.com"));
+    println(!validateEmail("alice@example"));
+    println(!validateEmail("ali ce@example.com"));
+
+    println(validateUrlHttp("http://example.com"));
+    println(validateUrlHttp("https://example.com:443/path?q=1"));
+    println(validateUrlHttp("http://localhost:8080/health"));
+    println(validateUrlHttp("https://127.0.0.1:8443/"));
+    println(!validateUrlHttp("ftp://example.com"));
+    println(!validateUrlHttp("http://"));
+    println(!validateUrlHttp("http://example.com:0"));
+    println(!validateUrlHttp("http://exa mple.com"));
+
+    println(validateUuid("550e8400-e29b-41d4-a716-446655440000"));
+    println(validateUuid("550E8400-E29B-41D4-A716-446655440000"));
+    println(!validateUuid("550e8400e29b41d4a716446655440000"));
+    println(!validateUuid("550e8400-e29b-41d4-a716-44665544zzzz"));
+
+    var req_ok = validateRequiredString("abc", "name");
+    println(req_ok == nil);
+
+    var req_empty = validateRequiredString("", "name");
+    println(req_empty != nil);
+    if (req_empty != nil) {
+        println(req_empty.code == ERR_INVALID_ARGUMENT);
+        var d_empty: map<string, any> = req_empty.data as map<string, any>;
+        println(mapGetString(d_empty, "context") == "validate.requiredString.empty");
+    }
+
+    var min_ok = validateStringMinLen("abcd", "code", 3);
+    println(min_ok == nil);
+    var min_bad = validateStringMinLen("ab", "code", 3);
+    println(min_bad != nil);
+    if (min_bad != nil) {
+        println(min_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var max_ok = validateStringMaxLen("ab", "code", 3);
+    println(max_ok == nil);
+    var max_bad = validateStringMaxLen("abcd", "code", 3);
+    println(max_bad != nil);
+    if (max_bad != nil) {
+        println(max_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var int_ok = validateIntRange(10, "port", 1, 65535);
+    println(int_ok == nil);
+    var int_bad = validateIntRange(70000, "port", 1, 65535);
+    println(int_bad != nil);
+    if (int_bad != nil) {
+        println(int_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var email_ok = validateRequiredEmail("ops@tablo.dev", "email");
+    println(email_ok == nil);
+    var email_bad = validateRequiredEmail("ops@", "email");
+    println(email_bad != nil);
+    if (email_bad != nil) {
+        println(email_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var url_ok = validateRequiredHttpUrl("https://api.tblo.dev/v1", "endpoint");
+    println(url_ok == nil);
+    var url_bad = validateRequiredHttpUrl("ws://api.tblo.dev", "endpoint");
+    println(url_bad != nil);
+    if (url_bad != nil) {
+        println(url_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var uuid_ok = validateRequiredUuid("550e8400-e29b-41d4-a716-446655440000", "id");
+    println(uuid_ok == nil);
+    var uuid_bad = validateRequiredUuid("not-a-uuid", "id");
+    println(uuid_bad != nil);
+    if (uuid_bad != nil) {
+        println(uuid_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var one_ok = validateRequiredOneOf("prod", "env", ["dev", "staging", "prod"]);
+    println(one_ok == nil);
+    var one_bad = validateRequiredOneOf("qa", "env", ["dev", "staging", "prod"]);
+    println(one_bad != nil);
+    if (one_bad != nil) {
+        println(one_bad.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var payload: map<string, any> = {
+        "id": "u_1",
+        "email": "a@b.com",
+        "active": true
+    };
+    var keys_ok = validateRequiredKeys(payload, ["id", "email"], "CreateUser");
+    println(keys_ok == nil);
+
+    var keys_missing = validateRequiredKeys(payload, ["id", "name"], "CreateUser");
+    println(keys_missing != nil);
+    if (keys_missing != nil) {
+        println(keys_missing.code == ERR_INVALID_ARGUMENT);
+        var d_miss: map<string, any> = keys_missing.data as map<string, any>;
+        println(mapGetString(d_miss, "context") == "validate.requiredKeys.missing");
+        println(mapGetString(d_miss, "field") == "name");
+    }
+
+    mapSetString(payload, "email", nil);
+    var keys_nil = validateRequiredKeys(payload, ["email"], "CreateUser");
+    println(keys_nil != nil);
+    if (keys_nil != nil) {
+        println(keys_nil.code == ERR_INVALID_ARGUMENT);
+        var d_nil: map<string, any> = keys_nil.data as map<string, any>;
+        println(mapGetString(d_nil, "context") == "validate.requiredKeys.nil");
+        println(mapGetString(d_nil, "field") == "email");
+    }
+}

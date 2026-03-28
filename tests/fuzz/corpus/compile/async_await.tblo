@@ -1,0 +1,11 @@
+async func load(): int {
+    return 1;
+}
+
+async func twice(): int {
+    return 1 + await load();
+}
+
+func main(): void {
+    println(str(futureGet(twice())));
+}

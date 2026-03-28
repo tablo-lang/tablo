@@ -1,0 +1,807 @@
+// HTTP server throughput micro-benchmark (loopback).
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_http_server.tblo
+//   ./build/Release/tablo run tests/benchmark_http_server.tblo 2
+//
+// This benchmark compares:
+// - sync server path: httpServerServeMany
+// - threaded server path: httpServerServeThreadPool
+// - threaded deadline path: httpServerServeThreadPoolWithDeadline
+// - sync server + query parsing path: httpServerServeMany with httpQueryGet* helpers
+
+import "native_integration_tests/fixtures/http.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func reportBytes(label: string, byte_count: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var mb_per_sec: int = ((byte_count / 1024) * 1000) / (elapsed * 1024);
+    println(label + ": " + str(byte_count) + " bytes in " + str(elapsed) + " ms (" + str(mb_per_sec) + " MiB/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 20) {
+        w = 20;
+    }
+    return w;
+}
+
+func spinWaitMillis(ms: int): void {
+    var wait_start: int = timeMonotonicMillis();
+    while (timeSinceMillis(wait_start) < ms) {
+    }
+}
+
+func benchError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func isRetriableHttpBenchConnectError(err: Error): bool {
+    if (err.code != ERR_NETWORK && err.code != ERR_IO) {
+        return false;
+    }
+    if (err.data == nil || typeOf(err.data) != "map") {
+        return false;
+    }
+    var data_map = err.data as map<string, any>;
+    var stage_any = mapGet(data_map, "stage");
+    if (stage_any == nil || typeOf(stage_any) != "string") {
+        return false;
+    }
+    return (stage_any as string) == "connect";
+}
+
+func httpServerBenchRoute(req: map<string, any>): map<string, any> {
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Bench": "http-server"
+    };
+    return httpServerResponse(200, "pong", headers);
+}
+
+func httpServerBenchQueryRoute(req: map<string, any>): map<string, any> {
+    var page_r = httpQueryGetIntDefault(req, "page", 0);
+    var enabled_r = httpQueryGetBoolDefault(req, "enabled", false);
+    var name_r = httpQueryGetStringDefault(req, "name", "");
+
+    if (page_r.1 != nil || enabled_r.1 != nil || name_r.1 != nil) {
+        var headers_bad: map<string, string> = {
+            "Content-Type": "text/plain",
+            "X-Bench": "http-server-query"
+        };
+        return httpServerResponse(400, "bad-query", headers_bad);
+    }
+
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Bench": "http-server-query"
+    };
+    var body: string = "query page=" + str(page_r.0) + " enabled=" + str(enabled_r.0) + " name=" + name_r.0;
+    return httpServerResponse(200, body, headers);
+}
+
+func httpServerBenchWorker(): void {
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/ping", httpServerBenchRoute as any);
+    httpServerRoute(routes, "GET", "/search", httpServerBenchQueryRoute as any);
+    var middleware: array<any> = [];
+    var _ = httpServerWorkerServeLoop(routes, middleware, 5000);
+}
+
+func httpServerBenchServer(): int {
+    var arg_schema: map<string, any> = {
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "mode": "string",
+        "workerCount": "int",
+        "queueCapacity": "int",
+        "acceptTimeoutMs": "int",
+        "maxRequestBytes": "int",
+        "requestDeadlineMs": "int"
+    };
+
+    var arg_r = syncThreadArgTyped(arg_schema as any);
+    if (arg_r.1 != nil) {
+        return -100;
+    }
+    var arg: map<string, any> = arg_r.0 as map<string, any>;
+
+    var base_port: int = mapGet(arg, "basePort") as int;
+    var max_tries: int = mapGet(arg, "maxTries") as int;
+    var request_count: int = mapGet(arg, "requestCount") as int;
+    var mode: string = mapGet(arg, "mode") as string;
+    var worker_count: int = mapGet(arg, "workerCount") as int;
+    var queue_capacity: int = mapGet(arg, "queueCapacity") as int;
+    var accept_timeout_ms: int = mapGet(arg, "acceptTimeoutMs") as int;
+    var max_request_bytes: int = mapGet(arg, "maxRequestBytes") as int;
+    var request_deadline_ms: int = mapGet(arg, "requestDeadlineMs") as int;
+
+    var selected_port: int = -1;
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+
+    var t: int = 0;
+    while (t < max_tries) {
+        var p: int = base_port + t;
+        var started_r = httpServerStart("127.0.0.1", p, accept_timeout_ms, max_request_bytes);
+        if (started_r.1 == nil) {
+            server = started_r.0;
+            selected_port = p;
+            started = true;
+            break;
+        }
+        t = t + 1;
+    }
+
+    var outbox: int = syncThreadOutbox();
+    if (outbox >= 0) {
+        var ready_port: int = selected_port;
+        if (!started) {
+            ready_port = -1;
+        }
+        var _ready_send = syncChannelSend(outbox, ready_port as any, 5000);
+    }
+
+    if (!started) {
+        return -101;
+    }
+
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/ping", httpServerBenchRoute as any);
+    httpServerRoute(routes, "GET", "/search", httpServerBenchQueryRoute as any);
+    var middleware: array<any> = [];
+
+    if (mode == "many") {
+        var serve_many = httpServerServeMany(server, routes, middleware, request_count);
+        httpServerClose(server);
+        if (serve_many.1 != nil) {
+            return -300;
+        }
+        return serve_many.0;
+    }
+
+    if (mode == "threadpool") {
+        var serve_pool = httpServerServeThreadPool(server,
+                                                   "httpServerBenchWorker",
+                                                   request_count,
+                                                   worker_count,
+                                                   queue_capacity);
+        httpServerClose(server);
+        if (serve_pool.1 != nil) {
+            return -301;
+        }
+        return serve_pool.0;
+    }
+
+    if (mode == "threadpool_deadline") {
+        var serve_pool_deadline = httpServerServeThreadPoolWithDeadline(server,
+                                                                        "httpServerBenchWorker",
+                                                                        request_count,
+                                                                        worker_count,
+                                                                        queue_capacity,
+                                                                        request_deadline_ms);
+        httpServerClose(server);
+        if (serve_pool_deadline.1 != nil) {
+            return -302;
+        }
+        return serve_pool_deadline.0;
+    }
+
+    httpServerClose(server);
+    return -102;
+}
+
+func startHttpServerBench(mode: string,
+                          base_port: int,
+                          max_tries: int,
+                          request_count: int,
+                          worker_count: int,
+                          queue_capacity: int,
+                          accept_timeout_ms: int,
+                          max_request_bytes: int,
+                          request_deadline_ms: int): (int, int, int, Error?) {
+    var outbox_r = syncChannelCreate(2);
+    if (outbox_r.1 != nil) {
+        return (-1, -1, -1, outbox_r.1);
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var arg: map<string, any> = {
+        "basePort": base_port,
+        "maxTries": max_tries,
+        "requestCount": request_count,
+        "mode": mode,
+        "workerCount": worker_count,
+        "queueCapacity": queue_capacity,
+        "acceptTimeoutMs": accept_timeout_ms,
+        "maxRequestBytes": max_request_bytes,
+        "requestDeadlineMs": request_deadline_ms
+    };
+    var arg_schema: map<string, any> = {
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "mode": "string",
+        "workerCount": "int",
+        "queueCapacity": "int",
+        "acceptTimeoutMs": "int",
+        "maxRequestBytes": "int",
+        "requestDeadlineMs": "int"
+    };
+
+    var spawn_r = syncThreadSpawnTyped("httpServerBenchServer",
+                                       arg as any,
+                                       arg_schema as any,
+                                       -1,
+                                       outbox_id);
+    if (spawn_r.1 != nil) {
+        var _close_1 = syncChannelClose(outbox_id);
+        return (-1, -1, -1, spawn_r.1);
+    }
+
+    var thread_id: int = spawn_r.0 as int;
+    var ready_r = syncChannelRecv(outbox_id, 5000);
+    if (ready_r.1 != nil) {
+        var join_err_1 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_2 = syncChannelClose(outbox_id);
+        var data_1: map<string, any> = {
+            "recvErr": ready_r.1,
+            "join": join_err_1
+        };
+        return (-1, -1, -1, benchError(ERR_NETWORK, "benchmark server startup signal failed", data_1));
+    }
+
+    var selected_port: int = ready_r.0 as int;
+    if (selected_port <= 0) {
+        var join_err_2 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_3 = syncChannelClose(outbox_id);
+        var data_2: map<string, any> = {
+            "readyPort": selected_port,
+            "join": join_err_2
+        };
+        return (-1, -1, -1, benchError(ERR_NETWORK, "benchmark server failed to start", data_2));
+    }
+
+    return (thread_id, outbox_id, selected_port, nil);
+}
+
+func stopHttpServerBench(thread_id: int, outbox_id: int, expected_requests: int): Error? {
+    var join_r = syncThreadJoinTyped(thread_id, "int", 5000);
+    var close_r = syncChannelClose(outbox_id);
+
+    if (join_r.1 != nil) {
+        return benchError(join_r.1.code, "benchmark server join failed: " + join_r.1.message, join_r.1.data);
+    }
+    if (close_r.1 != nil) {
+        return benchError(close_r.1.code, "benchmark server outbox close failed: " + close_r.1.message, close_r.1.data);
+    }
+
+    var served: int = join_r.0 as int;
+    if (served != expected_requests) {
+        return benchError(ERR_INTERNAL,
+                          "benchmark server served unexpected request count",
+                          {"served": served, "expected": expected_requests});
+    }
+    return nil;
+}
+
+func formatBenchServerDiag(thread_id: int, outbox_id: int): string {
+    var join_dbg = syncThreadJoinTyped(thread_id, "int", 1000);
+    var close_dbg = syncChannelClose(outbox_id);
+    var dbg_msg: string = "";
+    if (join_dbg.1 == nil) {
+        dbg_msg = "serverReturned=" + str(join_dbg.0 as int);
+    } else {
+        dbg_msg = "serverJoinErr=" + join_dbg.1.message;
+    }
+    if (close_dbg.1 != nil) {
+        dbg_msg = dbg_msg + ", outboxCloseErr=" + close_dbg.1.message;
+    }
+    return dbg_msg;
+}
+
+func httpBenchRawRequest(port: int): Error? {
+    var connect_r = tcpConnect("127.0.0.1", port);
+    if (connect_r.1 != nil) {
+        return benchError(connect_r.1.code,
+                         connect_r.1.message,
+                         {"stage": "connect", "cause": connect_r.1.data});
+    }
+
+    var sock = connect_r.0;
+    var send_r = tcpSend(sock, "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    if (send_r.1 != nil) {
+        tcpClose(sock);
+        return benchError(send_r.1.code,
+                         send_r.1.message,
+                         {"stage": "send", "cause": send_r.1.data});
+    }
+
+    var recv_r = tcpReceive(sock, 4096);
+    tcpClose(sock);
+    if (recv_r.1 != nil) {
+        return benchError(recv_r.1.code,
+                         recv_r.1.message,
+                         {"stage": "receive", "cause": recv_r.1.data});
+    }
+
+    if (!startsWith(recv_r.0, "HTTP/1.1 200")) {
+        return benchError(ERR_HTTP, "unexpected HTTP status from benchmark server", recv_r.0);
+    }
+    if (find(recv_r.0, "pong") < 0) {
+        return benchError(ERR_PARSE, "benchmark server response body missing pong", recv_r.0);
+    }
+
+    return nil;
+}
+
+func httpBenchRawQueryRequest(port: int): Error? {
+    var connect_r = tcpConnect("127.0.0.1", port);
+    if (connect_r.1 != nil) {
+        return benchError(connect_r.1.code,
+                         connect_r.1.message,
+                         {"stage": "connect", "cause": connect_r.1.data});
+    }
+
+    var sock = connect_r.0;
+    var send_r = tcpSend(sock, "GET /search?page=42&enabled=true&name=ada+lovelace HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    if (send_r.1 != nil) {
+        tcpClose(sock);
+        return benchError(send_r.1.code,
+                         send_r.1.message,
+                         {"stage": "send", "cause": send_r.1.data});
+    }
+
+    var recv_r = tcpReceive(sock, 4096);
+    tcpClose(sock);
+    if (recv_r.1 != nil) {
+        return benchError(recv_r.1.code,
+                         recv_r.1.message,
+                         {"stage": "receive", "cause": recv_r.1.data});
+    }
+
+    if (!startsWith(recv_r.0, "HTTP/1.1 200")) {
+        return benchError(ERR_HTTP, "unexpected HTTP status from query benchmark server", recv_r.0);
+    }
+    if (find(recv_r.0, "page=42") < 0) {
+        return benchError(ERR_PARSE, "query benchmark response missing page", recv_r.0);
+    }
+    if (find(recv_r.0, "enabled=true") < 0) {
+        return benchError(ERR_PARSE, "query benchmark response missing enabled", recv_r.0);
+    }
+    if (find(recv_r.0, "name=ada lovelace") < 0) {
+        return benchError(ERR_PARSE, "query benchmark response missing name", recv_r.0);
+    }
+
+    return nil;
+}
+
+func httpBenchRawRequestWithRetry(port: int, max_attempts: int, max_backoff_ms: int): Error? {
+    var attempt: int = 0;
+    var backoff_ms: int = 1;
+    var total_backoff_ms: int = 0;
+    var attempts_limit: int = max_attempts;
+    var backoff_limit: int = max_backoff_ms;
+    if (attempts_limit < 1) {
+        attempts_limit = 1;
+    }
+    if (backoff_limit < 1) {
+        backoff_limit = 1;
+    }
+
+    while (attempt < attempts_limit) {
+        attempt = attempt + 1;
+        var req_err = httpBenchRawRequest(port);
+        if (req_err == nil) {
+            return nil;
+        }
+        var req_error = req_err as Error;
+
+        if (!isRetriableHttpBenchConnectError(req_error) || attempt >= attempts_limit) {
+            if (attempt <= 1) {
+                return req_error;
+            }
+            return benchError(req_error.code,
+                             req_error.message,
+                             {
+                                 "attempts": attempt,
+                                 "retryExhausted": true,
+                                 "totalBackoffMs": total_backoff_ms,
+                                 "lastErrorData": req_error.data
+                             });
+        }
+
+        spinWaitMillis(backoff_ms);
+        total_backoff_ms = total_backoff_ms + backoff_ms;
+        if (backoff_ms < backoff_limit) {
+            backoff_ms = backoff_ms * 2;
+            if (backoff_ms > backoff_limit) {
+                backoff_ms = backoff_limit;
+            }
+        }
+    }
+
+    return benchError(ERR_INTERNAL,
+                     "unexpected benchmark retry loop exit",
+                     {"maxAttempts": attempts_limit});
+}
+
+func httpBenchRawQueryRequestWithRetry(port: int, max_attempts: int, max_backoff_ms: int): Error? {
+    var attempt: int = 0;
+    var backoff_ms: int = 1;
+    var total_backoff_ms: int = 0;
+    var attempts_limit: int = max_attempts;
+    var backoff_limit: int = max_backoff_ms;
+    if (attempts_limit < 1) {
+        attempts_limit = 1;
+    }
+    if (backoff_limit < 1) {
+        backoff_limit = 1;
+    }
+
+    while (attempt < attempts_limit) {
+        attempt = attempt + 1;
+        var req_err = httpBenchRawQueryRequest(port);
+        if (req_err == nil) {
+            return nil;
+        }
+        var req_error = req_err as Error;
+
+        if (!isRetriableHttpBenchConnectError(req_error) || attempt >= attempts_limit) {
+            if (attempt <= 1) {
+                return req_error;
+            }
+            return benchError(req_error.code,
+                             req_error.message,
+                             {
+                                 "attempts": attempt,
+                                 "retryExhausted": true,
+                                 "totalBackoffMs": total_backoff_ms,
+                                 "lastErrorData": req_error.data
+                             });
+        }
+
+        spinWaitMillis(backoff_ms);
+        total_backoff_ms = total_backoff_ms + backoff_ms;
+        if (backoff_ms < backoff_limit) {
+            backoff_ms = backoff_ms * 2;
+            if (backoff_ms > backoff_limit) {
+                backoff_ms = backoff_limit;
+            }
+        }
+    }
+
+    return benchError(ERR_INTERNAL,
+                     "unexpected query benchmark retry loop exit",
+                     {"maxAttempts": attempts_limit});
+}
+
+func waitForHttpServerReady(port: int): Error? {
+    var attempt: int = 0;
+    while (attempt < 2000) {
+        var req = httpBenchRawRequest(port);
+        if (req == nil) {
+            return nil;
+        }
+        var req_err = req as Error;
+        if (!isRetriableHttpBenchConnectError(req_err)) {
+            return req;
+        }
+
+        attempt = attempt + 1;
+        spinWaitMillis(1);
+    }
+
+    return benchError(ERR_NETWORK,
+                     "http benchmark readiness probe retries exhausted",
+                     {"port": port, "attempts": attempt});
+}
+
+func benchHttpServerMany(iters: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm + 1;
+
+    var server_r = startHttpServerBench("many",
+                                        19531,
+                                        16,
+                                        total_requests,
+                                        1,
+                                        1,
+                                        5000,
+                                        4096,
+                                        0);
+    if (server_r.3 != nil) {
+        panic("failed to start sync benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var ready_err = waitForHttpServerReady(port);
+    if (ready_err != nil) {
+        var join_ready = syncThreadJoinTyped(thread_id, "int", 100);
+        var close_ready = syncChannelClose(outbox_id);
+        var ready_diag: string = "";
+        if (join_ready.1 == nil) {
+            ready_diag = "serverReturned=" + str(join_ready.0 as int);
+        } else {
+            ready_diag = "serverJoinErr=" + join_ready.1.message;
+        }
+        if (close_ready.1 != nil) {
+            ready_diag = ready_diag + ", outboxCloseErr=" + close_ready.1.message;
+        }
+        panic("http benchmark readiness probe failed: " + ready_err.message + " (" + str(ready_err.code) + ", " + ready_diag + ")");
+    }
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req_w != nil) {
+            var dbg_msg_w = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request warmup failed at i=" + str(w) + ": " + req_w.message + " (" + dbg_msg_w + ")");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req != nil) {
+            var dbg_msg = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request failed at i=" + str(i) + ": " + req.message + " (" + dbg_msg + ")");
+        }
+        consumed_bytes = consumed_bytes + 4;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpServerServeMany+rawTcp", iters, start, end);
+    reportBytes("perf httpServerServeMany+rawTcp body", consumed_bytes, start, end);
+
+    var stop_err = stopHttpServerBench(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop sync benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpServerThreadPool(iters: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm + 1;
+
+    var server_r = startHttpServerBench("threadpool",
+                                        19561,
+                                        16,
+                                        total_requests,
+                                        2,
+                                        8,
+                                        5000,
+                                        4096,
+                                        0);
+    if (server_r.3 != nil) {
+        panic("failed to start thread-pool benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var ready_err = waitForHttpServerReady(port);
+    if (ready_err != nil) {
+        var join_ready = syncThreadJoinTyped(thread_id, "int", 100);
+        var close_ready = syncChannelClose(outbox_id);
+        var ready_diag: string = "";
+        if (join_ready.1 == nil) {
+            ready_diag = "serverReturned=" + str(join_ready.0 as int);
+        } else {
+            ready_diag = "serverJoinErr=" + join_ready.1.message;
+        }
+        if (close_ready.1 != nil) {
+            ready_diag = ready_diag + ", outboxCloseErr=" + close_ready.1.message;
+        }
+        panic("http benchmark readiness probe failed: " + ready_err.message + " (" + str(ready_err.code) + ", " + ready_diag + ")");
+    }
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req_w != nil) {
+            var dbg_msg_w = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request warmup failed at i=" + str(w) + ": " + req_w.message + " (" + dbg_msg_w + ")");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req != nil) {
+            var dbg_msg = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request failed at i=" + str(i) + ": " + req.message + " (" + dbg_msg + ")");
+        }
+        consumed_bytes = consumed_bytes + 4;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpServerServeThreadPool+rawTcp", iters, start, end);
+    reportBytes("perf httpServerServeThreadPool+rawTcp body", consumed_bytes, start, end);
+
+    var stop_err = stopHttpServerBench(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop thread-pool benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpServerThreadPoolDeadline(iters: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm + 1;
+
+    var server_r = startHttpServerBench("threadpool_deadline",
+                                        19591,
+                                        16,
+                                        total_requests,
+                                        2,
+                                        8,
+                                        5000,
+                                        4096,
+                                        1000);
+    if (server_r.3 != nil) {
+        panic("failed to start deadline benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var ready_err = waitForHttpServerReady(port);
+    if (ready_err != nil) {
+        var join_ready = syncThreadJoinTyped(thread_id, "int", 100);
+        var close_ready = syncChannelClose(outbox_id);
+        var ready_diag: string = "";
+        if (join_ready.1 == nil) {
+            ready_diag = "serverReturned=" + str(join_ready.0 as int);
+        } else {
+            ready_diag = "serverJoinErr=" + join_ready.1.message;
+        }
+        if (close_ready.1 != nil) {
+            ready_diag = ready_diag + ", outboxCloseErr=" + close_ready.1.message;
+        }
+        panic("http benchmark readiness probe failed: " + ready_err.message + " (" + str(ready_err.code) + ", " + ready_diag + ")");
+    }
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req_w != nil) {
+            var dbg_msg_w = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request warmup failed at i=" + str(w) + ": " + req_w.message + " (" + dbg_msg_w + ")");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpBenchRawRequestWithRetry(port, 40, 64);
+        if (req != nil) {
+            var dbg_msg = formatBenchServerDiag(thread_id, outbox_id);
+            panic("raw request failed at i=" + str(i) + ": " + req.message + " (" + dbg_msg + ")");
+        }
+        consumed_bytes = consumed_bytes + 4;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpServerServeThreadPoolWithDeadline+rawTcp", iters, start, end);
+    reportBytes("perf httpServerServeThreadPoolWithDeadline+rawTcp body", consumed_bytes, start, end);
+
+    var stop_err = stopHttpServerBench(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop deadline benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpServerManyQueryHelpers(iters: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm + 1;
+
+    var server_r = startHttpServerBench("many",
+                                        19621,
+                                        16,
+                                        total_requests,
+                                        1,
+                                        1,
+                                        5000,
+                                        4096,
+                                        0);
+    if (server_r.3 != nil) {
+        panic("failed to start query-helper benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var ready_err = waitForHttpServerReady(port);
+    if (ready_err != nil) {
+        var join_ready = syncThreadJoinTyped(thread_id, "int", 100);
+        var close_ready = syncChannelClose(outbox_id);
+        var ready_diag: string = "";
+        if (join_ready.1 == nil) {
+            ready_diag = "serverReturned=" + str(join_ready.0 as int);
+        } else {
+            ready_diag = "serverJoinErr=" + join_ready.1.message;
+        }
+        if (close_ready.1 != nil) {
+            ready_diag = ready_diag + ", outboxCloseErr=" + close_ready.1.message;
+        }
+        panic("http query benchmark readiness probe failed: " + ready_err.message + " (" + str(ready_err.code) + ", " + ready_diag + ")");
+    }
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpBenchRawQueryRequestWithRetry(port, 40, 64);
+        if (req_w != nil) {
+            var dbg_msg_w = formatBenchServerDiag(thread_id, outbox_id);
+            panic("query request warmup failed at i=" + str(w) + ": " + req_w.message + " (" + dbg_msg_w + ")");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpBenchRawQueryRequestWithRetry(port, 40, 64);
+        if (req != nil) {
+            var dbg_msg = formatBenchServerDiag(thread_id, outbox_id);
+            panic("query request failed at i=" + str(i) + ": " + req.message + " (" + dbg_msg + ")");
+        }
+        consumed_bytes = consumed_bytes + 41;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpServerServeMany+queryHelpers", iters, start, end);
+    reportBytes("perf httpServerServeMany+queryHelpers body", consumed_bytes, start, end);
+
+    var stop_err = stopHttpServerBench(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop query-helper benchmark server: " + stop_err.message);
+    }
+}
+
+func main(): void {
+    println("=== TabloLang HTTP Server Micro-Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchHttpServerMany(200 * scale);
+    benchHttpServerThreadPool(200 * scale);
+    benchHttpServerThreadPoolDeadline(200 * scale);
+    benchHttpServerManyQueryHelpers(200 * scale);
+
+    println("HTTP server benchmark complete!");
+}

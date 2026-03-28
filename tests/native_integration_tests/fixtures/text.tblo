@@ -1,0 +1,251 @@
+// Text helpers for common CLI/backend string shaping tasks.
+// Operations are ASCII-oriented and keep non-ASCII bytes unchanged.
+
+var TEXT_ASCII_LOWER: string = "abcdefghijklmnopqrstuvwxyz";
+var TEXT_ASCII_UPPER: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+var TEXT_ASCII_DIGITS: string = "0123456789";
+
+func textStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func textError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return textStdError(code, message, data);
+}
+
+func textIsAsciiLower(ch: string): bool {
+    return find(TEXT_ASCII_LOWER, ch) >= 0;
+}
+
+func textIsAsciiUpper(ch: string): bool {
+    return find(TEXT_ASCII_UPPER, ch) >= 0;
+}
+
+func textIsAsciiLetter(ch: string): bool {
+    return textIsAsciiLower(ch) || textIsAsciiUpper(ch);
+}
+
+func textIsAsciiDigit(ch: string): bool {
+    return find(TEXT_ASCII_DIGITS, ch) >= 0;
+}
+
+func textIsAsciiAlnum(ch: string): bool {
+    return textIsAsciiLetter(ch) || textIsAsciiDigit(ch);
+}
+
+func textIsWhitespace(ch: string): bool {
+    return ch == " " || ch == "\t" || ch == "\n" || ch == "\r";
+}
+
+func textToLowerAscii(input: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        var idx: int = find(TEXT_ASCII_UPPER, ch);
+        if (idx >= 0) {
+            out = out + substring(TEXT_ASCII_LOWER, idx, 1);
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func textToUpperAscii(input: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        var idx: int = find(TEXT_ASCII_LOWER, ch);
+        if (idx >= 0) {
+            out = out + substring(TEXT_ASCII_UPPER, idx, 1);
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func textUpperFirstAscii(word: string): string {
+    if (word == "") {
+        return "";
+    }
+    var head: string = textToUpperAscii(substring(word, 0, 1));
+    if (len(word) == 1) {
+        return head;
+    }
+    return head + substring(word, 1, len(word) - 1);
+}
+
+func textNormalizeSpaces(input: string): string {
+    var out: string = "";
+    var in_space: bool = false;
+    var i: int = 0;
+
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (textIsWhitespace(ch)) {
+            if (out != "" && !in_space) {
+                out = out + " ";
+                in_space = true;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        out = out + ch;
+        in_space = false;
+        i = i + 1;
+    }
+
+    if (endsWith(out, " ")) {
+        out = substring(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func textSplitWordsAscii(input: string): array<string> {
+    var words: array<string> = [];
+    var current: string = "";
+    var i: int = 0;
+
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+
+        if (textIsAsciiAlnum(ch)) {
+            if (current != "") {
+                var prev: string = substring(current, len(current) - 1, 1);
+
+                if (textIsAsciiLower(prev) && textIsAsciiUpper(ch)) {
+                    push(words, textToLowerAscii(current));
+                    current = "";
+                } else if (textIsAsciiUpper(prev) && textIsAsciiLower(ch) && len(current) > 1) {
+                    var prev_prev: string = substring(current, len(current) - 2, 1);
+                    if (textIsAsciiUpper(prev_prev)) {
+                        var prefix: string = substring(current, 0, len(current) - 1);
+                        push(words, textToLowerAscii(prefix));
+                        current = substring(current, len(current) - 1, 1);
+                    }
+                }
+            }
+
+            current = current + ch;
+            i = i + 1;
+            continue;
+        }
+
+        if (current != "") {
+            push(words, textToLowerAscii(current));
+            current = "";
+        }
+        i = i + 1;
+    }
+
+    if (current != "") {
+        push(words, textToLowerAscii(current));
+    }
+
+    return words;
+}
+
+func textWordCountAscii(input: string): int {
+    return len(textSplitWordsAscii(input));
+}
+
+func textSlugifyAscii(input: string, separator: string): (string, Error?) {
+    if (separator == "") {
+        return ("",
+                textError(ERR_INVALID_ARGUMENT,
+                          "textSlugifyAscii: separator must be non-empty",
+                          "textSlugifyAscii.separator",
+                          separator));
+    }
+
+    var i: int = 0;
+    while (i < len(separator)) {
+        if (textIsWhitespace(substring(separator, i, 1))) {
+            return ("",
+                    textError(ERR_INVALID_ARGUMENT,
+                              "textSlugifyAscii: separator cannot contain whitespace",
+                              "textSlugifyAscii.separator",
+                              separator));
+        }
+        i = i + 1;
+    }
+
+    var words: array<string> = textSplitWordsAscii(input);
+    if (len(words) == 0) {
+        return ("", nil);
+    }
+
+    return (join(words, separator), nil);
+}
+
+func textSnakeCaseAscii(input: string): string {
+    return join(textSplitWordsAscii(input), "_");
+}
+
+func textKebabCaseAscii(input: string): string {
+    return join(textSplitWordsAscii(input), "-");
+}
+
+func textCamelCaseAscii(input: string): string {
+    var words: array<string> = textSplitWordsAscii(input);
+    if (len(words) == 0) {
+        return "";
+    }
+
+    var out: string = words[0];
+    var i: int = 1;
+    while (i < len(words)) {
+        out = out + textUpperFirstAscii(words[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+func textPascalCaseAscii(input: string): string {
+    var words: array<string> = textSplitWordsAscii(input);
+    var out: string = "";
+    foreach (word in words) {
+        out = out + textUpperFirstAscii(word);
+    }
+    return out;
+}
+
+func textTitleCaseAscii(input: string): string {
+    var words: array<string> = textSplitWordsAscii(input);
+    var titled: array<string> = [];
+    foreach (word in words) {
+        push(titled, textUpperFirstAscii(word));
+    }
+    return join(titled, " ");
+}
+
+func textTruncateAscii(input: string, max_len: int): (string, Error?) {
+    if (max_len < 0) {
+        return ("",
+                textError(ERR_INVALID_ARGUMENT,
+                          "textTruncateAscii: maxLen must be >= 0",
+                          "textTruncateAscii.maxLen",
+                          max_len));
+    }
+
+    if (len(input) <= max_len) {
+        return (input, nil);
+    }
+
+    if (max_len <= 3) {
+        return (substring("...", 0, max_len), nil);
+    }
+
+    return (substring(input, 0, max_len - 3) + "...", nil);
+}

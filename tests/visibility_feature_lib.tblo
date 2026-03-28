@@ -1,0 +1,6 @@
+private const SECRET_LABEL: string = "hidden";
+public const PUBLIC_LABEL: string = "visible";
+
+public func moduleTag(): string {
+    return PUBLIC_LABEL;
+}

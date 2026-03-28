@@ -1,0 +1,223 @@
+// Concurrency stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_concurrency_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_concurrency_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/concurrency.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 500) {
+        w = 500;
+    }
+    return w;
+}
+
+func benchChannelRoundTrip(iters: int): void {
+    var opened = concurrencyChannelOpen(256);
+    if (opened.1 != nil) {
+        println("perf concurrencyChannelRoundTrip: setup failed");
+        return;
+    }
+    var channel: ConcurrencyChannel = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var send_err = concurrencyChannelSend(channel, (w as any), 2000);
+        if (send_err != nil) {
+            println("perf concurrencyChannelRoundTrip: warmup send failed");
+            concurrencyChannelClose(channel);
+            return;
+        }
+        var recv_r = concurrencyChannelRecv(channel, 2000);
+        if (recv_r.1 != nil) {
+            println("perf concurrencyChannelRoundTrip: warmup recv failed");
+            concurrencyChannelClose(channel);
+            return;
+        }
+        sink = sink + (recv_r.0 as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var send_err_2 = concurrencyChannelSend(channel, (i as any), 2000);
+        if (send_err_2 != nil) {
+            println("perf concurrencyChannelRoundTrip: send failed");
+            concurrencyChannelClose(channel);
+            return;
+        }
+        var recv_r2 = concurrencyChannelRecv(channel, 2000);
+        if (recv_r2.1 != nil) {
+            println("perf concurrencyChannelRoundTrip: recv failed");
+            concurrencyChannelClose(channel);
+            return;
+        }
+        sink = sink + (recv_r2.0 as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    var closed = concurrencyChannelClose(channel);
+    if (closed.1 != nil) {
+        println("perf concurrencyChannelRoundTrip: close failed");
+        return;
+    }
+
+    report("perf concurrencyChannelRoundTrip", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchSharedTypedSetGet(iters: int): void {
+    var schema: map<string, any> = { "value": "int" };
+    var opened = concurrencySharedCreateTyped({ "value": 0 } as any, schema as any);
+    if (opened.1 != nil) {
+        println("perf concurrencySharedTypedSetGet: setup failed");
+        return;
+    }
+    var shared: ConcurrencyShared = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var set_w = concurrencySharedSet(shared, { "value": w } as any);
+        if (set_w.1 != nil) {
+            println("perf concurrencySharedTypedSetGet: warmup set failed");
+            return;
+        }
+        var get_w = concurrencySharedGet(shared);
+        if (get_w.1 != nil) {
+            println("perf concurrencySharedTypedSetGet: warmup get failed");
+            return;
+        }
+        var obj_w: map<string, any> = get_w.0 as map<string, any>;
+        sink = sink + (mapGet(obj_w, "value") as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var set_r = concurrencySharedSet(shared, { "value": i } as any);
+        if (set_r.1 != nil) {
+            println("perf concurrencySharedTypedSetGet: set failed");
+            return;
+        }
+        var get_r = concurrencySharedGet(shared);
+        if (get_r.1 != nil) {
+            println("perf concurrencySharedTypedSetGet: get failed");
+            return;
+        }
+        var obj: map<string, any> = get_r.0 as map<string, any>;
+        sink = sink + (mapGet(obj, "value") as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf concurrencySharedTypedSetGet", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchArcGuardCycle(iters: int): void {
+    var opened = concurrencyArcCreate(0 as any);
+    if (opened.1 != nil) {
+        println("perf concurrencyArcGuardCycle: setup failed");
+        return;
+    }
+    var arc: ConcurrencyArc = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var guard_w = concurrencyArcAcquire(arc);
+        if (guard_w.1 != nil) {
+            println("perf concurrencyArcGuardCycle: warmup acquire failed");
+            return;
+        }
+        var guard: ConcurrencyGuard = guard_w.0;
+        var read_w = concurrencyArcRead(guard);
+        if (read_w.1 != nil) {
+            concurrencyArcRelease(guard);
+            println("perf concurrencyArcGuardCycle: warmup read failed");
+            return;
+        }
+        var current_w: int = read_w.0 as int;
+        var write_w = concurrencyArcWrite(guard, (current_w + 1) as any);
+        var release_w = concurrencyArcRelease(guard);
+        if (write_w.1 != nil || release_w.1 != nil) {
+            println("perf concurrencyArcGuardCycle: warmup write/release failed");
+            return;
+        }
+        sink = sink + current_w;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var guard_r = concurrencyArcAcquire(arc);
+        if (guard_r.1 != nil) {
+            println("perf concurrencyArcGuardCycle: acquire failed");
+            return;
+        }
+        var guard2: ConcurrencyGuard = guard_r.0;
+        var read_r = concurrencyArcRead(guard2);
+        if (read_r.1 != nil) {
+            concurrencyArcRelease(guard2);
+            println("perf concurrencyArcGuardCycle: read failed");
+            return;
+        }
+        var current: int = read_r.0 as int;
+        var write_r = concurrencyArcWrite(guard2, (current + 1) as any);
+        var release_r = concurrencyArcRelease(guard2);
+        if (write_r.1 != nil || release_r.1 != nil) {
+            println("perf concurrencyArcGuardCycle: write/release failed");
+            return;
+        }
+        sink = sink + current;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf concurrencyArcGuardCycle", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Concurrency Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchChannelRoundTrip(180000 * scale);
+    benchSharedTypedSetGet(120000 * scale);
+    benchArcGuardCycle(80000 * scale);
+
+    println("Concurrency stdlib benchmark complete!");
+}

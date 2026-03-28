@@ -1,0 +1,168 @@
+func emptyStringSet(): set<string> {
+    return {};
+}
+
+func acceptStringSet(s: set<string>): int {
+    return setCount(s);
+}
+
+func main(): void {
+    var m: map<string, any> = {};
+    mapSet(m, "a", 1);
+    mapSet(m, "b", 2);
+
+    println(mapCount(m));
+    println(mapHas(m, "a"));
+    println(mapGet(m, "a") as int);
+    println(mapGet(m, "b") as int);
+
+    mapDelete(m, "a");
+    println(mapCount(m));
+    println(mapHas(m, "a"));
+    mapSetString(m, "tmp", 99);
+    println(mapHasString(m, "tmp"));
+    mapDeleteString(m, "tmp");
+    println(!mapHasString(m, "tmp"));
+    println(mapGetString(m, "tmp") == nil);
+
+    mapSet(m, "c", 3);
+    println(mapCount(m));
+    println(mapGet(m, "c") as int);
+    mapSetString(m, "d", 4);
+    println(mapHasString(m, "d"));
+    println((mapGetString(m, "d") as int) == 4);
+    println(mapGetString(m, "missing") == nil);
+    println(!mapHasString(m, "missing"));
+
+    // keys()/values() must support maps as well as arrays.
+    var key_list = keys(m);
+    println(key_list != nil);
+    println(typeOf(key_list) == "array");
+    println(len(key_list) == mapCount(m));
+
+    var has_b: bool = false;
+    var has_c: bool = false;
+    foreach (k in key_list) {
+        if (k != nil && typeOf(k) == "string") {
+            var ks: string = k as string;
+            if (ks == "b") has_b = true;
+            if (ks == "c") has_c = true;
+        }
+    }
+    println(has_b);
+    println(has_c);
+
+    var value_list = values(m);
+    println(value_list != nil);
+    println(typeOf(value_list) == "array");
+    println(len(value_list) == mapCount(m));
+
+    var has_2: bool = false;
+    var has_3: bool = false;
+    foreach (v in value_list) {
+        if (v != nil && typeOf(v) == "int") {
+            var vi: int = v as int;
+            if (vi == 2) has_2 = true;
+            if (vi == 3) has_3 = true;
+        }
+    }
+    println(has_2);
+    println(has_3);
+
+    // int-key maps should return int keys through keys().
+    var im: map<int, string> = {};
+    mapSet(im, 10, "ten");
+    mapSet(im, 20, "twenty");
+
+    var int_keys = keys(im);
+    println(int_keys != nil);
+    println(len(int_keys) == 2);
+
+    var seen_10: bool = false;
+    var seen_20: bool = false;
+    foreach (ik in int_keys) {
+        if (ik != nil && typeOf(ik) == "int") {
+            var kv: int = ik as int;
+            if (kv == 10) seen_10 = true;
+            if (kv == 20) seen_20 = true;
+        }
+    }
+    println(seen_10);
+    println(seen_20);
+
+    var int_values = values(im);
+    println(int_values != nil);
+    println(len(int_values) == 2);
+
+    var has_ten: bool = false;
+    var has_twenty: bool = false;
+    foreach (iv in int_values) {
+        if (iv != nil && typeOf(iv) == "string") {
+            var s: string = iv as string;
+            if (s == "ten") has_ten = true;
+            if (s == "twenty") has_twenty = true;
+        }
+    }
+    println(has_ten);
+    println(has_twenty);
+
+    // Deletion-heavy churn should preserve correctness.
+    var churn: map<string, int> = {};
+    var i: int = 0;
+    while (i < 200) {
+        mapSet(churn, "k" + str(i), i);
+        i = i + 1;
+    }
+
+    var d: int = 0;
+    while (d < 150) {
+        mapDelete(churn, "k" + str(d));
+        d = d + 1;
+    }
+
+    println(mapCount(churn) == 50);
+    println(mapHas(churn, "k199"));
+    println(!mapHas(churn, "k10"));
+
+    var r: int = 0;
+    while (r < 150) {
+        mapSet(churn, "k" + str(r), r);
+        r = r + 1;
+    }
+
+    println(mapCount(churn) == 200);
+    println((mapGet(churn, "k149") as int) == 149);
+    println((mapGet(churn, "k199") as int) == 199);
+
+    // String-set builtins and fast-string variants should preserve correctness.
+    var tags: set<string> = {"bug"};
+    println(setCount(tags) == 1);
+    println(setHas(tags, "bug"));
+    setAdd(tags, "feature");
+    println(setHas(tags, "feature"));
+    setAddString(tags, "urgent");
+    println(setHasString(tags, "urgent"));
+    setRemoveString(tags, "bug");
+    println(!setHasString(tags, "bug"));
+    setRemove(tags, "feature");
+    println(!setHas(tags, "feature"));
+    println(!setHasString(tags, "missing"));
+    setRemoveString(tags, "missing");
+    println(setCount(tags) == 1);
+
+    var tag_list = setToArray(tags);
+    println(len(tag_list) == 1);
+    println((tag_list[0] as string) == "urgent");
+
+    // Empty braces should be allowed as an empty set literal in typed set contexts.
+    var empty1: set<string> = {};
+    println(setCount(empty1) == 0);
+
+    tags = {};
+    println(setCount(tags) == 0);
+
+    var empty2: set<string> = emptyStringSet();
+    println(setCount(empty2) == 0);
+
+    println(acceptStringSet({}) == 0);
+}

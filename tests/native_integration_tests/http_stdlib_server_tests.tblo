@@ -1,0 +1,268 @@
+import "fixtures/http.tblo";
+
+func middlewareTag(req: map<string, any>): map<string, any> {
+    mapSet(req, "_mw", "mw-ok");
+    return req;
+}
+
+func routeHello(req: map<string, any>): map<string, any> {
+    var method: string = mapGet(req, "method") as string;
+    var path: string = mapGet(req, "path") as string;
+    var raw_path_any: any = mapGet(req, "rawPath");
+    var raw_path: string = "";
+    if (raw_path_any != nil && typeOf(raw_path_any) == "string") {
+        raw_path = raw_path_any as string;
+    }
+
+    var page: string = "";
+    var name: string = "";
+    var query_any: any = mapGet(req, "query");
+    if (query_any != nil && typeOf(query_any) == "map") {
+        var query = query_any as map<string, string>;
+        var page_any: any = mapGetString(query, "page");
+        if (page_any != nil && typeOf(page_any) == "string") {
+            page = page_any as string;
+        }
+        var name_any: any = mapGetString(query, "name");
+        if (name_any != nil && typeOf(name_any) == "string") {
+            name = name_any as string;
+        }
+    }
+
+    var tag: string = mapGet(req, "_mw") as string;
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-MW": tag
+    };
+    return httpServerResponse(200,
+                              method + " " + path + " page=" + page + " name=" + name + " raw=" + raw_path,
+                              headers);
+}
+
+func routeCreate(req: map<string, any>): map<string, any> {
+    var body: string = mapGet(req, "body") as string;
+    var headers: map<string, string> = {"X-Route": "created"};
+    return httpServerResponse(201, "body=" + body, headers);
+}
+
+func main(): void {
+    var ports: array<int> = [
+        19101, 19102, 19103, 19104, 19105,
+        19106, 19107, 19108, 19109, 19110
+    ];
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+
+    foreach (p in ports) {
+        var s = httpServerStart("127.0.0.1", p, 120, 4096);
+        if (s.1 == nil) {
+            server = s.0;
+            started = true;
+            break;
+        }
+    }
+
+    println(started);
+    if (!started) {
+        return;
+    }
+
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/hello", routeHello as any);
+    httpServerRoute(routes, "POST", "/item", routeCreate as any);
+    var middleware: array<any> = [middlewareTag as any];
+
+    var c1 = tcpConnect("127.0.0.1", server.port);
+    println(c1.1 == nil);
+    if (c1.1 == nil) {
+        var client1: any = c1.0;
+        var send1 = tcpSend(client1, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send1.1 == nil);
+
+        var served1 = httpServerServeOne(server, routes, middleware);
+        println(served1.1 == nil);
+        if (served1.1 == nil) {
+            println(served1.0);
+        }
+
+        var recv1 = tcpReceive(client1, 4096);
+        println(recv1.1 == nil);
+        if (recv1.1 == nil) {
+            println(startsWith(recv1.0, "HTTP/1.1 200"));
+            println(find(recv1.0, "GET /hello") >= 0);
+            println(find(recv1.0, "X-MW: mw-ok") >= 0);
+        }
+        tcpClose(client1);
+    }
+
+    var c2 = tcpConnect("127.0.0.1", server.port);
+    println(c2.1 == nil);
+    if (c2.1 == nil) {
+        var client2: any = c2.0;
+        var send2 = tcpSend(client2, "GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send2.1 == nil);
+
+        var served2 = httpServerServeOne(server, routes, middleware);
+        println(served2.1 == nil);
+        if (served2.1 == nil) {
+            println(served2.0);
+        }
+
+        var recv2 = tcpReceive(client2, 4096);
+        println(recv2.1 == nil);
+        if (recv2.1 == nil) {
+            println(startsWith(recv2.0, "HTTP/1.1 404"));
+            println(find(recv2.0, "Not Found") >= 0);
+        }
+        tcpClose(client2);
+    }
+
+    var c2q = tcpConnect("127.0.0.1", server.port);
+    println(c2q.1 == nil);
+    if (c2q.1 == nil) {
+        var client2q: any = c2q.0;
+        var send2q = tcpSend(client2q, "GET /hello?page=7&name=Ada+Lovelace HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send2q.1 == nil);
+
+        var served2q = httpServerServeOne(server, routes, middleware);
+        println(served2q.1 == nil);
+        if (served2q.1 == nil) {
+            println(served2q.0);
+        }
+
+        var recv2q = tcpReceive(client2q, 4096);
+        println(recv2q.1 == nil);
+        if (recv2q.1 == nil) {
+            println(startsWith(recv2q.0, "HTTP/1.1 200"));
+            println(find(recv2q.0, "GET /hello") >= 0);
+            println(find(recv2q.0, "page=7") >= 0);
+            println(find(recv2q.0, "name=Ada Lovelace") >= 0);
+            println(find(recv2q.0, "raw=/hello?page=7&name=Ada+Lovelace") >= 0);
+        }
+        tcpClose(client2q);
+    }
+
+    var c3 = tcpConnect("127.0.0.1", server.port);
+    println(c3.1 == nil);
+    if (c3.1 == nil) {
+        var client3: any = c3.0;
+        var send3 = tcpSend(client3, "POST /item HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabc");
+        println(send3.1 == nil);
+
+        var served3 = httpServerServeOne(server, routes, middleware);
+        println(served3.1 == nil);
+        if (served3.1 == nil) {
+            println(served3.0);
+        }
+
+        var recv3 = tcpReceive(client3, 4096);
+        println(recv3.1 == nil);
+        if (recv3.1 == nil) {
+            println(startsWith(recv3.0, "HTTP/1.1 201"));
+            println(find(recv3.0, "body=abc") >= 0);
+            println(find(recv3.0, "X-Route: created") >= 0);
+        }
+        tcpClose(client3);
+    }
+
+    var timeout_one = httpServerServeOne(server, routes, middleware);
+    println(timeout_one.1 != nil);
+    if (timeout_one.1 != nil) {
+        println(timeout_one.1.code == ERR_NETWORK);
+        println(find(timeout_one.1.message, "timed out") >= 0);
+    }
+
+    var c4 = tcpConnect("127.0.0.1", server.port);
+    println(c4.1 == nil);
+    if (c4.1 == nil) {
+        var client4: any = c4.0;
+        var send4 = tcpSend(client4, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send4.1 == nil);
+
+        var many = httpServerServeMany(server, routes, middleware, 2);
+        println(many.1 == nil);
+        if (many.1 == nil) {
+            println(many.0 == 1);
+        }
+
+        var recv4 = tcpReceive(client4, 4096);
+        println(recv4.1 == nil);
+        if (recv4.1 == nil) {
+            println(startsWith(recv4.0, "HTTP/1.1 200"));
+        }
+        tcpClose(client4);
+    }
+
+    var c6 = tcpConnect("127.0.0.1", server.port);
+    var c7 = tcpConnect("127.0.0.1", server.port);
+    println(c6.1 == nil);
+    println(c7.1 == nil);
+    if (c6.1 == nil && c7.1 == nil) {
+        var client6: any = c6.0;
+        var client7: any = c7.0;
+
+        var send6 = tcpSend(client6, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        var send7 = tcpSend(client7, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send6.1 == nil);
+        println(send7.1 == nil);
+
+        var conc = httpServerServeConcurrent(server, routes, middleware, 2, 4, 4);
+        println(conc.1 == nil);
+        if (conc.1 == nil) {
+            println(conc.0 == 2);
+        }
+
+        var recv6 = tcpReceive(client6, 4096);
+        var recv7 = tcpReceive(client7, 4096);
+        println(recv6.1 == nil);
+        println(recv7.1 == nil);
+        if (recv6.1 == nil) {
+            println(startsWith(recv6.0, "HTTP/1.1 200"));
+            println(find(recv6.0, "GET /hello") >= 0);
+        }
+        if (recv7.1 == nil) {
+            println(startsWith(recv7.0, "HTTP/1.1 200"));
+            println(find(recv7.0, "GET /hello") >= 0);
+        }
+
+        tcpClose(client6);
+        tcpClose(client7);
+    } else {
+        if (c6.1 == nil) {
+            tcpClose(c6.0);
+        }
+        if (c7.1 == nil) {
+            tcpClose(c7.0);
+        }
+    }
+
+    var bad_workers = httpServerServeConcurrent(server, routes, middleware, 1, 0, 1);
+    println(bad_workers.1 != nil);
+    if (bad_workers.1 != nil) {
+        println(bad_workers.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_queue = httpServerServeConcurrent(server, routes, middleware, 1, 1, 0);
+    println(bad_queue.1 != nil);
+    if (bad_queue.1 != nil) {
+        println(bad_queue.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_middleware: array<any> = [123 as any];
+    var c5 = tcpConnect("127.0.0.1", server.port);
+    println(c5.1 == nil);
+    if (c5.1 == nil) {
+        var client5: any = c5.0;
+        var send5 = tcpSend(client5, "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send5.1 == nil);
+
+        var bad = httpServerServeOne(server, routes, bad_middleware);
+        println(bad.1 != nil);
+        if (bad.1 != nil) {
+            println(bad.1.code == ERR_INVALID_ARGUMENT);
+        }
+        tcpClose(client5);
+    }
+
+    httpServerClose(server);
+}

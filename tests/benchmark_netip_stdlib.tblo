@@ -1,0 +1,175 @@
+// NetIP stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_netip_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_netip_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/netip.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchNetipParseIpv4(iters: int): void {
+    var ip_a: string = "192.168.1.10";
+    var ip_b: string = "10.200.30.40";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = ip_a;
+        if ((w % 2) == 1) {
+            src_w = ip_b;
+        }
+        var p_w = netipParseIpv4(src_w);
+        if (p_w.1 != nil) {
+            panic("benchNetipParseIpv4 warmup failed: " + p_w.1.message);
+        }
+        sink = sink + p_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = ip_a;
+        if ((i % 2) == 1) {
+            src = ip_b;
+        }
+        var p = netipParseIpv4(src);
+        if (p.1 != nil) {
+            panic("benchNetipParseIpv4 failed: " + p.1.message);
+        }
+        sink = sink + p.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf netipParseIpv4", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchNetipNormalizeIpv4(iters: int): void {
+    var ip_a: string = "001.002.003.004";
+    var ip_b: string = "192.168.001.010";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = ip_a;
+        if ((w % 2) == 1) {
+            src_w = ip_b;
+        }
+        var n_w = netipNormalizeIpv4(src_w);
+        if (n_w.1 != nil) {
+            panic("benchNetipNormalizeIpv4 warmup failed: " + n_w.1.message);
+        }
+        sink = sink + len(n_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = ip_a;
+        if ((i % 2) == 1) {
+            src = ip_b;
+        }
+        var n = netipNormalizeIpv4(src);
+        if (n.1 != nil) {
+            panic("benchNetipNormalizeIpv4 failed: " + n.1.message);
+        }
+        sink = sink + len(n.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf netipNormalizeIpv4", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchNetipCidrContains(iters: int): void {
+    var cidr_r = netipParseCidr("10.8.0.0/16");
+    if (cidr_r.1 != nil) {
+        panic("benchNetipCidrContains parse failed: " + cidr_r.1.message);
+    }
+    var cidr: NetIpCidr = cidr_r.0;
+
+    var ip_in: string = "10.8.12.33";
+    var ip_out: string = "10.9.12.33";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = ip_in;
+        if ((w % 2) == 1) {
+            src_w = ip_out;
+        }
+        var c_w = netipCidrContains(cidr, src_w);
+        if (c_w.1 != nil) {
+            panic("benchNetipCidrContains warmup failed: " + c_w.1.message);
+        }
+        if (c_w.0) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = ip_in;
+        if ((i % 2) == 1) {
+            src = ip_out;
+        }
+        var c = netipCidrContains(cidr, src);
+        if (c.1 != nil) {
+            panic("benchNetipCidrContains failed: " + c.1.message);
+        }
+        if (c.0) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf netipCidrContains", iters, start, end);
+    if (sink < 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang NetIP Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchNetipParseIpv4(180000 * scale);
+    benchNetipNormalizeIpv4(140000 * scale);
+    benchNetipCidrContains(120000 * scale);
+
+    println("NetIP stdlib benchmark complete!");
+}

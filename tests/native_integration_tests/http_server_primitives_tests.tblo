@@ -1,0 +1,88 @@
+func main(): void {
+    var ports: array<int> = [18981, 18982, 18983, 18984];
+    var listener: any = nil;
+    var selected_port: int = 0;
+
+    foreach (p in ports) {
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            listener = lr.0;
+            selected_port = p;
+            break;
+        }
+    }
+
+    println(listener != nil);
+    if (listener == nil) {
+        return;
+    }
+
+    var cr = tcpConnect("127.0.0.1", selected_port);
+    println(cr.1 == nil);
+    if (cr.1 != nil) {
+        tcpClose(listener);
+        return;
+    }
+    var client: any = cr.0;
+
+    var ar = tcpAccept(listener, 2000);
+    println(ar.1 == nil);
+    if (ar.1 != nil) {
+        tcpClose(client);
+        tcpClose(listener);
+        return;
+    }
+    var server_client: any = ar.0;
+
+    var request_text: string = "GET /hello HTTP/1.1\r\nHost: localhost\r\nX-Test: one\r\n\r\n";
+    var sr = tcpSend(client, request_text);
+    println(sr.1 == nil);
+
+    var rr = httpReadRequest(server_client, 4096);
+    println(rr.1 == nil);
+    if (rr.1 == nil) {
+        var req: map<string, any> = rr.0 as map<string, any>;
+        println(mapGet(req, "method") == "GET");
+        println(mapGet(req, "path") == "/hello");
+        println(mapGet(req, "version") == "HTTP/1.1");
+        println(mapGet(req, "body") == "");
+        var headers: map<string, any> = mapGet(req, "headers") as map<string, any>;
+        println(mapGet(headers, "Host") == "localhost");
+        println(mapGet(headers, "X-Test") == "one");
+    }
+
+    var response_headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Served-By": "tablo-it"
+    };
+    var wr = httpWriteResponse(server_client, 201, "world", response_headers);
+    println(wr.1 == nil);
+    if (wr.1 == nil) {
+        println(wr.0);
+    }
+
+    tcpClose(server_client);
+
+    var recv = tcpReceive(client, 4096);
+    println(recv.1 == nil);
+    if (recv.1 == nil) {
+        println(startsWith(recv.0, "HTTP/1.1 201"));
+        println(find(recv.0, "world") >= 0);
+        println(find(recv.0, "X-Served-By: tablo-it") >= 0);
+    }
+
+    var bad_read = httpReadRequest(client, 0);
+    println(bad_read.1 != nil);
+    if (bad_read.1 != nil) {
+        println(bad_read.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_write = httpWriteResponse(client, 99, "x", nil);
+    println(bad_write.1 != nil);
+    if (bad_write.1 != nil) {
+        println(bad_write.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    tcpClose(client);
+    tcpClose(listener);
+}

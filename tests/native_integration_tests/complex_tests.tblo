@@ -1,0 +1,20 @@
+func main() {
+    // Chained function calls
+    var arr: array<int> = [1, 2, 3];
+    var l: int = len(arr);
+    var s: string = str(l);
+    println(s);
+
+    // Nested expressions with native functions
+    var arr2: array<int> = [];
+    push(arr2, 1);
+    push(arr2, 2);
+    var result: int = len(arr2) + 5;
+    println(result);
+
+    // Type conversion chain
+    var x: double = 3.99;
+    var y: int = toInt(x);
+    var z: string = str(y);
+    println(z);
+}

@@ -1,0 +1,232 @@
+// SQLite stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_sqlite_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_sqlite_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/sqlite.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 10;
+    if (w < 20) {
+        w = 20;
+    }
+    return w;
+}
+
+func isUnsupported(err: Error?): bool {
+    if (err == nil) {
+        return false;
+    }
+    return err.code == ERR_UNSUPPORTED;
+}
+
+func benchSqliteExecInsert(iters: int): void {
+    var opened = sqliteOpenMemory();
+    if (opened.1 != nil) {
+        if (isUnsupported(opened.1)) {
+            println("perf sqliteExecInsert: unsupported");
+            return;
+        }
+        panic("benchSqliteExecInsert open failed: " + opened.1.message);
+    }
+
+    var db: SqliteDb = opened.0;
+    var schema = sqliteExecSql(db, "create table bench(id integer primary key, v text);");
+    if (schema.1 != nil) {
+        panic("benchSqliteExecInsert schema failed: " + schema.1.message);
+    }
+
+    var begin = sqliteExecSql(db, "begin transaction;");
+    if (begin.1 != nil) {
+        panic("benchSqliteExecInsert begin failed: " + begin.1.message);
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var warm_insert = sqliteExecSql(db,
+                                        "insert into bench(id, v) values (" +
+                                        str(w + 1) + ", 'warm');");
+        if (warm_insert.1 != nil) {
+            panic("benchSqliteExecInsert warmup failed: " + warm_insert.1.message);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var insert = sqliteExecSql(db,
+                                   "insert into bench(id, v) values (" +
+                                   str(warm + i + 1) + ", 'x');");
+        if (insert.1 != nil) {
+            panic("benchSqliteExecInsert insert failed: " + insert.1.message);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    var commit = sqliteExecSql(db, "commit;");
+    if (commit.1 != nil) {
+        panic("benchSqliteExecInsert commit failed: " + commit.1.message);
+    }
+
+    var close_err = sqliteCloseDb(db);
+    if (close_err != nil) {
+        panic("benchSqliteExecInsert close failed: " + close_err.message);
+    }
+
+    report("perf sqliteExecInsert", iters, start, end);
+}
+
+func benchSqliteQuerySmall(iters: int): void {
+    var opened = sqliteOpenMemory();
+    if (opened.1 != nil) {
+        if (isUnsupported(opened.1)) {
+            println("perf sqliteQuerySmall: unsupported");
+            return;
+        }
+        panic("benchSqliteQuerySmall open failed: " + opened.1.message);
+    }
+    var db: SqliteDb = opened.0;
+
+    var schema = sqliteExecSql(db, "create table users(id integer primary key, name text);");
+    if (schema.1 != nil) {
+        panic("benchSqliteQuerySmall schema failed: " + schema.1.message);
+    }
+
+    var j: int = 0;
+    while (j < 128) {
+        var seed = sqliteExecSql(db,
+                                 "insert into users(id, name) values (" +
+                                 str(j + 1) + ", 'u" + str(j + 1) + "');");
+        if (seed.1 != nil) {
+            panic("benchSqliteQuerySmall seed failed: " + seed.1.message);
+        }
+        j = j + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var row_w = sqliteQueryOne(db, "select id, name from users where id = 64;");
+        if (row_w.1 != nil || row_w.0 == nil) {
+            panic("benchSqliteQuerySmall warmup failed");
+        }
+        sink = sink + (mapGetString(row_w.0 as map<string, any>, "id") as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var row = sqliteQueryOne(db, "select id, name from users where id = 64;");
+        if (row.1 != nil || row.0 == nil) {
+            panic("benchSqliteQuerySmall query failed");
+        }
+        sink = sink + (mapGetString(row.0 as map<string, any>, "id") as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    var close_err = sqliteCloseDb(db);
+    if (close_err != nil) {
+        panic("benchSqliteQuerySmall close failed: " + close_err.message);
+    }
+
+    report("perf sqliteQuerySmall", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchSqlitePreparedInsert(iters: int): void {
+    var opened = sqliteOpenMemory();
+    if (opened.1 != nil) {
+        if (isUnsupported(opened.1)) {
+            println("perf sqlitePreparedInsert: unsupported");
+            return;
+        }
+        panic("benchSqlitePreparedInsert open failed: " + opened.1.message);
+    }
+
+    var db: SqliteDb = opened.0;
+    var schema = sqliteExecSql(db, "create table bench(id integer primary key, v text);");
+    if (schema.1 != nil) {
+        panic("benchSqlitePreparedInsert schema failed: " + schema.1.message);
+    }
+
+    var prepared = sqlitePrepareQuery(db, "insert into bench(id, v) values (?1, ?2);");
+    if (prepared.1 != nil) {
+        panic("benchSqlitePreparedInsert prepare failed: " + prepared.1.message);
+    }
+    var stmt: SqliteStatement = prepared.0;
+
+    var begin = sqliteBeginTx(db);
+    if (begin != nil) {
+        panic("benchSqlitePreparedInsert begin failed: " + begin.message);
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var warm_exec = sqliteExecPrepared(stmt, [w + 1 as any, "warm" as any]);
+        if (warm_exec != nil) {
+            panic("benchSqlitePreparedInsert warmup failed: " + warm_exec.message);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var exec_err = sqliteExecPrepared(stmt, [warm + i + 1 as any, "x" as any]);
+        if (exec_err != nil) {
+            panic("benchSqlitePreparedInsert insert failed: " + exec_err.message);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    var commit = sqliteCommitTx(db);
+    if (commit != nil) {
+        panic("benchSqlitePreparedInsert commit failed: " + commit.message);
+    }
+    var finalize = sqliteFinalizeStmt(stmt);
+    if (finalize != nil) {
+        panic("benchSqlitePreparedInsert finalize failed: " + finalize.message);
+    }
+    var close_err = sqliteCloseDb(db);
+    if (close_err != nil) {
+        panic("benchSqlitePreparedInsert close failed: " + close_err.message);
+    }
+
+    report("perf sqlitePreparedInsert", iters, start, end);
+}
+
+func main(): void {
+    println("=== TabloLang SQLite Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchSqliteExecInsert(500 * scale);
+    benchSqliteQuerySmall(500 * scale);
+    benchSqlitePreparedInsert(500 * scale);
+}

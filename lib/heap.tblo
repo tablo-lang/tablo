@@ -1,0 +1,358 @@
+// Priority queue helpers backed by a binary min-heap.
+// State is explicit and immutable-style: operations return updated HeapStore.
+
+record HeapEntry {
+    priority: int,
+    value: any
+};
+
+record HeapStore {
+    items: array<HeapEntry>,
+    maxSize: int,
+    pushedCount: int,
+    poppedCount: int,
+    droppedCount: int
+};
+
+record HeapStats {
+    size: int,
+    maxSize: int,
+    pushedCount: int,
+    poppedCount: int,
+    droppedCount: int,
+    minPriority: int
+};
+
+func heapStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func heapError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return heapStdError(code, message, data);
+}
+
+func heapWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return heapStdError(err.code, err.message, data);
+}
+
+func heapDefaultEntry(): HeapEntry {
+    var entry: HeapEntry = {
+        priority: 0,
+        value: nil
+    };
+    return entry;
+}
+
+func heapDefaultStore(): HeapStore {
+    var store: HeapStore = {
+        items: [],
+        maxSize: 0,
+        pushedCount: 0,
+        poppedCount: 0,
+        droppedCount: 0
+    };
+    return store;
+}
+
+func heapValidateMaxSize(max_size: int): Error? {
+    if (max_size < 0 || max_size > 1000000) {
+        return heapError(ERR_INVALID_ARGUMENT,
+                         "maxSize must be between 0 and 1000000",
+                         "heap.config.maxSize",
+                         max_size);
+    }
+    return nil;
+}
+
+func heapHasCapacity(store: HeapStore, additional: int): bool {
+    if (store.maxSize == 0) {
+        return true;
+    }
+    return (len(store.items) + additional) <= store.maxSize;
+}
+
+func heapSiftUp(store: HeapStore, index: int): HeapStore {
+    var next: HeapStore = store;
+    var i: int = index;
+    while (i > 0) {
+        var parent: int = (i - 1) / 2;
+        var parent_entry: HeapEntry = next.items[parent];
+        var child_entry: HeapEntry = next.items[i];
+        if (parent_entry.priority <= child_entry.priority) {
+            break;
+        }
+        next.items[parent] = child_entry;
+        next.items[i] = parent_entry;
+        i = parent;
+    }
+    return next;
+}
+
+func heapSiftDown(store: HeapStore, index: int): HeapStore {
+    var next: HeapStore = store;
+    var n: int = len(next.items);
+    var i: int = index;
+
+    while (true) {
+        var left: int = (i * 2) + 1;
+        if (left >= n) {
+            break;
+        }
+
+        var right: int = left + 1;
+        var smallest: int = left;
+        if (right < n) {
+            if (next.items[right].priority < next.items[left].priority) {
+                smallest = right;
+            }
+        }
+
+        if (next.items[i].priority <= next.items[smallest].priority) {
+            break;
+        }
+
+        var tmp: HeapEntry = next.items[i];
+        next.items[i] = next.items[smallest];
+        next.items[smallest] = tmp;
+        i = smallest;
+    }
+
+    return next;
+}
+
+func heapInsertEntry(store: HeapStore, entry: HeapEntry): HeapStore {
+    var next: HeapStore = store;
+    push(next.items, entry);
+    var idx: int = len(next.items) - 1;
+    next = heapSiftUp(next, idx);
+    return next;
+}
+
+func heapNew(max_size: int): (HeapStore, Error?) {
+    var empty: HeapStore = heapDefaultStore();
+    var cfg_err = heapValidateMaxSize(max_size);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var store: HeapStore = {
+        items: [],
+        maxSize: max_size,
+        pushedCount: 0,
+        poppedCount: 0,
+        droppedCount: 0
+    };
+    return (store, nil);
+}
+
+func heapNewWithSeed(max_size: int, seed_items: array<HeapEntry>): (HeapStore, Error?) {
+    var opened = heapNew(max_size);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    if (max_size > 0 && len(seed_items) > max_size) {
+        return (opened.0,
+                heapError(ERR_INVALID_ARGUMENT,
+                          "seed size exceeds maxSize",
+                          "heap.config.seedItems",
+                          len(seed_items)));
+    }
+
+    var next: HeapStore = opened.0;
+    foreach (entry in seed_items) {
+        next = heapInsertEntry(next, entry);
+        next.pushedCount = next.pushedCount + 1;
+    }
+    return (next, nil);
+}
+
+func heapPush(store: HeapStore, priority: int, value: any): (HeapStore, Error?) {
+    var next: HeapStore = store;
+    if (!heapHasCapacity(next, 1)) {
+        return (next,
+                heapError(ERR_LIMIT,
+                          "heap full: maxSize reached",
+                          "heap.push.full",
+                          {
+                              "maxSize": next.maxSize,
+                              "size": len(next.items)
+                          } as any));
+    }
+
+    var entry: HeapEntry = {
+        priority: priority,
+        value: value
+    };
+    next = heapInsertEntry(next, entry);
+    next.pushedCount = next.pushedCount + 1;
+    return (next, nil);
+}
+
+func heapTryPush(store: HeapStore, priority: int, value: any): (HeapStore, bool) {
+    var next: HeapStore = store;
+    if (!heapHasCapacity(next, 1)) {
+        next.droppedCount = next.droppedCount + 1;
+        return (next, false);
+    }
+
+    var entry: HeapEntry = {
+        priority: priority,
+        value: value
+    };
+    next = heapInsertEntry(next, entry);
+    next.pushedCount = next.pushedCount + 1;
+    return (next, true);
+}
+
+func heapPushKeepHighest(store: HeapStore, priority: int, value: any): (HeapStore, bool) {
+    var next: HeapStore = store;
+    if (heapHasCapacity(next, 1)) {
+        var pushed = heapPush(next, priority, value);
+        if (pushed.1 != nil) {
+            return (next, false);
+        }
+        return (pushed.0, true);
+    }
+
+    if (len(next.items) == 0) {
+        return (next, false);
+    }
+
+    var root: HeapEntry = next.items[0];
+    if (priority <= root.priority) {
+        next.droppedCount = next.droppedCount + 1;
+        return (next, false);
+    }
+
+    var entry: HeapEntry = {
+        priority: priority,
+        value: value
+    };
+    next.items[0] = entry;
+    next = heapSiftDown(next, 0);
+    next.pushedCount = next.pushedCount + 1;
+    next.droppedCount = next.droppedCount + 1;
+    return (next, true);
+}
+
+func heapPushTyped(store: HeapStore,
+                   priority: int,
+                   value: any,
+                   schema: any): (HeapStore, Error?) {
+    var decoded = jsonDecode(value, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                heapWrapError(decoded.1,
+                              "heap.pushTyped.schema",
+                              { "priority": priority } as any));
+    }
+    return heapPush(store, priority, decoded.0);
+}
+
+func heapPeek(store: HeapStore): (HeapEntry, bool) {
+    if (len(store.items) == 0) {
+        return (heapDefaultEntry(), false);
+    }
+    return (store.items[0], true);
+}
+
+func heapPeekPriority(store: HeapStore): (int, bool) {
+    if (len(store.items) == 0) {
+        return (0, false);
+    }
+    return (store.items[0].priority, true);
+}
+
+func heapPop(store: HeapStore): (HeapStore, HeapEntry, bool) {
+    var next: HeapStore = store;
+    if (len(next.items) == 0) {
+        return (next, heapDefaultEntry(), false);
+    }
+
+    var top: HeapEntry = next.items[0];
+    var last: HeapEntry = pop(next.items);
+
+    if (len(next.items) > 0) {
+        next.items[0] = last;
+        next = heapSiftDown(next, 0);
+    }
+
+    next.poppedCount = next.poppedCount + 1;
+    return (next, top, true);
+}
+
+func heapPopTyped(store: HeapStore,
+                  schema: any): (HeapStore, any, int, bool, Error?) {
+    if (len(store.items) == 0) {
+        return (store, nil, 0, false, nil);
+    }
+
+    var top: HeapEntry = store.items[0];
+    var decoded = jsonDecode(top.value, schema);
+    if (decoded.1 != nil) {
+        return (store,
+                nil,
+                0,
+                false,
+                heapWrapError(decoded.1,
+                              "heap.popTyped.schema",
+                              { "priority": top.priority } as any));
+    }
+
+    var popped = heapPop(store);
+    return (popped.0, decoded.0, top.priority, popped.2, nil);
+}
+
+func heapLen(store: HeapStore): int {
+    return len(store.items);
+}
+
+func heapIsEmpty(store: HeapStore): bool {
+    return len(store.items) == 0;
+}
+
+func heapClear(store: HeapStore): (HeapStore, int) {
+    var next: HeapStore = store;
+    var removed: int = len(next.items);
+    next.items = [];
+    return (next, removed);
+}
+
+func heapStats(store: HeapStore): HeapStats {
+    var min_priority: int = 0;
+    if (len(store.items) > 0) {
+        min_priority = store.items[0].priority;
+    }
+
+    var stats: HeapStats = {
+        size: len(store.items),
+        maxSize: store.maxSize,
+        pushedCount: store.pushedCount,
+        poppedCount: store.poppedCount,
+        droppedCount: store.droppedCount,
+        minPriority: min_priority
+    };
+    return stats;
+}
+
+func heapItems(store: HeapStore): array<HeapEntry> {
+    var out: array<HeapEntry> = [];
+    foreach (entry in store.items) {
+        push(out, entry);
+    }
+    return out;
+}

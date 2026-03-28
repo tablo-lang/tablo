@@ -1,0 +1,441 @@
+// Capacity-bounded least-recently-used container.
+// Keeps O(1) key lookup and O(1) recency updates using a linked map.
+
+record LruEntry {
+    key: string,
+    value: any,
+    prevKey: string,
+    nextKey: string,
+    touchSeq: int
+};
+
+record LruStore {
+    entries: map<string, any>,
+    capacity: int,
+    count: int,
+    lruKey: string,
+    mruKey: string,
+    nextTouchSeq: int,
+    totalSets: int,
+    totalEvictions: int
+};
+
+record LruSetResult {
+    inserted: bool,
+    updated: bool,
+    evicted: bool,
+    evictedKey: string,
+    evictedValue: any,
+    count: int
+};
+
+record LruStats {
+    capacity: int,
+    count: int,
+    lruKey: string,
+    mruKey: string,
+    totalSets: int,
+    totalEvictions: int
+};
+
+func lruStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func lruError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return lruStdError(code, message, data);
+}
+
+func lruDefaultEntry(): LruEntry {
+    var entry: LruEntry = {
+        key: "",
+        value: nil,
+        prevKey: "",
+        nextKey: "",
+        touchSeq: 0
+    };
+    return entry;
+}
+
+func lruDefaultStore(): LruStore {
+    var store: LruStore = {
+        entries: {},
+        capacity: 0,
+        count: 0,
+        lruKey: "",
+        mruKey: "",
+        nextTouchSeq: 1,
+        totalSets: 0,
+        totalEvictions: 0
+    };
+    return store;
+}
+
+func lruDefaultSetResult(count: int): LruSetResult {
+    var result: LruSetResult = {
+        inserted: false,
+        updated: false,
+        evicted: false,
+        evictedKey: "",
+        evictedValue: nil,
+        count: count
+    };
+    return result;
+}
+
+func lruValidateCapacity(capacity: int): Error? {
+    if (capacity < 1 || capacity > 1000000) {
+        return lruError(ERR_INVALID_ARGUMENT,
+                        "capacity must be between 1 and 1000000",
+                        "lru.config.capacity",
+                        capacity);
+    }
+    return nil;
+}
+
+func lruValidateKey(key: string, context: string): Error? {
+    if (key == "") {
+        return lruError(ERR_INVALID_ARGUMENT,
+                        "lru key must not be empty",
+                        context,
+                        key);
+    }
+    return nil;
+}
+
+func lruGetEntry(store: LruStore, key: string): (LruEntry, bool) {
+    var entry_any: any = mapGetString(store.entries, key);
+    if (entry_any == nil) {
+        return (lruDefaultEntry(), false);
+    }
+    return (entry_any as LruEntry, true);
+}
+
+func lruSetEntry(store: LruStore, key: string, entry: LruEntry): LruStore {
+    var next: LruStore = store;
+    mapSetString(next.entries, key, entry as any);
+    return next;
+}
+
+func lruTakeTouchSeq(store: LruStore): (LruStore, int) {
+    var next: LruStore = store;
+    var seq: int = next.nextTouchSeq;
+    if (seq < 1) {
+        seq = 1;
+    }
+    next.nextTouchSeq = seq + 1;
+    return (next, seq);
+}
+
+func lruDetach(store: LruStore, key: string, entry: LruEntry): LruStore {
+    var next: LruStore = store;
+    var prev_key: string = entry.prevKey;
+    var next_key: string = entry.nextKey;
+
+    if (prev_key != "") {
+        var prev_r = lruGetEntry(next, prev_key);
+        if (prev_r.1) {
+            var prev_entry: LruEntry = prev_r.0;
+            prev_entry.nextKey = next_key;
+            next = lruSetEntry(next, prev_key, prev_entry);
+        }
+    } else {
+        next.lruKey = next_key;
+    }
+
+    if (next_key != "") {
+        var next_r = lruGetEntry(next, next_key);
+        if (next_r.1) {
+            var next_entry: LruEntry = next_r.0;
+            next_entry.prevKey = prev_key;
+            next = lruSetEntry(next, next_key, next_entry);
+        }
+    } else {
+        next.mruKey = prev_key;
+    }
+
+    return next;
+}
+
+func lruAttachAsMru(store: LruStore, key: string, entry: LruEntry): LruStore {
+    var next: LruStore = store;
+    var updated: LruEntry = entry;
+    updated.prevKey = next.mruKey;
+    updated.nextKey = "";
+
+    if (next.mruKey != "") {
+        var old_mru_r = lruGetEntry(next, next.mruKey);
+        if (old_mru_r.1) {
+            var old_mru: LruEntry = old_mru_r.0;
+            old_mru.nextKey = key;
+            next = lruSetEntry(next, old_mru.key, old_mru);
+        }
+    } else {
+        next.lruKey = key;
+    }
+
+    next.mruKey = key;
+    next = lruSetEntry(next, key, updated);
+    if (next.lruKey == "") {
+        next.lruKey = key;
+    }
+    return next;
+}
+
+func lruTouchKnown(store: LruStore, key: string, entry: LruEntry, touch_seq: int): LruStore {
+    entry.touchSeq = touch_seq;
+
+    if (store.mruKey == key) {
+        return lruSetEntry(store, key, entry);
+    }
+
+    var next: LruStore = lruDetach(store, key, entry);
+    next = lruAttachAsMru(next, key, entry);
+    return next;
+}
+
+func lruTouch(store: LruStore, key: string, touch_seq: int): LruStore {
+    var got = lruGetEntry(store, key);
+    if (!got.1) {
+        return store;
+    }
+    return lruTouchKnown(store, key, got.0, touch_seq);
+}
+
+func lruEvictOne(store: LruStore): (LruStore, bool, string, any) {
+    var next: LruStore = store;
+    if (next.count < 1 || next.lruKey == "") {
+        return (next, false, "", nil);
+    }
+
+    var victim_key: string = next.lruKey;
+    var victim_r = lruGetEntry(next, victim_key);
+    if (!victim_r.1) {
+        mapDeleteString(next.entries, victim_key);
+        next.count = mapCount(next.entries);
+        if (next.count == 0) {
+            next.lruKey = "";
+            next.mruKey = "";
+        }
+        return (next, false, "", nil);
+    }
+
+    var victim: LruEntry = victim_r.0;
+    var victim_value: any = victim.value;
+    next = lruDetach(next, victim_key, victim);
+    mapDeleteString(next.entries, victim_key);
+    next.count = next.count - 1;
+    if (next.count < 0) {
+        next.count = 0;
+    }
+    if (next.count == 0) {
+        next.lruKey = "";
+        next.mruKey = "";
+    }
+    next.totalEvictions = next.totalEvictions + 1;
+    return (next, true, victim_key, victim_value);
+}
+
+func lruNew(capacity: int): (LruStore, Error?) {
+    var empty: LruStore = lruDefaultStore();
+    var cap_err = lruValidateCapacity(capacity);
+    if (cap_err != nil) {
+        return (empty, cap_err);
+    }
+
+    var store: LruStore = {
+        entries: {},
+        capacity: capacity,
+        count: 0,
+        lruKey: "",
+        mruKey: "",
+        nextTouchSeq: 1,
+        totalSets: 0,
+        totalEvictions: 0
+    };
+    return (store, nil);
+}
+
+func lruSet(store: LruStore, key: string, value: any): (LruStore, LruSetResult, Error?) {
+    var next: LruStore = store;
+    var key_err = lruValidateKey(key, "lru.set.key");
+    if (key_err != nil) {
+        return (next, lruDefaultSetResult(next.count), key_err);
+    }
+
+    var outcome: LruSetResult = lruDefaultSetResult(next.count);
+    var has_key: bool = mapHasString(next.entries, key);
+
+    if (has_key) {
+        var existing_r = lruGetEntry(next, key);
+        if (existing_r.1) {
+            var seq_r = lruTakeTouchSeq(next);
+            next = seq_r.0;
+            var existing: LruEntry = existing_r.0;
+            existing.value = value;
+            next = lruTouchKnown(next, key, existing, seq_r.1);
+            next.totalSets = next.totalSets + 1;
+
+            outcome.updated = true;
+            outcome.count = next.count;
+            return (next, outcome, nil);
+        }
+    }
+
+    if (next.count >= next.capacity) {
+        var evict_r = lruEvictOne(next);
+        next = evict_r.0;
+        if (evict_r.1) {
+            outcome.evicted = true;
+            outcome.evictedKey = evict_r.2;
+            outcome.evictedValue = evict_r.3;
+        }
+    }
+
+    var seq_r2 = lruTakeTouchSeq(next);
+    next = seq_r2.0;
+    var entry: LruEntry = {
+        key: key,
+        value: value,
+        prevKey: "",
+        nextKey: "",
+        touchSeq: seq_r2.1
+    };
+    next = lruAttachAsMru(next, key, entry);
+    next.count = next.count + 1;
+    next.totalSets = next.totalSets + 1;
+
+    outcome.inserted = true;
+    outcome.count = next.count;
+    return (next, outcome, nil);
+}
+
+func lruPeek(store: LruStore, key: string): (LruStore, any, bool, Error?) {
+    var next: LruStore = store;
+    var key_err = lruValidateKey(key, "lru.peek.key");
+    if (key_err != nil) {
+        return (next, nil, false, key_err);
+    }
+
+    var got = lruGetEntry(next, key);
+    if (!got.1) {
+        return (next, nil, false, nil);
+    }
+
+    var entry: LruEntry = got.0;
+    var seq_r = lruTakeTouchSeq(next);
+    next = seq_r.0;
+    next = lruTouchKnown(next, key, entry, seq_r.1);
+    return (next, entry.value, true, nil);
+}
+
+func lruGet(store: LruStore, key: string): (LruStore, any, bool, Error?) {
+    return lruPeek(store, key);
+}
+
+func lruDelete(store: LruStore, key: string): (LruStore, bool, Error?) {
+    var next: LruStore = store;
+    var key_err = lruValidateKey(key, "lru.delete.key");
+    if (key_err != nil) {
+        return (next, false, key_err);
+    }
+
+    var got = lruGetEntry(next, key);
+    if (!got.1) {
+        return (next, false, nil);
+    }
+
+    next = lruDetach(next, key, got.0);
+    mapDeleteString(next.entries, key);
+    next.count = next.count - 1;
+    if (next.count < 0) {
+        next.count = 0;
+    }
+    if (next.count == 0) {
+        next.lruKey = "";
+        next.mruKey = "";
+    }
+    return (next, true, nil);
+}
+
+func lruHas(store: LruStore, key: string): (LruStore, bool, Error?) {
+    var peeked = lruPeek(store, key);
+    if (peeked.3 != nil) {
+        return (peeked.0, false, peeked.3);
+    }
+    return (peeked.0, peeked.2, nil);
+}
+
+func lruCount(store: LruStore): int {
+    return store.count;
+}
+
+func lruKeysLruToMru(store: LruStore): array<string> {
+    var out: array<string> = [];
+    var current: string = store.lruKey;
+    var steps: int = 0;
+    var max_steps: int = store.count + 1;
+    if (max_steps < 1) {
+        max_steps = mapCount(store.entries) + 1;
+    }
+
+    while (current != "" && steps < max_steps) {
+        push(out, current);
+        var entry_any: any = mapGetString(store.entries, current);
+        if (entry_any == nil) {
+            break;
+        }
+        var entry: LruEntry = entry_any as LruEntry;
+        current = entry.nextKey;
+        steps = steps + 1;
+    }
+    return out;
+}
+
+func lruKeysMruToLru(store: LruStore): array<string> {
+    var out: array<string> = [];
+    var current: string = store.mruKey;
+    var steps: int = 0;
+    var max_steps: int = store.count + 1;
+    if (max_steps < 1) {
+        max_steps = mapCount(store.entries) + 1;
+    }
+
+    while (current != "" && steps < max_steps) {
+        push(out, current);
+        var entry_any: any = mapGetString(store.entries, current);
+        if (entry_any == nil) {
+            break;
+        }
+        var entry: LruEntry = entry_any as LruEntry;
+        current = entry.prevKey;
+        steps = steps + 1;
+    }
+    return out;
+}
+
+func lruClear(store: LruStore): LruStore {
+    var next: LruStore = store;
+    next.entries = {};
+    next.count = 0;
+    next.lruKey = "";
+    next.mruKey = "";
+    return next;
+}
+
+func lruStats(store: LruStore): LruStats {
+    var stats: LruStats = {
+        capacity: store.capacity,
+        count: store.count,
+        lruKey: store.lruKey,
+        mruKey: store.mruKey,
+        totalSets: store.totalSets,
+        totalEvictions: store.totalEvictions
+    };
+    return stats;
+}

@@ -1,0 +1,3 @@
+var имя: string = "hi \u263A";
+var raw: string = "a${b}c";
+record R { value: string };

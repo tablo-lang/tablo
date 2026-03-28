@@ -1,0 +1,35 @@
+// Tuple Basic Tests - Tests basic tuple creation and access
+
+func main(): void {
+    // Test 1: Simple tuple literal
+    var pair: (int, string) = (42, "answer");
+    println(pair.0);
+    println(pair.1);
+
+    // Test 2: Triple tuple
+    var triple: (int, int, int) = (1, 2, 3);
+    println(triple.0);
+    println(triple.1);
+    println(triple.2);
+
+    // Test 3: Mixed type tuple
+    var mixed: (int, double, string) = (10, 3.14, "hello");
+    println(mixed.0);
+    println(mixed.1);
+    println(mixed.2);
+
+    // Test 4: Empty tuple
+    var unit: () = ();
+    println("unit created");
+
+    // Test 5: Tuple in expression
+    var t: (int, int) = (5, 10);
+    var sum: int = t.0 + t.1;
+    println(sum);
+
+    // Test 6: Nested tuple access
+    var nested: ((int, int), string) = ((1, 2), "pair");
+    println(nested.0.0);
+    println(nested.0.1);
+    println(nested.1);
+}

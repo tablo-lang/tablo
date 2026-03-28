@@ -1,0 +1,62 @@
+// Record Nested Tests - Tests nested records
+
+record Address {
+    street: string;
+    city: string;
+    zip: int
+}
+
+record Person {
+    name: string;
+    age: int;
+    address: Address
+}
+
+record Company {
+    name: string;
+    ceo: Person;
+    headquarters: Address
+}
+
+func main() {
+    // Test 1: Simple nested record
+    var addr: Address = { street: "123 Main St", city: "NYC", zip: 10001 };
+    println(addr.street);
+    println(addr.city);
+    println(addr.zip);
+
+    // Test 2: Record with nested record field
+    var person: Person = { 
+        name: "Bob", 
+        age: 25, 
+        address: { street: "456 Oak Ave", city: "LA", zip: 90001 }
+    };
+    println(person.name);
+    println(person.address.city);
+    println(person.address.zip);
+
+    // Test 3: Deeply nested access
+    var company: Company = {
+        name: "TechCorp",
+        ceo: { 
+            name: "Jane", 
+            age: 45, 
+            address: { street: "789 Pine Rd", city: "SF", zip: 94101 }
+        },
+        headquarters: { street: "100 Corp Blvd", city: "Seattle", zip: 98101 }
+    };
+    println(company.name);
+    println(company.ceo.name);
+    println(company.ceo.address.city);
+    println(company.headquarters.zip);
+
+    // Test 4: Modify nested fields
+    person.address.city = "Boston";
+    person.address.zip = 20001;
+    println(person.address.city);
+    println(person.address.zip);
+
+    // Test 5: Nested field in expression
+    var combined: int = person.address.zip + company.headquarters.zip;
+    println(combined);
+}

@@ -1,0 +1,235 @@
+// Graph stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_graph_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_graph_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/graph.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 200) {
+        w = 200;
+    }
+    return w;
+}
+
+func buildChainGraph(node_count: int): (GraphStore, Error?) {
+    var store: GraphStore = graphNew();
+    if (node_count < 1) {
+        return (store, nil);
+    }
+
+    var n0 = graphAddNode(store, "n0");
+    store = n0.0;
+    if (n0.2 != nil) {
+        return (store, n0.2);
+    }
+
+    var i: int = 0;
+    while (i < node_count - 1) {
+        var e = graphAddEdge(store,
+                             "n" + str(i),
+                             "n" + str(i + 1));
+        store = e.0;
+        if (e.2 != nil) {
+            return (store, e.2);
+        }
+        i = i + 1;
+    }
+    return (store, nil);
+}
+
+func buildDagGraph(node_count: int): (GraphStore, Error?) {
+    var store: GraphStore = graphNew();
+
+    var i: int = 0;
+    while (i < node_count) {
+        var n = graphAddNode(store, "v" + str(i));
+        store = n.0;
+        if (n.2 != nil) {
+            return (store, n.2);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while (i < node_count) {
+        if (i + 1 < node_count) {
+            var e1 = graphAddEdge(store,
+                                  "v" + str(i),
+                                  "v" + str(i + 1));
+            store = e1.0;
+            if (e1.2 != nil) {
+                return (store, e1.2);
+            }
+        }
+
+        if (i + 2 < node_count) {
+            var e2 = graphAddEdge(store,
+                                  "v" + str(i),
+                                  "v" + str(i + 2));
+            store = e2.0;
+            if (e2.2 != nil) {
+                return (store, e2.2);
+            }
+        }
+
+        i = i + 1;
+    }
+
+    return (store, nil);
+}
+
+func benchGraphBfsChain(iters: int): void {
+    var built = buildChainGraph(256);
+    if (built.1 != nil) {
+        println("perf graphBfsChain: setup failed");
+        return;
+    }
+    var graph: GraphStore = built.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var r_w = graphBfsOrder(graph, "n0", 300);
+        if (r_w.1 != nil) {
+            println("perf graphBfsChain: warm run failed");
+            return;
+        }
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r_i = graphBfsOrder(graph, "n0", 300);
+        if (r_i.1 != nil) {
+            println("perf graphBfsChain: run failed");
+            return;
+        }
+        sink = sink + len(r_i.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf graphBfsChain", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchGraphShortestPathChain(iters: int): void {
+    var built = buildChainGraph(256);
+    if (built.1 != nil) {
+        println("perf graphShortestPathChain: setup failed");
+        return;
+    }
+    var graph: GraphStore = built.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var r_w = graphShortestPath(graph,
+                                    "n0",
+                                    "n255",
+                                    400);
+        if (r_w.2 != nil || !r_w.1) {
+            println("perf graphShortestPathChain: warm run failed");
+            return;
+        }
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r_i = graphShortestPath(graph,
+                                    "n0",
+                                    "n255",
+                                    400);
+        if (r_i.2 != nil || !r_i.1) {
+            println("perf graphShortestPathChain: run failed");
+            return;
+        }
+        sink = sink + len(r_i.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf graphShortestPathChain", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchGraphTopologicalSort(iters: int): void {
+    var built = buildDagGraph(256);
+    if (built.1 != nil) {
+        println("perf graphTopologicalSort: setup failed");
+        return;
+    }
+    var graph: GraphStore = built.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var r_w = graphTopologicalSort(graph, 400);
+        if (r_w.2 != nil || !r_w.1) {
+            println("perf graphTopologicalSort: warm run failed");
+            return;
+        }
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r_i = graphTopologicalSort(graph, 400);
+        if (r_i.2 != nil || !r_i.1) {
+            println("perf graphTopologicalSort: run failed");
+            return;
+        }
+        sink = sink + len(r_i.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf graphTopologicalSort", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Graph Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchGraphBfsChain(6000 * scale);
+    benchGraphShortestPathChain(3000 * scale);
+    benchGraphTopologicalSort(2600 * scale);
+
+    println("Graph stdlib benchmark complete!");
+}

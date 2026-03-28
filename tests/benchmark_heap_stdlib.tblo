@@ -1,0 +1,213 @@
+// Heap stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_heap_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_heap_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/heap.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchHeapPushPopHot(iters: int): void {
+    var opened = heapNew(0);
+    if (opened.1 != nil) {
+        println("perf heapPushPopHot: setup failed");
+        return;
+    }
+    var store: HeapStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var p_w = heapPush(store, w, w as any);
+        store = p_w.0;
+        if (p_w.1 != nil) {
+            println("perf heapPushPopHot: warm push failed");
+            return;
+        }
+
+        var o_w = heapPop(store);
+        store = o_w.0;
+        if (!o_w.2) {
+            println("perf heapPushPopHot: warm pop failed");
+            return;
+        }
+        sink = sink + o_w.1.priority;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p_i = heapPush(store, i, i as any);
+        store = p_i.0;
+        if (p_i.1 != nil) {
+            println("perf heapPushPopHot: push failed");
+            return;
+        }
+
+        var o_i = heapPop(store);
+        store = o_i.0;
+        if (!o_i.2) {
+            println("perf heapPushPopHot: pop failed");
+            return;
+        }
+        sink = sink + o_i.1.priority;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf heapPushPopHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchHeapKeepHighest(iters: int): void {
+    var opened = heapNew(64);
+    if (opened.1 != nil) {
+        println("perf heapKeepHighest: setup failed");
+        return;
+    }
+    var store: HeapStore = opened.0;
+    var sink: int = 0;
+
+    var fill: int = 0;
+    while (fill < 64) {
+        var p_fill = heapPush(store, fill, fill as any);
+        store = p_fill.0;
+        if (p_fill.1 != nil) {
+            println("perf heapKeepHighest: fill failed");
+            return;
+        }
+        fill = fill + 1;
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var k_w = heapPushKeepHighest(store, 64 + w, w as any);
+        store = k_w.0;
+        if (k_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var k_i = heapPushKeepHighest(store, 64 + i, i as any);
+        store = k_i.0;
+        if (k_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf heapKeepHighest", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchHeapTypedRoundTrip(iters: int): void {
+    var opened = heapNew(0);
+    if (opened.1 != nil) {
+        println("perf heapTypedRoundTrip: setup failed");
+        return;
+    }
+    var store: HeapStore = opened.0;
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var p_w = heapPushTyped(store,
+                                w,
+                                {"id": w, "name": "u"} as any,
+                                schema as any);
+        store = p_w.0;
+        if (p_w.1 != nil) {
+            println("perf heapTypedRoundTrip: warm push failed");
+            return;
+        }
+
+        var o_w = heapPopTyped(store, schema as any);
+        store = o_w.0;
+        if (o_w.4 != nil || !o_w.3) {
+            println("perf heapTypedRoundTrip: warm pop failed");
+            return;
+        }
+        sink = sink + o_w.2;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p_i = heapPushTyped(store,
+                                i,
+                                {"id": i, "name": "u"} as any,
+                                schema as any);
+        store = p_i.0;
+        if (p_i.1 != nil) {
+            println("perf heapTypedRoundTrip: push failed");
+            return;
+        }
+
+        var o_i = heapPopTyped(store, schema as any);
+        store = o_i.0;
+        if (o_i.4 != nil || !o_i.3) {
+            println("perf heapTypedRoundTrip: pop failed");
+            return;
+        }
+        sink = sink + o_i.2;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf heapTypedRoundTrip", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Heap Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchHeapPushPopHot(220000 * scale);
+    benchHeapKeepHighest(180000 * scale);
+    benchHeapTypedRoundTrip(120000 * scale);
+
+    println("Heap stdlib benchmark complete!");
+}

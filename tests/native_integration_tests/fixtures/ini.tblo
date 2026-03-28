@@ -1,0 +1,828 @@
+// INI helpers for configuration files.
+// Supports sections, key/value pairs, comments, and typed getters.
+
+record IniDocument {
+    global: map<string, string>,
+    sections: map<string, any>
+}
+
+func iniStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func iniError(code: int,
+              message: string,
+              context: string,
+              line: int,
+              column: int,
+              detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "line": line,
+        "column": column
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return iniStdError(code, message, data);
+}
+
+func iniEmptyDocument(): IniDocument {
+    var doc: IniDocument = {
+        global: {},
+        sections: {}
+    };
+    return doc;
+}
+
+func iniIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func iniIsValidKey(key: string): bool {
+    if (key == "") {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(key)) {
+        var ch: string = substring(key, i, 1);
+        if (find("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-", ch) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func iniToLowerAscii(text: string): string {
+    var out: string = "";
+    var upper: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var lower: string = "abcdefghijklmnopqrstuvwxyz";
+
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        var idx: int = find(upper, ch);
+        if (idx >= 0) {
+            out = out + substring(lower, idx, 1);
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+
+    return out;
+}
+
+func iniStripInlineComment(text: string): string {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+            i = i + 1;
+            continue;
+        }
+        if (ch == "'") {
+            in_single = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "#" || ch == ";") {
+            if (i == 0) {
+                return "";
+            }
+
+            var prev: string = substring(text, i - 1, 1);
+            if (prev == " " || prev == "\t") {
+                return trim(substring(text, 0, i));
+            }
+        }
+
+        i = i + 1;
+    }
+
+    return trim(text);
+}
+
+func iniParseDoubleQuoted(input: string,
+                          start: int,
+                          line: int,
+                          column: int,
+                          context: string): (string, int, Error?) {
+    if (start >= len(input)) {
+        return ("",
+                start,
+                iniError(ERR_PARSE,
+                         "expected opening double quote",
+                         context + ".doubleQuote.open",
+                         line,
+                         column,
+                         input));
+    }
+
+    if (substring(input, start, 1) != "\"") {
+        return ("",
+                start,
+                iniError(ERR_PARSE,
+                         "expected opening double quote",
+                         context + ".doubleQuote.open",
+                         line,
+                         column,
+                         input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "\"") {
+            return (out, i + 1, nil);
+        }
+
+        if (ch == "\\") {
+            if ((i + 1) >= len(input)) {
+                return ("",
+                        i,
+                        iniError(ERR_PARSE,
+                                 "trailing escape sequence",
+                                 context + ".doubleQuote.escape",
+                                 line,
+                                 column + i,
+                                 input));
+            }
+
+            var esc: string = substring(input, i + 1, 1);
+            if (esc == "n") {
+                out = out + "\n";
+            } else if (esc == "r") {
+                out = out + "\r";
+            } else if (esc == "t") {
+                out = out + "\t";
+            } else if (esc == "\"") {
+                out = out + "\"";
+            } else if (esc == "\\") {
+                out = out + "\\";
+            } else {
+                return ("",
+                        i,
+                        iniError(ERR_PARSE,
+                                 "unsupported escape sequence",
+                                 context + ".doubleQuote.escape",
+                                 line,
+                                 column + i,
+                                 esc));
+            }
+
+            i = i + 2;
+            continue;
+        }
+
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            iniError(ERR_PARSE,
+                     "unterminated double-quoted value",
+                     context + ".doubleQuote.unterminated",
+                     line,
+                     column + i,
+                     input));
+}
+
+func iniParseSingleQuoted(input: string,
+                          start: int,
+                          line: int,
+                          column: int,
+                          context: string): (string, int, Error?) {
+    if (start >= len(input)) {
+        return ("",
+                start,
+                iniError(ERR_PARSE,
+                         "expected opening single quote",
+                         context + ".singleQuote.open",
+                         line,
+                         column,
+                         input));
+    }
+
+    if (substring(input, start, 1) != "'") {
+        return ("",
+                start,
+                iniError(ERR_PARSE,
+                         "expected opening single quote",
+                         context + ".singleQuote.open",
+                         line,
+                         column,
+                         input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "'") {
+            return (out, i + 1, nil);
+        }
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            iniError(ERR_PARSE,
+                     "unterminated single-quoted value",
+                     context + ".singleQuote.unterminated",
+                     line,
+                     column + i,
+                     input));
+}
+func iniTailIsComment(text: string): bool {
+    var t: string = trim(text);
+    if (t == "") {
+        return true;
+    }
+    var first: string = substring(t, 0, 1);
+    return first == "#" || first == ";";
+}
+
+func iniParseValue(raw_value: string,
+                   line: int,
+                   column: int,
+                   context: string): (string, Error?) {
+    var raw: string = trim(raw_value);
+    if (raw == "") {
+        return ("", nil);
+    }
+
+    if (startsWith(raw, "\"")) {
+        var quoted = iniParseDoubleQuoted(raw, 0, line, column, context + ".value");
+        if (quoted.2 != nil) {
+            return ("", quoted.2);
+        }
+
+        var tail: string = trim(substring(raw, quoted.1, len(raw) - quoted.1));
+        if (!iniTailIsComment(tail)) {
+            return ("",
+                    iniError(ERR_PARSE,
+                             "unexpected trailing text after quoted value",
+                             context + ".value.trailing",
+                             line,
+                             column + quoted.1,
+                             tail));
+        }
+
+        return (quoted.0, nil);
+    }
+
+    if (startsWith(raw, "'")) {
+        var literal = iniParseSingleQuoted(raw, 0, line, column, context + ".value");
+        if (literal.2 != nil) {
+            return ("", literal.2);
+        }
+
+        var tail2: string = trim(substring(raw, literal.1, len(raw) - literal.1));
+        if (!iniTailIsComment(tail2)) {
+            return ("",
+                    iniError(ERR_PARSE,
+                             "unexpected trailing text after quoted value",
+                             context + ".value.trailing",
+                             line,
+                             column + literal.1,
+                             tail2));
+        }
+
+        return (literal.0, nil);
+    }
+
+    return (iniStripInlineComment(raw), nil);
+}
+
+func iniLooksLikeInt(text: string): bool {
+    var s: string = trim(text);
+    if (s == "") {
+        return false;
+    }
+
+    var i: int = 0;
+    if (startsWith(s, "+") || startsWith(s, "-")) {
+        i = 1;
+    }
+    if (i >= len(s)) {
+        return false;
+    }
+
+    var has_digit: bool = false;
+    var prev_underscore: bool = false;
+    while (i < len(s)) {
+        var ch: string = substring(s, i, 1);
+        if (ch == "_") {
+            if (!has_digit || prev_underscore || i == (len(s) - 1)) {
+                return false;
+            }
+            prev_underscore = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (!iniIsDigit(ch)) {
+            return false;
+        }
+
+        has_digit = true;
+        prev_underscore = false;
+        i = i + 1;
+    }
+
+    return has_digit;
+}
+
+func iniRemoveUnderscores(text: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch != "_") {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func iniParseIntText(value: string,
+                     line: int,
+                     column: int,
+                     context: string): (int, Error?) {
+    var s: string = trim(value);
+    if (!iniLooksLikeInt(s)) {
+        return (0,
+                iniError(ERR_PARSE,
+                         "invalid int value",
+                         context + ".int.invalid",
+                         line,
+                         column,
+                         value));
+    }
+
+    var sign: int = 1;
+    if (startsWith(s, "-")) {
+        sign = -1;
+    }
+
+    var clean: string = iniRemoveUnderscores(s);
+    if (startsWith(clean, "+")) {
+        clean = substring(clean, 1, len(clean) - 1);
+    }
+
+    var parsed: int = toInt(clean);
+    if (sign < 0 && !startsWith(clean, "-")) {
+        parsed = 0 - parsed;
+    }
+
+    return (parsed, nil);
+}
+
+func iniParseBoolText(value: string,
+                      line: int,
+                      column: int,
+                      context: string): (bool, Error?) {
+    var s: string = iniToLowerAscii(trim(value));
+
+    if (s == "true" || s == "1" || s == "yes" || s == "on") {
+        return (true, nil);
+    }
+    if (s == "false" || s == "0" || s == "no" || s == "off") {
+        return (false, nil);
+    }
+
+    return (false,
+            iniError(ERR_PARSE,
+                     "invalid bool value",
+                     context + ".bool.invalid",
+                     line,
+                     column,
+                     value));
+}
+
+func iniParse(text: string): (IniDocument, Error?) {
+    var doc: IniDocument = iniEmptyDocument();
+    var current_section: string = "";
+
+    if (text == "") {
+        return (doc, nil);
+    }
+
+    var lines: array<string> = split(text, "\n");
+    var line_no: int = 1;
+    foreach (raw_line in lines) {
+        var line: string = raw_line;
+        if (endsWith(line, "\r")) {
+            line = substring(line, 0, len(line) - 1);
+        }
+
+        var trimmed: string = trim(line);
+        if (trimmed == "" || startsWith(trimmed, "#") || startsWith(trimmed, ";")) {
+            line_no = line_no + 1;
+            continue;
+        }
+
+        if (startsWith(trimmed, "[")) {
+            if (!endsWith(trimmed, "]")) {
+                return (doc,
+                        iniError(ERR_PARSE,
+                                 "unterminated section header",
+                                 "ini.parse.section",
+                                 line_no,
+                                 1,
+                                 trimmed));
+            }
+
+            var section_name: string = trim(substring(trimmed, 1, len(trimmed) - 2));
+            if (section_name == "") {
+                return (doc,
+                        iniError(ERR_PARSE,
+                                 "section name cannot be empty",
+                                 "ini.parse.section.empty",
+                                 line_no,
+                                 1,
+                                 trimmed));
+            }
+
+            current_section = section_name;
+            if (!mapHasString(doc.sections, current_section)) {
+                mapSetString(doc.sections, current_section, {} as any);
+            }
+
+            line_no = line_no + 1;
+            continue;
+        }
+
+        var eq: int = find(trimmed, "=");
+        if (eq < 0) {
+            return (doc,
+                    iniError(ERR_PARSE,
+                             "expected key=value entry",
+                             "ini.parse.entry",
+                             line_no,
+                             1,
+                             trimmed));
+        }
+
+        var key: string = trim(substring(trimmed, 0, eq));
+        if (!iniIsValidKey(key)) {
+            return (doc,
+                    iniError(ERR_PARSE,
+                             "invalid key name",
+                             "ini.parse.key",
+                             line_no,
+                             1,
+                             key));
+        }
+
+        var value_text: string = trim(substring(trimmed, eq + 1, len(trimmed) - (eq + 1)));
+        var parsed_value = iniParseValue(value_text, line_no, eq + 2, "ini.parse");
+        if (parsed_value.1 != nil) {
+            return (doc, parsed_value.1);
+        }
+
+        if (current_section == "") {
+            if (mapHasString(doc.global, key)) {
+                return (doc,
+                        iniError(ERR_PARSE,
+                                 "duplicate key in global section",
+                                 "ini.parse.duplicate.global",
+                                 line_no,
+                                 1,
+                                 key));
+            }
+            mapSetString(doc.global, key, parsed_value.0);
+        } else {
+            var sec_map: map<string, string> = {};
+            var sec_any: any = mapGetString(doc.sections, current_section);
+            if (sec_any != nil) {
+                if (typeOf(sec_any) != "map") {
+                    return (doc,
+                            iniError(ERR_PARSE,
+                                     "section storage is not a map",
+                                     "ini.parse.section.type",
+                                     line_no,
+                                     1,
+                                     current_section));
+                }
+                sec_map = sec_any as map<string, string>;
+            }
+
+            if (mapHasString(sec_map, key)) {
+                return (doc,
+                        iniError(ERR_PARSE,
+                                 "duplicate key in section",
+                                 "ini.parse.duplicate.section",
+                                 line_no,
+                                 1,
+                                 current_section + "." + key));
+            }
+
+            mapSetString(sec_map, key, parsed_value.0);
+            mapSetString(doc.sections, current_section, sec_map as any);
+        }
+
+        line_no = line_no + 1;
+    }
+
+    return (doc, nil);
+}
+func iniGetSection(doc: IniDocument, section: string): (map<string, string>?, Error?) {
+    var name: string = trim(section);
+    if (name == "") {
+        return (doc.global, nil);
+    }
+
+    var sec_any: any = mapGetString(doc.sections, name);
+    if (sec_any == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(sec_any) != "map") {
+        return (nil,
+                iniError(ERR_PARSE,
+                         "section is not a map",
+                         "ini.getSection.type",
+                         -1,
+                         1,
+                         name));
+    }
+
+    return (sec_any as map<string, string>, nil);
+}
+
+func iniGet(doc: IniDocument, section: string, key: string): (string?, Error?) {
+    if (!iniIsValidKey(key)) {
+        return (nil,
+                iniError(ERR_INVALID_ARGUMENT,
+                         "invalid key name",
+                         "ini.get.key",
+                         -1,
+                         1,
+                         key));
+    }
+
+    var sec = iniGetSection(doc, section);
+    if (sec.1 != nil) {
+        return (nil, sec.1);
+    }
+    if (sec.0 == nil) {
+        return (nil, nil);
+    }
+
+    var sec_map: map<string, string> = sec.0 as map<string, string>;
+    if (!mapHasString(sec_map, key)) {
+        return (nil, nil);
+    }
+
+    var value_any: any = mapGetString(sec_map, key);
+    if (value_any == nil) {
+        return ("", nil);
+    }
+    if (typeOf(value_any) != "string") {
+        return (nil,
+                iniError(ERR_PARSE,
+                         "stored value is not a string",
+                         "ini.get.type",
+                         -1,
+                         1,
+                         key));
+    }
+
+    return (value_any as string, nil);
+}
+
+func iniHas(doc: IniDocument, section: string, key: string): bool {
+    var got = iniGet(doc, section, key);
+    if (got.1 != nil) {
+        return false;
+    }
+    return got.0 != nil;
+}
+
+func iniGetInt(doc: IniDocument, section: string, key: string): (int?, Error?) {
+    var got = iniGet(doc, section, key);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+
+    var parsed = iniParseIntText(got.0 as string, -1, 1, "ini.getInt");
+    if (parsed.1 != nil) {
+        return (nil, parsed.1);
+    }
+    return (parsed.0, nil);
+}
+
+func iniGetBool(doc: IniDocument, section: string, key: string): (bool?, Error?) {
+    var got = iniGet(doc, section, key);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+
+    var parsed = iniParseBoolText(got.0 as string, -1, 1, "ini.getBool");
+    if (parsed.1 != nil) {
+        return (nil, parsed.1);
+    }
+    return (parsed.0, nil);
+}
+
+func iniNeedsQuotedValue(value: string): bool {
+    if (value == "") {
+        return true;
+    }
+
+    if (trim(value) != value) {
+        return true;
+    }
+
+    if (startsWith(value, "[") || startsWith(value, "#") || startsWith(value, ";")) {
+        return true;
+    }
+
+    if (find(value, "\n") >= 0 ||
+        find(value, "\r") >= 0 ||
+        find(value, "=") >= 0 ||
+        find(value, "#") >= 0 ||
+        find(value, ";") >= 0) {
+        return true;
+    }
+
+    return false;
+}
+
+func iniEscapeValue(value: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(value)) {
+        var ch: string = substring(value, i, 1);
+        if (ch == "\\") {
+            out = out + "\\\\";
+        } else if (ch == "\"") {
+            out = out + "\\\"";
+        } else if (ch == "\n") {
+            out = out + "\\n";
+        } else if (ch == "\r") {
+            out = out + "\\r";
+        } else if (ch == "\t") {
+            out = out + "\\t";
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func iniEncodeValue(value: string): string {
+    if (iniNeedsQuotedValue(value)) {
+        return "\"" + iniEscapeValue(value) + "\"";
+    }
+    return value;
+}
+
+func iniStringifySectionBody(values: map<string, string>, context: string): (string, Error?) {
+    var out: string = "";
+    foreach (key_any in keys(values)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "section key is not string",
+                             context + ".key.type",
+                             -1,
+                             1,
+                             key_any));
+        }
+
+        var key: string = key_any as string;
+        if (!iniIsValidKey(key)) {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "invalid key name for stringify",
+                             context + ".key.invalid",
+                             -1,
+                             1,
+                             key));
+        }
+
+        var value_any: any = mapGetString(values, key);
+        if (value_any == nil) {
+            out = out + key + " = \"\"\n";
+            continue;
+        }
+        if (typeOf(value_any) != "string") {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "section value is not string",
+                             context + ".value.type",
+                             -1,
+                             1,
+                             key));
+        }
+
+        out = out + key + " = " + iniEncodeValue(value_any as string) + "\n";
+    }
+
+    return (out, nil);
+}
+
+func iniStringify(doc: IniDocument): (string, Error?) {
+    var out: string = "";
+
+    var global_body = iniStringifySectionBody(doc.global, "ini.stringify.global");
+    if (global_body.1 != nil) {
+        return ("", global_body.1);
+    }
+    out = out + global_body.0;
+
+    foreach (section_key_any in keys(doc.sections)) {
+        if (section_key_any == nil || typeOf(section_key_any) != "string") {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "section name is not string",
+                             "ini.stringify.section.name",
+                             -1,
+                             1,
+                             section_key_any));
+        }
+
+        var section_name: string = section_key_any as string;
+        if (trim(section_name) == "") {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "section name cannot be empty",
+                             "ini.stringify.section.empty",
+                             -1,
+                             1,
+                             section_name));
+        }
+
+        var section_any: any = mapGetString(doc.sections, section_name);
+        if (section_any == nil || typeOf(section_any) != "map") {
+            return ("",
+                    iniError(ERR_INVALID_ARGUMENT,
+                             "section value is not map<string, string>",
+                             "ini.stringify.section.type",
+                             -1,
+                             1,
+                             section_name));
+        }
+
+        if (out != "" && !endsWith(out, "\n\n")) {
+            out = out + "\n";
+        }
+        out = out + "[" + section_name + "]\n";
+
+        var body = iniStringifySectionBody(section_any as map<string, string>,
+                                           "ini.stringify.section." + section_name);
+        if (body.1 != nil) {
+            return ("", body.1);
+        }
+        out = out + body.0;
+    }
+
+    while (endsWith(out, "\n")) {
+        out = substring(out, 0, len(out) - 1);
+    }
+
+    return (out, nil);
+}

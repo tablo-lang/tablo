@@ -1,0 +1,6 @@
+func main(): void {
+}
+
+func util(): int {
+    return 1;
+}

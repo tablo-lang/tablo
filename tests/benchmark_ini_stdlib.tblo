@@ -1,0 +1,136 @@
+// INI stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_ini_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_ini_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/ini.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchIniParse(iters: int): void {
+    var text: string = "name=tablo\n" +
+                       "mode=dev\n" +
+                       "[server]\n" +
+                       "host=127.0.0.1\n" +
+                       "port=8080\n" +
+                       "enabled=true\n" +
+                       "[flags]\n" +
+                       "feature_x=on\n" +
+                       "feature_y=off\n";
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var p_w = iniParse(text);
+        if (p_w.1 != nil) {
+            panic("benchIniParse warmup failed: " + p_w.1.message);
+        }
+
+        var port_w = iniGetInt(p_w.0, "server", "port");
+        if (port_w.1 == nil && port_w.0 != nil) {
+            sink = sink + (port_w.0 as int);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p = iniParse(text);
+        if (p.1 != nil) {
+            panic("benchIniParse failed: " + p.1.message);
+        }
+
+        var fx = iniGetBool(p.0, "flags", "feature_x");
+        if (fx.1 == nil && fx.0 != nil && (fx.0 as bool)) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf iniParse", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchIniStringify(iters: int): void {
+    var text: string = "name=tablo\n" +
+                       "mode=dev\n" +
+                       "[server]\n" +
+                       "host=127.0.0.1\n" +
+                       "port=8080\n" +
+                       "enabled=true\n" +
+                       "[flags]\n" +
+                       "feature_x=on\n" +
+                       "feature_y=off\n";
+
+    var parsed = iniParse(text);
+    if (parsed.1 != nil) {
+        panic("benchIniStringify fixture parse failed: " + parsed.1.message);
+    }
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w = iniStringify(parsed.0);
+        if (s_w.1 != nil) {
+            panic("benchIniStringify warmup failed: " + s_w.1.message);
+        }
+        sink = sink + len(s_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s = iniStringify(parsed.0);
+        if (s.1 != nil) {
+            panic("benchIniStringify failed: " + s.1.message);
+        }
+        sink = sink + len(s.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf iniStringify", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang INI Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchIniParse(140000 * scale);
+    benchIniStringify(170000 * scale);
+
+    println("INI stdlib benchmark complete!");
+}

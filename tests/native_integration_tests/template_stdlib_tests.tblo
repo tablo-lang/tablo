@@ -1,0 +1,82 @@
+import "fixtures/template.tblo";
+
+func main(): void {
+    var extracted = templateExtractKeys("Hello {{ name }}, id={{id}}, again {{name}}");
+    println(extracted.1 == nil);
+    if (extracted.1 == nil) {
+        println(len(extracted.0) == 2);
+        println(extracted.0[0] == "name");
+        println(extracted.0[1] == "id");
+    }
+
+    println(templateValidate("no placeholders") == nil);
+    println(templateValidate("{{service}}-{{env}}") == nil);
+
+    var bad_open = templateValidate("Hello {{name");
+    println(bad_open != nil);
+    if (bad_open != nil) {
+        println(bad_open.code == ERR_PARSE);
+    }
+
+    var bad_close = templateValidate("Hello name}}");
+    println(bad_close != nil);
+    if (bad_close != nil) {
+        println(bad_close.code == ERR_PARSE);
+    }
+
+    var bad_key = templateValidate("Hello {{bad key}}");
+    println(bad_key != nil);
+    if (bad_key != nil) {
+        println(bad_key.code == ERR_PARSE);
+    }
+
+    var rendered = templateRender("Hello {{name}} #{{id}}", {"name": "Ada", "id": 42});
+    println(rendered.1 == nil);
+    if (rendered.1 == nil) {
+        println(rendered.0 == "Hello Ada #42");
+    }
+
+    var typed = templateRender("active={{active}} ratio={{ratio}}", {"active": true, "ratio": 0.5});
+    println(typed.1 == nil);
+    if (typed.1 == nil) {
+        println(typed.0 == "active=true ratio=0.5");
+    }
+
+    var dotted = templateRender("{{user.id}}/{{user-name}}/{{_env}}",
+                                {"user.id": 7, "user-name": "qa", "_env": "prod"});
+    println(dotted.1 == nil);
+    if (dotted.1 == nil) {
+        println(dotted.0 == "7/qa/prod");
+    }
+
+    var missing = templateRender("{{x}}-{{y}}", {"x": "A"});
+    println(missing.1 != nil);
+    if (missing.1 != nil) {
+        println(missing.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var fallback = templateRenderWithDefault("{{x}}-{{y}}", {"x": "A"}, "?");
+    println(fallback.1 == nil);
+    if (fallback.1 == nil) {
+        println(fallback.0 == "A-?");
+    }
+
+    var nil_values: map<string, any> = { "x": nil };
+    var nil_strict = templateRender("{{x}}", nil_values);
+    println(nil_strict.1 != nil);
+    if (nil_strict.1 != nil) {
+        println(nil_strict.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var nil_default = templateRenderWithDefault("{{x}}", nil_values, "n/a");
+    println(nil_default.1 == nil);
+    if (nil_default.1 == nil) {
+        println(nil_default.0 == "n/a");
+    }
+
+    var literal = templateRender("a { b } c", {});
+    println(literal.1 == nil);
+    if (literal.1 == nil) {
+        println(literal.0 == "a { b } c");
+    }
+}

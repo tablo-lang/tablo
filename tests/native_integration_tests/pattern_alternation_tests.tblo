@@ -1,0 +1,64 @@
+enum Status {
+    Idle = 0,
+    Ready = 1,
+    Done = 2
+}
+
+enum Packet {
+    Left(int, string),
+    Right(string, int)
+}
+
+func matchLabel(value: int): string {
+    return match (value) {
+        1 | 2: "small",
+        (1 | 2): "bit-or-three",
+        else: "other"
+    };
+}
+
+func statusLabel(status: Status): string {
+    match (status) {
+        Status.Ready | Status.Done: println("active");
+        else: println("idle");
+    }
+    return "ok";
+}
+
+func ifLetLabel(value: int): string {
+    if let 4 | 5 = value {
+        return "if-let-hit";
+    } else {
+        return "if-let-miss";
+    }
+}
+
+func whileLetCount(): int {
+    var value: int = 1;
+    var count: int = 0;
+    while let 1 | 2 = value {
+        println(value);
+        count = count + 1;
+        value = value + 1;
+    }
+    return count;
+}
+
+func payloadValue(packet: Packet): int {
+    return match (packet) {
+        Packet.Left(value, _) | Packet.Right(_, value): value
+    };
+}
+
+func main() {
+    println(matchLabel(1));
+    println(matchLabel(3));
+    println(matchLabel(9));
+    statusLabel(Status.Ready);
+    statusLabel(Status.Idle);
+    println(ifLetLabel(5));
+    println(ifLetLabel(8));
+    println(whileLetCount());
+    println(payloadValue(Packet.Left(7, "left")));
+    println(payloadValue(Packet.Right("right", 9)));
+}

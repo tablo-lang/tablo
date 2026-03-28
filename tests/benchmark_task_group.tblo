@@ -1,0 +1,280 @@
+// Task-group stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_task_group.tblo
+//   ./build/Release/tablo run tests/benchmark_task_group.tblo 2
+
+import "native_integration_tests/fixtures/task.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 200) {
+        w = 200;
+    }
+    return w;
+}
+
+func taskBenchWorker(): map<string, any> {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return taskResultErr(ERR_PARSE, "taskBenchWorker arg parse failed", arg_r.1 as any);
+    }
+    var n: int = arg_r.0 as int;
+    return taskResultOk((n + 1) as any);
+}
+
+func taskBenchWorkerFail(): map<string, any> {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return taskResultErr(ERR_PARSE, "taskBenchWorkerFail arg parse failed", arg_r.1 as any);
+    }
+    var n: int = arg_r.0 as int;
+    return taskResultErr(ERR_PARSE, "taskBenchWorkerFail " + str(n), n as any);
+}
+
+func benchTaskGroupSpawnWait(total_ops: int, batch_size: int): void {
+    var bg: Context = contextBackground();
+    var sink: int = 0;
+    var groups: int = total_ops / batch_size;
+    if (groups < 1) {
+        groups = 1;
+    }
+
+    var warm_groups: int = warmup(groups);
+    var gw: int = 0;
+    while (gw < warm_groups) {
+        var g_r = taskGroupNew(bg);
+        if (g_r.1 != nil) {
+            println("perf taskGroupSpawnWait: warmup new failed");
+            return;
+        }
+        var g: TaskGroup = g_r.0;
+
+        var i: int = 0;
+        while (i < batch_size) {
+            var spawn_r = taskGroupSpawn(g, "taskBenchWorker", i as any, "int");
+            if (spawn_r.1 != nil) {
+                println("perf taskGroupSpawnWait: warmup spawn failed");
+                return;
+            }
+            g = spawn_r.0;
+            i = i + 1;
+        }
+
+        var wait_r = taskGroupWait(g);
+        if (wait_r.1 != nil) {
+            println("perf taskGroupSpawnWait: warmup wait failed");
+            return;
+        }
+
+        var warm_results = taskGroupResults(wait_r.0);
+        var j: int = 0;
+        while (j < len(warm_results)) {
+            sink = sink + (warm_results[j] as int);
+            j = j + 1;
+        }
+        gw = gw + 1;
+    }
+
+    var gidx: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (gidx < groups) {
+        var g_r2 = taskGroupNew(bg);
+        if (g_r2.1 != nil) {
+            println("perf taskGroupSpawnWait: new failed");
+            return;
+        }
+        var g2: TaskGroup = g_r2.0;
+
+        var i2: int = 0;
+        while (i2 < batch_size) {
+            var spawn_r2 = taskGroupSpawn(g2, "taskBenchWorker", i2 as any, "int");
+            if (spawn_r2.1 != nil) {
+                println("perf taskGroupSpawnWait: spawn failed");
+                return;
+            }
+            g2 = spawn_r2.0;
+            i2 = i2 + 1;
+        }
+
+        var wait_r2 = taskGroupWait(g2);
+        if (wait_r2.1 != nil) {
+            println("perf taskGroupSpawnWait: wait failed");
+            return;
+        }
+
+        var run_results = taskGroupResults(wait_r2.0);
+        var j2: int = 0;
+        while (j2 < len(run_results)) {
+            sink = sink + (run_results[j2] as int);
+            j2 = j2 + 1;
+        }
+
+        gidx = gidx + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf taskGroupSpawnWait", groups * batch_size, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchTaskGroupFailFast(iters: int): void {
+    var bg: Context = contextBackground();
+    var sink: int = 0;
+
+    var warm_iters: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm_iters) {
+        var g_r = taskGroupNew(bg);
+        if (g_r.1 != nil) {
+            println("perf taskGroupFailFast: warmup new failed");
+            return;
+        }
+        var g: TaskGroup = g_r.0;
+
+        var spawn_r = taskGroupSpawn(g, "taskBenchWorkerFail", w as any, "int");
+        if (spawn_r.1 != nil) {
+            println("perf taskGroupFailFast: warmup spawn failed");
+            return;
+        }
+        g = spawn_r.0;
+
+        var wait_r = taskGroupWait(g);
+        if (wait_r.1 == nil) {
+            println("perf taskGroupFailFast: warmup expected error");
+            return;
+        }
+        if (wait_r.1.code != ERR_PARSE) {
+            println("perf taskGroupFailFast: warmup wrong error code");
+            return;
+        }
+
+        var g_done: TaskGroup = wait_r.0;
+        if (!contextDone(taskGroupContext(g_done))) {
+            println("perf taskGroupFailFast: warmup context not canceled");
+            return;
+        }
+        sink = sink + len(taskGroupResults(g_done));
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var g_r2 = taskGroupNew(bg);
+        if (g_r2.1 != nil) {
+            println("perf taskGroupFailFast: new failed");
+            return;
+        }
+        var g2: TaskGroup = g_r2.0;
+
+        var spawn_r2 = taskGroupSpawn(g2, "taskBenchWorkerFail", i as any, "int");
+        if (spawn_r2.1 != nil) {
+            println("perf taskGroupFailFast: spawn failed");
+            return;
+        }
+        g2 = spawn_r2.0;
+
+        var wait_r2 = taskGroupWait(g2);
+        if (wait_r2.1 == nil) {
+            println("perf taskGroupFailFast: expected error");
+            return;
+        }
+        if (wait_r2.1.code != ERR_PARSE) {
+            println("perf taskGroupFailFast: wrong error code");
+            return;
+        }
+
+        var g_done2: TaskGroup = wait_r2.0;
+        if (!contextDone(taskGroupContext(g_done2))) {
+            println("perf taskGroupFailFast: context not canceled");
+            return;
+        }
+        sink = sink + len(taskGroupResults(g_done2));
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf taskGroupFailFast", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchTaskDecodeResultPayload(iters: int): void {
+    var ok_payload: any = taskResultOk(123 as any) as any;
+    var err_payload: any = taskResultErr(ERR_PARSE, "bad", 1 as any) as any;
+    var sink: int = 0;
+
+    var warm_iters: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm_iters) {
+        var ok_r_w = taskDecodeResultPayload(ok_payload);
+        if (ok_r_w.1 != nil) {
+            println("perf taskDecodeResultPayload: warmup ok decode failed");
+            return;
+        }
+        sink = sink + (ok_r_w.0 as int);
+
+        var err_r_w = taskDecodeResultPayload(err_payload);
+        if (err_r_w.1 == nil) {
+            println("perf taskDecodeResultPayload: warmup expected err");
+            return;
+        }
+        sink = sink + err_r_w.1.code;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var ok_r = taskDecodeResultPayload(ok_payload);
+        if (ok_r.1 != nil) {
+            println("perf taskDecodeResultPayload: ok decode failed");
+            return;
+        }
+        sink = sink + (ok_r.0 as int);
+
+        var err_r = taskDecodeResultPayload(err_payload);
+        if (err_r.1 == nil) {
+            println("perf taskDecodeResultPayload: expected err");
+            return;
+        }
+        sink = sink + err_r.1.code;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf taskDecodeResultPayload", iters * 2, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Task Group Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchTaskGroupSpawnWait(4000 * scale, 8);
+    benchTaskGroupFailFast(1600 * scale);
+    benchTaskDecodeResultPayload(240000 * scale);
+    println("Task group benchmark complete!");
+}

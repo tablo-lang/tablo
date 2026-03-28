@@ -1,0 +1,143 @@
+// Stable non-cryptographic hash and checksum helpers.
+// Useful for cache keys, change fingerprints, and deterministic bucketing.
+
+var HASH_HEX_DIGITS: string = "0123456789abcdef";
+var HASH_PRIME_MOD: int = 2147483647;
+var HASH_U32_MOD: int = 4294967296;
+var HASH_ADLER_MOD: int = 65521;
+
+func hashStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func hashError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return hashStdError(code, message, data);
+}
+
+func hashNormalizePrime(value: int): int {
+    var out: int = value % HASH_PRIME_MOD;
+    if (out < 0) {
+        out = out + HASH_PRIME_MOD;
+    }
+    return out;
+}
+
+func hashNormalizeU32(value: int): int {
+    var out: int = value % HASH_U32_MOD;
+    if (out < 0) {
+        out = out + HASH_U32_MOD;
+    }
+    return out;
+}
+
+func hashHex32(value: int): string {
+    var n: int = hashNormalizeU32(value);
+    var out: string = "";
+    var i: int = 0;
+    while (i < 8) {
+        var digit: int = n % 16;
+        out = substring(HASH_HEX_DIGITS, digit, 1) + out;
+        n = n / 16;
+        i = i + 1;
+    }
+    return out;
+}
+
+func hashCombine(seed: int, next_hash: int): int {
+    var a: int = hashNormalizePrime(seed);
+    var b: int = hashNormalizePrime(next_hash);
+    var mixed: int = ((a * 65599) + b + 97) % HASH_PRIME_MOD;
+    return hashNormalizePrime(mixed);
+}
+
+func hashStableBytes(data: bytes): int {
+    var h: int = 216613626;
+    var i: int = 0;
+    while (i < len(data)) {
+        // Keep values in a prime modulus to remain deterministic and avoid overflow.
+        h = ((h * 16777619) + data[i] + 1) % HASH_PRIME_MOD;
+        i = i + 1;
+    }
+    return hashNormalizePrime(h);
+}
+
+func hashStableString(text: string): (int, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return (0,
+                hashError(ERR_PARSE,
+                          "hashStableString: failed to encode UTF-8",
+                          "hash.stable.string",
+                          text));
+    }
+    return (hashStableBytes(bytes_r.0), nil);
+}
+
+func hashStableHexString(text: string): (string, Error?) {
+    var h = hashStableString(text);
+    if (h.1 != nil) {
+        return ("", wrapError(h.1, "hashStableHexString"));
+    }
+    return (hashHex32(h.0), nil);
+}
+
+func hashAdler32Bytes(data: bytes): int {
+    var a: int = 1;
+    var b: int = 0;
+    var i: int = 0;
+    while (i < len(data)) {
+        a = (a + data[i]) % HASH_ADLER_MOD;
+        b = (b + a) % HASH_ADLER_MOD;
+        i = i + 1;
+    }
+    return (b * 65536) + a;
+}
+
+func hashAdler32String(text: string): (int, Error?) {
+    var bytes_r = stringToBytes(text);
+    if (bytes_r.1 != nil) {
+        return (0,
+                hashError(ERR_PARSE,
+                          "hashAdler32String: failed to encode UTF-8",
+                          "hash.adler32.string",
+                          text));
+    }
+    return (hashAdler32Bytes(bytes_r.0), nil);
+}
+
+func hashAdler32HexString(text: string): (string, Error?) {
+    var h = hashAdler32String(text);
+    if (h.1 != nil) {
+        return ("", wrapError(h.1, "hashAdler32HexString"));
+    }
+    return (hashHex32(h.0), nil);
+}
+
+func hashFingerprintStrings(items: array<string>): (int, Error?) {
+    var acc: int = 911382323;
+    var i: int = 0;
+    while (i < len(items)) {
+        var line_hash = hashStableString(items[i]);
+        if (line_hash.1 != nil) {
+            return (0, wrapError(line_hash.1, "hashFingerprintStrings"));
+        }
+
+        acc = hashCombine(acc, line_hash.0);
+        acc = hashCombine(acc, i + 1);
+        i = i + 1;
+    }
+    return (acc, nil);
+}
+
+func hashFingerprintHexStrings(items: array<string>): (string, Error?) {
+    var h = hashFingerprintStrings(items);
+    if (h.1 != nil) {
+        return ("", wrapError(h.1, "hashFingerprintHexStrings"));
+    }
+    return (hashHex32(h.0), nil);
+}

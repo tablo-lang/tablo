@@ -1,0 +1,158 @@
+{
+  "timestamp_utc": "2026-02-13T13:57:15.785882+00:00",
+  "config": "Release",
+  "scale": 1,
+  "program": "tests\\benchmark_perf_gates.tblo",
+  "samples": 5,
+  "warmup_runs": 1,
+  "tracked_labels": [
+    "perf map/set churn del+add+probe",
+    "perf map/set churn fast-string del+add+probe",
+    "perf map<string,int> fast-string read-heavy has+get",
+    "perf map<string,int> fast-string set+has+get",
+    "perf map<string,int> read-heavy has+get",
+    "perf map<string,int> set+has+get",
+    "perf set<string> add+has",
+    "perf set<string> fast-string add+has"
+  ],
+  "metrics": [
+    {
+      "label": "perf map/set churn del+add+probe",
+      "samples": [
+        1181818,
+        1984732,
+        1984732,
+        1984732,
+        2000000
+      ],
+      "min_ops_per_s": 1181818,
+      "max_ops_per_s": 2000000,
+      "median_ops_per_s": 1984732
+    },
+    {
+      "label": "perf map/set churn fast-string del+add+probe",
+      "samples": [
+        1645569,
+        1954887,
+        2015503,
+        2080000,
+        1925925
+      ],
+      "min_ops_per_s": 1645569,
+      "max_ops_per_s": 2080000,
+      "median_ops_per_s": 1954887
+    },
+    {
+      "label": "perf map<string,int> fast-string read-heavy has+get",
+      "samples": [
+        3934426,
+        4332129,
+        5381165,
+        5405405,
+        5309734
+      ],
+      "min_ops_per_s": 3934426,
+      "max_ops_per_s": 5405405,
+      "median_ops_per_s": 5309734
+    },
+    {
+      "label": "perf map<string,int> fast-string set+has+get",
+      "samples": [
+        413533,
+        420650,
+        491071,
+        501138,
+        503432
+      ],
+      "min_ops_per_s": 413533,
+      "max_ops_per_s": 503432,
+      "median_ops_per_s": 491071
+    },
+    {
+      "label": "perf map<string,int> read-heavy has+get",
+      "samples": [
+        3973509,
+        4195804,
+        5479452,
+        5357142,
+        5357142
+      ],
+      "min_ops_per_s": 3973509,
+      "max_ops_per_s": 5479452,
+      "median_ops_per_s": 5357142
+    },
+    {
+      "label": "perf map<string,int> set+has+get",
+      "samples": [
+        475161,
+        460251,
+        498866,
+        488888,
+        486725
+      ],
+      "min_ops_per_s": 460251,
+      "max_ops_per_s": 498866,
+      "median_ops_per_s": 486725
+    },
+    {
+      "label": "perf set<string> add+has",
+      "samples": [
+        359477,
+        556962,
+        544554,
+        554156,
+        559796
+      ],
+      "min_ops_per_s": 359477,
+      "max_ops_per_s": 559796,
+      "median_ops_per_s": 554156
+    },
+    {
+      "label": "perf set<string> fast-string add+has",
+      "samples": [
+        375426,
+        537897,
+        565552,
+        543209,
+        537897
+      ],
+      "min_ops_per_s": 375426,
+      "max_ops_per_s": 565552,
+      "median_ops_per_s": 537897
+    }
+  ],
+  "speedups": [
+    {
+      "scenario": "map<string,int> set+has+get",
+      "fast_label": "perf map<string,int> fast-string set+has+get",
+      "baseline_label": "perf map<string,int> set+has+get",
+      "median_fast_ops_per_s": 491071,
+      "median_baseline_ops_per_s": 486725,
+      "speedup": 1.0089290667214545
+    },
+    {
+      "scenario": "map<string,int> read-heavy has+get",
+      "fast_label": "perf map<string,int> fast-string read-heavy has+get",
+      "baseline_label": "perf map<string,int> read-heavy has+get",
+      "median_fast_ops_per_s": 5309734,
+      "median_baseline_ops_per_s": 5357142,
+      "speedup": 0.9911505052507475
+    },
+    {
+      "scenario": "set<string> add+has",
+      "fast_label": "perf set<string> fast-string add+has",
+      "baseline_label": "perf set<string> add+has",
+      "median_fast_ops_per_s": 537897,
+      "median_baseline_ops_per_s": 554156,
+      "speedup": 0.970659886385783
+    },
+    {
+      "scenario": "map/set churn del+add+probe",
+      "fast_label": "perf map/set churn fast-string del+add+probe",
+      "baseline_label": "perf map/set churn del+add+probe",
+      "median_fast_ops_per_s": 1954887,
+      "median_baseline_ops_per_s": 1984732,
+      "speedup": 0.9849627052922006
+    }
+  ]
+}

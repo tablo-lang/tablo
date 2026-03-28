@@ -1,0 +1,703 @@
+// Regexp helpers (practical subset) for text parsing and log processing.
+// Supported syntax:
+// - anchors: ^ and $
+// - quantifiers: *, +, ?
+// - wildcard: .
+// - character classes: [abc], [a-z], [^0-9]
+// - escapes: \d \w \s and escaped metacharacters
+
+record RegexpToken {
+    kind: string,
+    value: string,
+    negate: bool,
+    quant: string
+}
+
+record RegexpPattern {
+    raw: string,
+    anchoredStart: bool,
+    anchoredEnd: bool,
+    tokens: array<RegexpToken>
+}
+
+record RegexpMatch {
+    start: int,
+    end: int,
+    text: string
+}
+
+func regexpStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func regexpError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return regexpStdError(code, message, data);
+}
+
+func regexpWrapError(err: Error?, context: string, detail: any): Error? {
+    if (err == nil) {
+        return nil;
+    }
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    if (err.data != nil) {
+        mapSetString(data, "cause", err.data);
+    }
+    var message: string = context;
+    if (err.message != "") {
+        message = context + ": " + err.message;
+    }
+    return regexpStdError(err.code, message, data);
+}
+
+func regexpIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func regexpIsLetter(ch: string): bool {
+    return find("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", ch) >= 0;
+}
+
+func regexpIsWordChar(ch: string): bool {
+    return regexpIsLetter(ch) || regexpIsDigit(ch) || ch == "_";
+}
+
+func regexpIsSpaceChar(ch: string): bool {
+    return ch == " " || ch == "\t" || ch == "\n" || ch == "\r";
+}
+
+func regexpEmptyPattern(raw: string): RegexpPattern {
+    var out: RegexpPattern = {
+        raw: raw,
+        anchoredStart: false,
+        anchoredEnd: false,
+        tokens: []
+    };
+    return out;
+}
+
+func regexpEmptyMatch(start: int, end: int): RegexpMatch {
+    var out: RegexpMatch = {
+        start: start,
+        end: end,
+        text: ""
+    };
+    return out;
+}
+
+func regexpDecodeEscape(ch: string): (string, string, Error?) {
+    if (ch == "d") return ("digit", "", nil);
+    if (ch == "w") return ("word", "", nil);
+    if (ch == "s") return ("space", "", nil);
+    if (ch == "n") return ("literal", "\n", nil);
+    if (ch == "t") return ("literal", "\t", nil);
+    if (ch == "r") return ("literal", "\r", nil);
+    if (ch == "\\") return ("literal", "\\", nil);
+    if (ch == ".") return ("literal", ".", nil);
+    if (ch == "*") return ("literal", "*", nil);
+    if (ch == "+") return ("literal", "+", nil);
+    if (ch == "?") return ("literal", "?", nil);
+    if (ch == "^") return ("literal", "^", nil);
+    if (ch == "$") return ("literal", "$", nil);
+    if (ch == "[") return ("literal", "[", nil);
+    if (ch == "]") return ("literal", "]", nil);
+    if (ch == "(") return ("literal", "(", nil);
+    if (ch == ")") return ("literal", ")", nil);
+    if (ch == "{") return ("literal", "{", nil);
+    if (ch == "}") return ("literal", "}", nil);
+    if (ch == "|") return ("literal", "|", nil);
+    if (ch == "-") return ("literal", "-", nil);
+    return ("",
+            "",
+            regexpError(ERR_PARSE,
+                        "unsupported escape sequence",
+                        "regexpDecodeEscape.escape",
+                        ch));
+}
+
+func regexpParseClass(pattern: string, start_index: int): (string, bool, int, Error?) {
+    var i: int = start_index;
+    var negate: bool = false;
+    var body: string = "";
+    if (i >= len(pattern)) {
+        return ("",
+                false,
+                i,
+                regexpError(ERR_PARSE,
+                            "unterminated character class",
+                            "regexpParseClass.underflow",
+                            pattern));
+    }
+
+    if (substring(pattern, i, 1) == "^") {
+        negate = true;
+        i = i + 1;
+    }
+
+    while (i < len(pattern)) {
+        var ch: string = substring(pattern, i, 1);
+        if (ch == "]") {
+            if (body == "") {
+                return ("",
+                        false,
+                        i,
+                        regexpError(ERR_PARSE,
+                                    "character class cannot be empty",
+                                    "regexpParseClass.empty",
+                                    pattern));
+            }
+            return (body, negate, i + 1, nil);
+        }
+
+        if (ch == "\\") {
+            if ((i + 1) >= len(pattern)) {
+                return ("",
+                        false,
+                        i,
+                        regexpError(ERR_PARSE,
+                                    "dangling escape in character class",
+                                    "regexpParseClass.escape",
+                                    pattern));
+            }
+            body = body + "\\";
+            body = body + substring(pattern, i + 1, 1);
+            i = i + 2;
+            continue;
+        }
+
+        body = body + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            false,
+            i,
+            regexpError(ERR_PARSE,
+                        "unterminated character class",
+                        "regexpParseClass.unterminated",
+                        pattern));
+}
+
+func regexpClassItemMatches(ch: string, kind: string, value: string): bool {
+    if (kind == "literal") return ch == value;
+    if (kind == "digit") return regexpIsDigit(ch);
+    if (kind == "word") return regexpIsWordChar(ch);
+    if (kind == "space") return regexpIsSpaceChar(ch);
+    return false;
+}
+
+func regexpClassRangeMatch(ch: string, lo: string, hi: string): (bool, bool) {
+    var digits: string = "0123456789";
+    var upper: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var lower: string = "abcdefghijklmnopqrstuvwxyz";
+
+    var li: int = find(digits, lo);
+    var hii: int = find(digits, hi);
+    if (li >= 0 && hii >= 0) {
+        var ci: int = find(digits, ch);
+        if (ci < 0) return (false, true);
+        if (li > hii) {
+            var tmp_d: int = li;
+            li = hii;
+            hii = tmp_d;
+        }
+        return (ci >= li && ci <= hii, true);
+    }
+
+    li = find(upper, lo);
+    hii = find(upper, hi);
+    if (li >= 0 && hii >= 0) {
+        var ci_u: int = find(upper, ch);
+        if (ci_u < 0) return (false, true);
+        if (li > hii) {
+            var tmp_u: int = li;
+            li = hii;
+            hii = tmp_u;
+        }
+        return (ci_u >= li && ci_u <= hii, true);
+    }
+
+    li = find(lower, lo);
+    hii = find(lower, hi);
+    if (li >= 0 && hii >= 0) {
+        var ci_l: int = find(lower, ch);
+        if (ci_l < 0) return (false, true);
+        if (li > hii) {
+            var tmp_l: int = li;
+            li = hii;
+            hii = tmp_l;
+        }
+        return (ci_l >= li && ci_l <= hii, true);
+    }
+
+    return (false, false);
+}
+
+func regexpParseClassItem(body: string, index: int): (string, string, int, Error?) {
+    if (index >= len(body)) {
+        return ("",
+                "",
+                index,
+                regexpError(ERR_PARSE,
+                            "class item index out of bounds",
+                            "regexpParseClassItem.bounds",
+                            index));
+    }
+
+    var ch: string = substring(body, index, 1);
+    if (ch == "\\") {
+        if ((index + 1) >= len(body)) {
+            return ("",
+                    "",
+                    index,
+                    regexpError(ERR_PARSE,
+                                "dangling escape in class body",
+                                "regexpParseClassItem.escape",
+                                body));
+        }
+        var decoded = regexpDecodeEscape(substring(body, index + 1, 1));
+        if (decoded.2 != nil) {
+            return ("", "", index, decoded.2);
+        }
+        return (decoded.0, decoded.1, index + 2, nil);
+    }
+
+    return ("literal", ch, index + 1, nil);
+}
+
+func regexpClassMatches(body: string, ch: string): (bool, Error?) {
+    var i: int = 0;
+    while (i < len(body)) {
+        var left = regexpParseClassItem(body, i);
+        if (left.3 != nil) {
+            return (false, left.3);
+        }
+
+        var left_kind: string = left.0;
+        var left_value: string = left.1;
+        var next_index: int = left.2;
+
+        if (left_kind == "literal" &&
+            next_index < len(body) &&
+            substring(body, next_index, 1) == "-" &&
+            (next_index + 1) < len(body)) {
+            var right = regexpParseClassItem(body, next_index + 1);
+            if (right.3 == nil && right.0 == "literal") {
+                var range_match = regexpClassRangeMatch(ch, left_value, right.1);
+                if (range_match.1) {
+                    if (range_match.0) {
+                        return (true, nil);
+                    }
+                    i = right.2;
+                    continue;
+                }
+            }
+        }
+
+        if (regexpClassItemMatches(ch, left_kind, left_value)) {
+            return (true, nil);
+        }
+        i = next_index;
+    }
+    return (false, nil);
+}
+
+func regexpTokenMatches(token: RegexpToken, ch: string): (bool, Error?) {
+    if (token.kind == "literal") {
+        return (ch == token.value, nil);
+    }
+    if (token.kind == "any") {
+        return (true, nil);
+    }
+    if (token.kind == "digit") {
+        return (regexpIsDigit(ch), nil);
+    }
+    if (token.kind == "word") {
+        return (regexpIsWordChar(ch), nil);
+    }
+    if (token.kind == "space") {
+        return (regexpIsSpaceChar(ch), nil);
+    }
+    if (token.kind == "class") {
+        var class_match = regexpClassMatches(token.value, ch);
+        if (class_match.1 != nil) {
+            return (false, class_match.1);
+        }
+        if (token.negate) {
+            return (!class_match.0, nil);
+        }
+        return (class_match.0, nil);
+    }
+    return (false,
+            regexpError(ERR_PARSE,
+                        "unknown token kind",
+                        "regexpTokenMatches.kind",
+                        token.kind));
+}
+
+func regexpCompile(pattern: string): (RegexpPattern, Error?) {
+    var out: RegexpPattern = regexpEmptyPattern(pattern);
+    var raw: string = pattern;
+    var i: int = 0;
+
+    if (len(raw) > 0 && substring(raw, 0, 1) == "^") {
+        out.anchoredStart = true;
+        i = 1;
+    }
+
+    while (i < len(raw)) {
+        var ch: string = substring(raw, i, 1);
+
+        if (ch == "$" && i == (len(raw) - 1)) {
+            out.anchoredEnd = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "*" || ch == "+" || ch == "?") {
+            return (out,
+                    regexpError(ERR_PARSE,
+                                "quantifier must follow a token",
+                                "regexpCompile.quantifier",
+                                ch));
+        }
+
+        var token: RegexpToken = {
+            kind: "literal",
+            value: "",
+            negate: false,
+            quant: ""
+        };
+
+        if (ch == ".") {
+            token.kind = "any";
+            token.value = "";
+            i = i + 1;
+        } else if (ch == "\\") {
+            if ((i + 1) >= len(raw)) {
+                return (out,
+                        regexpError(ERR_PARSE,
+                                    "dangling escape in pattern",
+                                    "regexpCompile.escape",
+                                    pattern));
+            }
+            var decoded = regexpDecodeEscape(substring(raw, i + 1, 1));
+            if (decoded.2 != nil) {
+                return (out, decoded.2);
+            }
+            token.kind = decoded.0;
+            token.value = decoded.1;
+            i = i + 2;
+        } else if (ch == "[") {
+            var parsed_class = regexpParseClass(raw, i + 1);
+            if (parsed_class.3 != nil) {
+                return (out, parsed_class.3);
+            }
+            token.kind = "class";
+            token.value = parsed_class.0;
+            token.negate = parsed_class.1;
+            i = parsed_class.2;
+        } else {
+            token.kind = "literal";
+            token.value = ch;
+            i = i + 1;
+        }
+
+        if (i < len(raw)) {
+            var q: string = substring(raw, i, 1);
+            if (q == "*" || q == "+" || q == "?") {
+                token.quant = q;
+                i = i + 1;
+            }
+        }
+
+        push(out.tokens, token);
+    }
+
+    return (out, nil);
+}
+
+func regexpMatchRecursive(compiled: RegexpPattern,
+                          text: string,
+                          token_index: int,
+                          text_index: int): (bool, int, Error?) {
+    if (token_index >= len(compiled.tokens)) {
+        if (compiled.anchoredEnd && text_index != len(text)) {
+            return (false, text_index, nil);
+        }
+        return (true, text_index, nil);
+    }
+
+    var token: RegexpToken = compiled.tokens[token_index];
+
+    if (token.quant == "") {
+        if (text_index >= len(text)) {
+            return (false, text_index, nil);
+        }
+        var m = regexpTokenMatches(token, substring(text, text_index, 1));
+        if (m.1 != nil) {
+            return (false, text_index, m.1);
+        }
+        if (!m.0) {
+            return (false, text_index, nil);
+        }
+        return regexpMatchRecursive(compiled, text, token_index + 1, text_index + 1);
+    }
+
+    var min_count: int = 0;
+    if (token.quant == "+") {
+        min_count = 1;
+    }
+    if (token.quant == "?") {
+        var zero_try = regexpMatchRecursive(compiled, text, token_index + 1, text_index);
+        if (zero_try.2 != nil) {
+            return zero_try;
+        }
+        if (zero_try.0) {
+            return zero_try;
+        }
+        min_count = 1;
+    }
+
+    var max_index: int = text_index;
+    var consumed: int = 0;
+    while (max_index < len(text)) {
+        var m2 = regexpTokenMatches(token, substring(text, max_index, 1));
+        if (m2.1 != nil) {
+            return (false, text_index, m2.1);
+        }
+        if (!m2.0) {
+            break;
+        }
+        max_index = max_index + 1;
+        consumed = consumed + 1;
+    }
+
+    if (consumed < min_count) {
+        return (false, text_index, nil);
+    }
+
+    var p: int = max_index;
+    var min_pos: int = text_index + min_count;
+    while (p >= min_pos) {
+        var next = regexpMatchRecursive(compiled, text, token_index + 1, p);
+        if (next.2 != nil) {
+            return next;
+        }
+        if (next.0) {
+            return next;
+        }
+        p = p - 1;
+    }
+
+    return (false, text_index, nil);
+}
+
+func regexpFindFirstCompiled(text: string, compiled: RegexpPattern, from_index: int): (RegexpMatch?, Error?) {
+    var start: int = from_index;
+    if (start < 0) {
+        start = 0;
+    }
+    if (start > len(text)) {
+        return (nil, nil);
+    }
+
+    if (compiled.anchoredStart && start > 0) {
+        return (nil, nil);
+    }
+
+    var i: int = start;
+    while (i <= len(text)) {
+        if (compiled.anchoredStart && i != 0) {
+            break;
+        }
+
+        var r = regexpMatchRecursive(compiled, text, 0, i);
+        if (r.2 != nil) {
+            return (nil, r.2);
+        }
+        if (r.0) {
+            var m: RegexpMatch = regexpEmptyMatch(i, r.1);
+            if (r.1 > i) {
+                m.text = substring(text, i, r.1 - i);
+            } else {
+                m.text = "";
+            }
+            return (m, nil);
+        }
+
+        i = i + 1;
+    }
+
+    return (nil, nil);
+}
+
+func regexpIsMatch(text: string, pattern: string): (bool, Error?) {
+    var compiled = regexpCompile(pattern);
+    if (compiled.1 != nil) {
+        return (false, compiled.1);
+    }
+    var first = regexpFindFirstCompiled(text, compiled.0, 0);
+    if (first.1 != nil) {
+        return (false, first.1);
+    }
+    return (first.0 != nil, nil);
+}
+
+func regexpFindFirst(text: string, pattern: string): (RegexpMatch?, Error?) {
+    var compiled = regexpCompile(pattern);
+    if (compiled.1 != nil) {
+        return (nil, compiled.1);
+    }
+    return regexpFindFirstCompiled(text, compiled.0, 0);
+}
+
+func regexpFindAll(text: string, pattern: string, max_matches: int): (array<RegexpMatch>, Error?) {
+    var out: array<RegexpMatch> = [];
+    if (max_matches < 0) {
+        return (out,
+                regexpError(ERR_INVALID_ARGUMENT,
+                            "maxMatches must be >= 0",
+                            "regexpFindAll.maxMatches",
+                            max_matches));
+    }
+
+    var compiled = regexpCompile(pattern);
+    if (compiled.1 != nil) {
+        return (out, compiled.1);
+    }
+
+    var index: int = 0;
+    while (index <= len(text)) {
+        if (max_matches > 0 && len(out) >= max_matches) {
+            break;
+        }
+
+        var next = regexpFindFirstCompiled(text, compiled.0, index);
+        if (next.1 != nil) {
+            return (out, next.1);
+        }
+        if (next.0 == nil) {
+            break;
+        }
+
+        var m: RegexpMatch = next.0 as RegexpMatch;
+        push(out, m);
+
+        if (m.end > index) {
+            index = m.end;
+        } else {
+            index = index + 1;
+        }
+    }
+
+    return (out, nil);
+}
+
+func regexpReplaceAll(text: string, pattern: string, replacement: string): (string, Error?) {
+    var compiled = regexpCompile(pattern);
+    if (compiled.1 != nil) {
+        return ("", compiled.1);
+    }
+
+    var out: string = "";
+    var cursor: int = 0;
+    while (cursor <= len(text)) {
+        var next = regexpFindFirstCompiled(text, compiled.0, cursor);
+        if (next.1 != nil) {
+            return ("", next.1);
+        }
+        if (next.0 == nil) {
+            if (cursor < len(text)) {
+                out = out + substring(text, cursor, len(text) - cursor);
+            }
+            break;
+        }
+
+        var m: RegexpMatch = next.0 as RegexpMatch;
+        if (m.start > cursor) {
+            out = out + substring(text, cursor, m.start - cursor);
+        }
+        out = out + replacement;
+
+        if (m.end > cursor) {
+            cursor = m.end;
+        } else {
+            // Zero-length match guard.
+            if (cursor < len(text)) {
+                out = out + substring(text, cursor, 1);
+            }
+            cursor = cursor + 1;
+        }
+    }
+
+    return (out, nil);
+}
+
+func regexpSplit(text: string, pattern: string, max_parts: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    if (max_parts < 0) {
+        return (out,
+                regexpError(ERR_INVALID_ARGUMENT,
+                            "maxParts must be >= 0",
+                            "regexpSplit.maxParts",
+                            max_parts));
+    }
+
+    var compiled = regexpCompile(pattern);
+    if (compiled.1 != nil) {
+        return (out, compiled.1);
+    }
+
+    var cursor: int = 0;
+    while (cursor <= len(text)) {
+        if (max_parts > 0 && len(out) >= (max_parts - 1)) {
+            break;
+        }
+
+        var next = regexpFindFirstCompiled(text, compiled.0, cursor);
+        if (next.1 != nil) {
+            return (out, next.1);
+        }
+        if (next.0 == nil) {
+            break;
+        }
+
+        var m: RegexpMatch = next.0 as RegexpMatch;
+        if (m.start >= cursor) {
+            push(out, substring(text, cursor, m.start - cursor));
+        }
+
+        if (m.end > cursor) {
+            cursor = m.end;
+        } else {
+            cursor = cursor + 1;
+        }
+    }
+
+    if (cursor <= len(text)) {
+        push(out, substring(text, cursor, len(text) - cursor));
+    }
+    return (out, nil);
+}
+
+func regexpQuoteMeta(text: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (find("\\.^$|?*+()[]{}", ch) >= 0) {
+            out = out + "\\";
+        }
+        out = out + ch;
+        i = i + 1;
+    }
+    return out;
+}

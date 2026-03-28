@@ -1,0 +1,679 @@
+// HTTP streaming micro-benchmark (loopback).
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_http_streaming.tblo
+//   ./build/Release/tablo run tests/benchmark_http_streaming.tblo 2
+//
+// This benchmark compares:
+// - buffered client path: httpRequest
+// - streaming builtin path: httpRequestHead + tcpReceive chunked body reads
+// - streaming stdlib path: httpClientRequestStream + httpClientStreamReadAll
+// - streaming bytes path: httpClientRequestStream + httpClientStreamReadAllBytes
+// - large-body streaming bytes path: httpClientRequestStream + httpClientStreamReadAllBytes (1 MiB)
+
+import "native_integration_tests/fixtures/http.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func reportBytes(label: string, byte_count: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var mb_per_sec: int = ((byte_count / 1024) * 1000) / (elapsed * 1024);
+    println(label + ": " + str(byte_count) + " bytes in " + str(elapsed) + " ms (" + str(mb_per_sec) + " MiB/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 100) {
+        w = 100;
+    }
+    return w;
+}
+
+func buildRequestHeaders(): map<string, string> {
+    return {
+        "User-Agent": "tablo-bench/1.0",
+        "Accept": "application/octet-stream",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+        "X-Request-Id": "bench-req-1",
+        "X-Trace-Id": "bench-trace-1",
+        "X-Tenant": "benchmark",
+        "X-Region": "loopback",
+        "X-Feature": "headers",
+        "X-Env": "perf"
+    };
+}
+
+func buildBody(size: int): string {
+    if (size <= 0) {
+        return "";
+    }
+
+    var chunk: string = "0123456789abcdef0123456789abcdef";
+    var out: string = "";
+    while (len(out) < size) {
+        out = out + chunk;
+    }
+    return substring(out, 0, size);
+}
+
+func benchError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func httpStreamingBenchServer(): int {
+    var arg_schema: map<string, any> = {
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "bodyBytes": "int"
+    };
+
+    var arg_r = syncThreadArgTyped(arg_schema as any);
+    if (arg_r.1 != nil) {
+        return -100;
+    }
+    var arg: map<string, any> = arg_r.0 as map<string, any>;
+
+    var base_port: int = mapGet(arg, "basePort") as int;
+    var max_tries: int = mapGet(arg, "maxTries") as int;
+    var request_count: int = mapGet(arg, "requestCount") as int;
+    var body_bytes: int = mapGet(arg, "bodyBytes") as int;
+
+    var outbox: int = syncThreadOutbox();
+    var listener: any = nil;
+    var selected_port: int = -1;
+
+    var t: int = 0;
+    while (t < max_tries) {
+        var p: int = base_port + t;
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            listener = lr.0;
+            selected_port = p;
+            break;
+        }
+        t = t + 1;
+    }
+
+    if (outbox >= 0) {
+        var ready_port: int = selected_port;
+        if (listener == nil) {
+            ready_port = -1;
+        }
+        var _ready_send = syncChannelSend(outbox, ready_port as any, 5000);
+    }
+
+    if (listener == nil) {
+        return -101;
+    }
+
+    var body: string = buildBody(body_bytes);
+    var headers: map<string, string> = {
+        "Content-Type": "application/octet-stream",
+        "X-Bench": "http-streaming"
+    };
+
+    var served: int = 0;
+    while (served < request_count) {
+        {
+            var accept_r = tcpAccept(listener, 5000);
+            if (accept_r.1 != nil) {
+                tcpClose(listener);
+                return -200 - served;
+            }
+            var client: any = accept_r.0;
+            accept_r = (nil, nil);
+
+            var rr = httpReadRequest(client, 8192);
+            if (rr.1 != nil) {
+                tcpClose(client);
+                client = nil;
+                tcpClose(listener);
+                return -300 - served;
+            }
+
+            var wr = httpWriteResponse(client, 200, body, headers);
+            tcpClose(client);
+            client = nil;
+            if (wr.1 != nil) {
+                tcpClose(listener);
+                return -400 - served;
+            }
+        }
+
+        served = served + 1;
+    }
+
+    tcpClose(listener);
+    return served;
+}
+
+func startStreamingBenchServer(base_port: int,
+                               max_tries: int,
+                               request_count: int,
+                               body_bytes: int): (int, int, int, Error?) {
+    var outbox_r = syncChannelCreate(2);
+    if (outbox_r.1 != nil) {
+        return (-1, -1, -1, outbox_r.1);
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var arg: map<string, any> = {
+        "basePort": base_port,
+        "maxTries": max_tries,
+        "requestCount": request_count,
+        "bodyBytes": body_bytes
+    };
+    var arg_schema: map<string, any> = {
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "bodyBytes": "int"
+    };
+    var spawn_r = syncThreadSpawnTyped("httpStreamingBenchServer",
+                                       arg as any,
+                                       arg_schema as any,
+                                       -1,
+                                       outbox_id);
+    if (spawn_r.1 != nil) {
+        var _close_1 = syncChannelClose(outbox_id);
+        return (-1, -1, -1, spawn_r.1);
+    }
+
+    var thread_id: int = spawn_r.0 as int;
+    var ready_r = syncChannelRecv(outbox_id, 5000);
+    if (ready_r.1 != nil) {
+        var join_err_1 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_2 = syncChannelClose(outbox_id);
+        var data_1: map<string, any> = {
+            "recvErr": ready_r.1,
+            "join": join_err_1
+        };
+        return (-1, -1, -1, benchError(ERR_NETWORK, "benchmark server startup signal failed", data_1));
+    }
+
+    var selected_port: int = ready_r.0 as int;
+
+    if (selected_port <= 0) {
+        var join_err_2 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_3 = syncChannelClose(outbox_id);
+        var data_2: map<string, any> = {
+            "readyPort": selected_port,
+            "join": join_err_2
+        };
+        return (-1, -1, -1, benchError(ERR_NETWORK, "benchmark server failed to start", data_2));
+    }
+
+    return (thread_id, outbox_id, selected_port, nil);
+}
+
+func stopStreamingBenchServer(thread_id: int, outbox_id: int, expected_requests: int): Error? {
+    var join_r = syncThreadJoinTyped(thread_id, "int", 5000);
+    var close_r = syncChannelClose(outbox_id);
+
+    if (join_r.1 != nil) {
+        return benchError(join_r.1.code, "benchmark server join failed: " + join_r.1.message, join_r.1.data);
+    }
+    if (close_r.1 != nil) {
+        return benchError(close_r.1.code, "benchmark server outbox close failed: " + close_r.1.message, close_r.1.data);
+    }
+
+    var served: int = join_r.0 as int;
+    if (served != expected_requests) {
+        return benchError(ERR_INTERNAL,
+                          "benchmark server served unexpected request count",
+                          {"served": served, "expected": expected_requests});
+    }
+    return nil;
+}
+
+func consumeHeadBodyBytes(head: map<string, any>, chunk_bytes: int): int {
+    var socket_any: any = mapGet(head, "socket");
+    if (socket_any == nil || typeOf(socket_any) != "socket") {
+        panic("httpRequestHead returned invalid socket");
+    }
+    var socket = socket_any;
+
+    var content_length_any: any = mapGet(head, "contentLength");
+    if (content_length_any == nil || typeOf(content_length_any) != "int") {
+        tcpClose(socket);
+        panic("httpRequestHead returned invalid contentLength");
+    }
+    var remaining: int = content_length_any as int;
+
+    var total: int = 0;
+    while (true) {
+        if (remaining == 0) {
+            break;
+        }
+
+        var read_bytes: int = chunk_bytes;
+        if (remaining > 0 && read_bytes > remaining) {
+            read_bytes = remaining;
+        }
+
+        var recv_r = tcpReceive(socket, read_bytes);
+        if (recv_r.1 != nil) {
+            tcpClose(socket);
+            panic("tcpReceive failed while consuming streamed body");
+        }
+
+        var chunk: string = recv_r.0;
+        var n: int = len(chunk);
+        if (remaining > 0) {
+            if (n == 0) {
+                tcpClose(socket);
+                panic("streamed body ended before content-length bytes were read");
+            }
+            remaining = remaining - n;
+            if (remaining < 0) {
+                tcpClose(socket);
+                panic("streamed body exceeded declared content-length");
+            }
+        } else {
+            if (n == 0) {
+                break;
+            }
+        }
+
+        total = total + n;
+    }
+
+    tcpClose(socket);
+    return total;
+}
+
+func benchHttpRequestBuffered(iters: int, body_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19431, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start buffered benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpRequest("GET", url, nil, nil, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpRequest warmup failed: " + req_w.1.message);
+        }
+        var resp_w: map<string, any> = req_w.0 as map<string, any>;
+        var status_w: int = mapGet(resp_w, "status") as int;
+        var body_w: string = mapGet(resp_w, "body") as string;
+        if (status_w != 200 || len(body_w) != body_bytes) {
+            panic("httpRequest warmup returned unexpected response");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpRequest("GET", url, nil, nil, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpRequest failed: " + req.1.message);
+        }
+        var resp: map<string, any> = req.0 as map<string, any>;
+        var status: int = mapGet(resp, "status") as int;
+        var body: string = mapGet(resp, "body") as string;
+        if (status != 200 || len(body) != body_bytes) {
+            panic("httpRequest returned unexpected response");
+        }
+        consumed_bytes = consumed_bytes + len(body);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpRequest buffered", iters, start, end);
+    reportBytes("perf httpRequest buffered body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop buffered benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpClientGetHeaders(iters: int, body_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19521, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start header benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+    var req_headers: map<string, string> = buildRequestHeaders();
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpClientGet(url, req_headers, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpClientGet warmup failed: " + req_w.1.message);
+        }
+        if (req_w.0.status != 200 || len(req_w.0.body) != body_bytes) {
+            panic("httpClientGet warmup returned unexpected response");
+        }
+        if (mapGetString(req_w.0.headers, "X-Bench") != "http-streaming") {
+            panic("httpClientGet warmup response headers missing X-Bench");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpClientGet(url, req_headers, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpClientGet failed: " + req.1.message);
+        }
+        if (req.0.status != 200 || len(req.0.body) != body_bytes) {
+            panic("httpClientGet returned unexpected response");
+        }
+        if (mapGetString(req.0.headers, "X-Bench") != "http-streaming") {
+            panic("httpClientGet response headers missing X-Bench");
+        }
+        consumed_bytes = consumed_bytes + len(req.0.body);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpClientGet+headers", iters, start, end);
+    reportBytes("perf httpClientGet+headers body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop header benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpRequestHeadStream(iters: int, body_bytes: int, chunk_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19461, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start head-stream benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpRequestHead("GET", url, nil, nil, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpRequestHead warmup failed: " + req_w.1.message);
+        }
+        var head_w: map<string, any> = req_w.0 as map<string, any>;
+        if ((mapGet(head_w, "status") as int) != 200) {
+            panic("httpRequestHead warmup returned non-200 status");
+        }
+        var n_w: int = consumeHeadBodyBytes(head_w, chunk_bytes);
+        if (n_w != body_bytes) {
+            panic("httpRequestHead warmup returned unexpected body size");
+        }
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpRequestHead("GET", url, nil, nil, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpRequestHead failed: " + req.1.message);
+        }
+        var head: map<string, any> = req.0 as map<string, any>;
+        if ((mapGet(head, "status") as int) != 200) {
+            panic("httpRequestHead returned non-200 status");
+        }
+        var n: int = consumeHeadBodyBytes(head, chunk_bytes);
+        if (n != body_bytes) {
+            panic("httpRequestHead returned unexpected body size");
+        }
+        consumed_bytes = consumed_bytes + n;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpRequestHead+tcpReceive", iters, start, end);
+    reportBytes("perf httpRequestHead+tcpReceive body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop head-stream benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpClientStreamWrapper(iters: int, body_bytes: int, chunk_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19491, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start stdlib-stream benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpClientRequestStream warmup failed: " + req_w.1.message);
+        }
+        var read_w = httpClientStreamReadAll(req_w.0, chunk_bytes);
+        if (read_w.2 != nil) {
+            panic("httpClientStreamReadAll warmup failed: " + read_w.2.message);
+        }
+        if (len(read_w.1) != body_bytes || read_w.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream warmup returned unexpected body");
+        }
+        httpClientStreamClose(read_w.0);
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpClientRequestStream failed: " + req.1.message);
+        }
+        var read = httpClientStreamReadAll(req.0, chunk_bytes);
+        if (read.2 != nil) {
+            panic("httpClientStreamReadAll failed: " + read.2.message);
+        }
+        if (len(read.1) != body_bytes || read.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream returned unexpected body");
+        }
+        consumed_bytes = consumed_bytes + len(read.1);
+        httpClientStreamClose(read.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpClientRequestStream+readAll", iters, start, end);
+    reportBytes("perf httpClientRequestStream+readAll body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop stdlib-stream benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpClientStreamWrapperBytes(iters: int, body_bytes: int, chunk_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19501, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start stdlib-stream-bytes benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpClientRequestStream warmup failed: " + req_w.1.message);
+        }
+        var read_w = httpClientStreamReadAllBytes(req_w.0, chunk_bytes);
+        if (read_w.2 != nil) {
+            panic("httpClientStreamReadAllBytes warmup failed: " + read_w.2.message);
+        }
+        if (len(read_w.1) != body_bytes || read_w.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream warmup returned unexpected bytes body");
+        }
+        httpClientStreamClose(read_w.0);
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpClientRequestStream failed: " + req.1.message);
+        }
+        var read = httpClientStreamReadAllBytes(req.0, chunk_bytes);
+        if (read.2 != nil) {
+            panic("httpClientStreamReadAllBytes failed: " + read.2.message);
+        }
+        if (len(read.1) != body_bytes || read.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream returned unexpected bytes body");
+        }
+        consumed_bytes = consumed_bytes + len(read.1);
+        httpClientStreamClose(read.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpClientRequestStream+readAllBytes", iters, start, end);
+    reportBytes("perf httpClientRequestStream+readAllBytes body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop stdlib-stream-bytes benchmark server: " + stop_err.message);
+    }
+}
+
+func benchHttpClientStreamWrapperBytesLarge(iters: int, body_bytes: int, chunk_bytes: int, timeout_ms: int): void {
+    var warm: int = warmup(iters);
+    var total_requests: int = iters + warm;
+
+    var server_r = startStreamingBenchServer(19511, 16, total_requests, body_bytes);
+    if (server_r.3 != nil) {
+        panic("failed to start stdlib-stream-bytes-large benchmark server: " + server_r.3.message);
+    }
+
+    var thread_id: int = server_r.0;
+    var outbox_id: int = server_r.1;
+    var port: int = server_r.2;
+    var url: string = "http://127.0.0.1:" + str(port) + "/bench";
+
+    var w: int = 0;
+    while (w < warm) {
+        var req_w = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req_w.1 != nil) {
+            panic("httpClientRequestStream large warmup failed: " + req_w.1.message);
+        }
+        var read_w = httpClientStreamReadAllBytes(req_w.0, chunk_bytes);
+        if (read_w.2 != nil) {
+            panic("httpClientStreamReadAllBytes large warmup failed: " + read_w.2.message);
+        }
+        if (len(read_w.1) != body_bytes || read_w.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream large warmup returned unexpected bytes body");
+        }
+        httpClientStreamClose(read_w.0);
+        w = w + 1;
+    }
+
+    var consumed_bytes: int = 0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var req = httpClientRequestStream("GET", url, nil, nil, timeout_ms);
+        if (req.1 != nil) {
+            panic("httpClientRequestStream large failed: " + req.1.message);
+        }
+        var read = httpClientStreamReadAllBytes(req.0, chunk_bytes);
+        if (read.2 != nil) {
+            panic("httpClientStreamReadAllBytes large failed: " + read.2.message);
+        }
+        if (len(read.1) != body_bytes || read.0.remainingBodyBytes != 0) {
+            panic("httpClientRequestStream large returned unexpected bytes body");
+        }
+        consumed_bytes = consumed_bytes + len(read.1);
+        httpClientStreamClose(read.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf httpClientRequestStream+readAllBytes large", iters, start, end);
+    reportBytes("perf httpClientRequestStream+readAllBytes large body", consumed_bytes, start, end);
+
+    var stop_err = stopStreamingBenchServer(thread_id, outbox_id, total_requests);
+    if (stop_err != nil) {
+        panic("failed to stop stdlib-stream-bytes-large benchmark server: " + stop_err.message);
+    }
+}
+
+func main(): void {
+    println("=== TabloLang HTTP Streaming Micro-Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    var timeout_ms: int = 5000;
+    var body_bytes: int = 65536;
+
+    benchHttpClientGetHeaders(600 * scale, body_bytes, timeout_ms);
+    benchHttpRequestBuffered(800 * scale, body_bytes, timeout_ms);
+    benchHttpRequestHeadStream(800 * scale, body_bytes, 1024, timeout_ms);
+    benchHttpClientStreamWrapper(800 * scale, body_bytes, 1024, timeout_ms);
+    benchHttpClientStreamWrapperBytes(800 * scale, body_bytes, 1024, timeout_ms);
+    benchHttpClientStreamWrapperBytesLarge(80 * scale, 1048576, 4096, 10000);
+
+    println("HTTP streaming benchmark complete!");
+}

@@ -1,0 +1,2154 @@
+import "fixtures/crypto.tblo";
+
+func runAutoJtiSessionTests(): void {
+    var auto_jti_claims = cryptoSignedJsonClaimsNew();
+    var auto_jti_claims_sub = cryptoSignedJsonClaimsSetSubject(auto_jti_claims, "auto-user");
+    println(auto_jti_claims_sub.1 == nil);
+    if (auto_jti_claims_sub.1 == nil) {
+        auto_jti_claims = auto_jti_claims_sub.0;
+    }
+
+    var auto_jti_1 = cryptoSignedJsonClaimsEnsureJwtId(auto_jti_claims);
+    println(auto_jti_1.2 == nil);
+    if (auto_jti_1.2 == nil) {
+        auto_jti_claims = auto_jti_1.0;
+        println(len(auto_jti_1.1) == 36);
+        println(substring(auto_jti_1.1, 8, 1) == "-");
+        println((mapGetString(auto_jti_claims, "jti") as string) == auto_jti_1.1);
+
+        var auto_jti_2 = cryptoSignedJsonClaimsEnsureJwtId(auto_jti_claims);
+        println(auto_jti_2.2 == nil);
+        if (auto_jti_2.2 == nil) {
+            println(auto_jti_2.1 == auto_jti_1.1);
+        }
+    }
+
+    var auto_jti_empty_claims = cryptoSignedJsonClaimsNew();
+    mapSetString(auto_jti_empty_claims, "jti", "");
+    var auto_jti_empty = cryptoSignedJsonClaimsEnsureJwtId(auto_jti_empty_claims);
+    println(auto_jti_empty.2 != nil);
+
+    var auto_jti_bad_type_claims = cryptoSignedJsonClaimsNew();
+    mapSetString(auto_jti_bad_type_claims, "jti", 7);
+    var auto_jti_bad_type = cryptoSignedJsonClaimsEnsureJwtId(auto_jti_bad_type_claims);
+    println(auto_jti_bad_type.2 != nil);
+
+    var auto_issue_claims = cryptoSignedJsonClaimsNew();
+    mapSetString(auto_issue_claims, "role", "member");
+    var auto_issue_sub = cryptoSignedJsonClaimsSetSubject(auto_issue_claims, "issue-user");
+    println(auto_issue_sub.1 == nil);
+    if (auto_issue_sub.1 == nil) {
+        auto_issue_claims = auto_issue_sub.0;
+    }
+    var auto_issue_iss = cryptoSignedJsonClaimsSetIssuer(auto_issue_claims, "issue-issuer");
+    println(auto_issue_iss.1 == nil);
+    if (auto_issue_iss.1 == nil) {
+        auto_issue_claims = auto_issue_iss.0;
+    }
+    var auto_issue_aud = cryptoSignedJsonClaimsSetAudience(auto_issue_claims, "issue-api");
+    println(auto_issue_aud.1 == nil);
+    if (auto_issue_aud.1 == nil) {
+        auto_issue_claims = auto_issue_aud.0;
+    }
+
+    var auto_issue_policy: CryptoSignedJsonClaimsValidationPolicy = {
+        issuer: "issue-issuer",
+        audience: "issue-api",
+        requireIssuer: true,
+        requireAudience: true,
+        requireNotBefore: false,
+        requireJti: true,
+        clockSkewMillis: 0
+    };
+    var auto_issue = cryptoSignedJsonClaimsSealTextWithAutoJwtId("issue-secret",
+                                                                 auto_issue_claims,
+                                                                 1000,
+                                                                 4000);
+    println(auto_issue.2 == nil);
+    if (auto_issue.2 == nil) {
+        println(len(auto_issue.1) == 36);
+
+        var auto_issue_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("issue-secret",
+                                                                           auto_issue.0,
+                                                                           1500,
+                                                                           auto_issue_policy);
+        println(auto_issue_verify.3 == nil);
+        if (auto_issue_verify.3 == nil) {
+            println(auto_issue_verify.0 == true);
+            println((mapGetString(auto_issue_verify.2.claims, "jti") as string) == auto_issue.1);
+            println((mapGetString(auto_issue_verify.2.claims, "role") as string) == "member");
+        }
+
+        var auto_revocations = cryptoSignedJsonClaimsRevocationStoreNew();
+        var auto_revoke = cryptoSignedJsonClaimsRevocationStoreRevokeId(auto_revocations,
+                                                                        auto_issue.1,
+                                                                        4000);
+        println(auto_revoke.1 == nil);
+        if (auto_revoke.1 == nil) {
+            auto_revocations = auto_revoke.0;
+            var auto_revoked_verify = cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation("issue-secret",
+                                                                                              auto_issue.0,
+                                                                                              1500,
+                                                                                              auto_issue_policy,
+                                                                                              auto_revocations);
+            println(auto_revoked_verify.5 == nil);
+            if (auto_revoked_verify.5 == nil) {
+                println(auto_revoked_verify.0 == false);
+                println(auto_revoked_verify.2 == true);
+            }
+        }
+    }
+
+    var auto_issue_existing_claims = cryptoSignedJsonClaimsNew();
+    var auto_issue_existing_jti = cryptoSignedJsonClaimsSetJwtId(auto_issue_existing_claims, "manual-jti");
+    println(auto_issue_existing_jti.1 == nil);
+    if (auto_issue_existing_jti.1 == nil) {
+        auto_issue_existing_claims = auto_issue_existing_jti.0;
+        var auto_issue_existing = cryptoSignedJsonClaimsSealTextWithAutoJwtId("issue-secret",
+                                                                              auto_issue_existing_claims,
+                                                                              1000,
+                                                                              4000);
+        println(auto_issue_existing.2 == nil);
+        if (auto_issue_existing.2 == nil) {
+            println(auto_issue_existing.1 == "manual-jti");
+        }
+    }
+
+    var auto_issue_kid_claims = cryptoSignedJsonClaimsNew();
+    var auto_issue_kid_sub = cryptoSignedJsonClaimsSetSubject(auto_issue_kid_claims, "kid-user");
+    println(auto_issue_kid_sub.1 == nil);
+    if (auto_issue_kid_sub.1 == nil) {
+        auto_issue_kid_claims = auto_issue_kid_sub.0;
+    }
+    var auto_issue_kid = cryptoSignedJsonClaimsSealTextWithKeyIdAndAutoJwtIdTtl("kid-secret",
+                                                                                 "kid-1",
+                                                                                 auto_issue_kid_claims,
+                                                                                 60000);
+    println(auto_issue_kid.2 == nil);
+    if (auto_issue_kid.2 == nil) {
+        println(len(auto_issue_kid.1) == 36);
+        var auto_issue_kid_ring: map<string, string> = {};
+        mapSetString(auto_issue_kid_ring, "kid-1", "kid-secret");
+        var auto_issue_kid_verify = cryptoSignedJsonClaimsVerifyTextKeyRing(auto_issue_kid_ring,
+                                                                            auto_issue_kid.0,
+                                                                            timeNowMillis());
+        println(auto_issue_kid_verify.4 == nil);
+        if (auto_issue_kid_verify.4 == nil) {
+            println(auto_issue_kid_verify.0 == true);
+            println((mapGetString(auto_issue_kid_verify.3.claims, "jti") as string) == auto_issue_kid.1);
+        }
+    }
+}
+
+func runSessionTokenWrapperTests(): void {
+    var default_config = cryptoSessionTokenDefaultConfig();
+    println(default_config.ttlMillis == 900000);
+    println(default_config.clockSkewMillis == 30000);
+    println(default_config.includeNotBefore == true);
+    println(default_config.keyId == nil);
+
+    var invalid_ttl_config = cryptoSessionTokenDefaultConfig();
+    invalid_ttl_config.ttlMillis = 0;
+    var invalid_ttl_issue = cryptoSessionTokenIssueText("session-secret",
+                                                        invalid_ttl_config,
+                                                        "user-1",
+                                                        {},
+                                                        1000);
+    println(invalid_ttl_issue.1 != nil);
+
+    var invalid_key_id_config = cryptoSessionTokenDefaultConfig();
+    invalid_key_id_config.keyId = "";
+    var invalid_key_id_issue = cryptoSessionTokenIssueText("session-secret",
+                                                           invalid_key_id_config,
+                                                           "user-1",
+                                                           {},
+                                                           1000);
+    println(invalid_key_id_issue.1 != nil);
+
+    var session_config = cryptoSessionTokenDefaultConfig();
+    session_config.issuer = "session-issuer";
+    session_config.audience = "session-api";
+    session_config.ttlMillis = 5000;
+    session_config.clockSkewMillis = 50;
+
+    var session_claims: map<string, any> = {
+        "role": "admin",
+        "sub": "wrong-subject",
+        "iss": "wrong-issuer",
+        "aud": "wrong-audience",
+        "nbf": 7
+    };
+    var issued = cryptoSessionTokenIssueText("session-secret",
+                                             session_config,
+                                             "user-1",
+                                             session_claims,
+                                             1000);
+    println(issued.1 == nil);
+    if (issued.1 == nil) {
+        println(issued.0.subject == "user-1");
+        println(issued.0.keyId == nil);
+        println(len(issued.0.jwtId) == 36);
+        println(issued.0.issuedAtMillis == 1000);
+        println(issued.0.expiresAtMillis == 6000);
+
+        var verify_store = cryptoSignedJsonClaimsRevocationStoreNew();
+        var verified = cryptoSessionTokenVerifyText("session-secret",
+                                                    session_config,
+                                                    issued.0.token,
+                                                    1200,
+                                                    verify_store);
+        println(verified.1 == nil);
+        if (verified.1 == nil) {
+            println(verified.0.ok == true);
+            println(verified.0.expired == false);
+            println(verified.0.revoked == false);
+            println((verified.0.subject as string) == "user-1");
+            println((verified.0.jwtId as string) == issued.0.jwtId);
+            println(verified.0.keyId == nil);
+            println((mapGetString(verified.0.claims.claims, "role") as string) == "admin");
+            println((mapGetString(verified.0.claims.claims, "sub") as string) == "user-1");
+            println((mapGetString(verified.0.claims.claims, "iss") as string) == "session-issuer");
+            println((mapGetString(verified.0.claims.claims, "aud") as string) == "session-api");
+            println((mapGetString(verified.0.claims.claims, "nbf") as int) == 1000);
+
+            verify_store = verified.0.revocations;
+            var revoked_issued = cryptoSessionTokenRevokeIssued(verify_store, issued.0);
+            println(revoked_issued.1 == nil);
+            if (revoked_issued.1 == nil) {
+                verify_store = revoked_issued.0;
+                var revoked_verify = cryptoSessionTokenVerifyText("session-secret",
+                                                                  session_config,
+                                                                  issued.0.token,
+                                                                  1200,
+                                                                  verify_store);
+                println(revoked_verify.1 == nil);
+                if (revoked_verify.1 == nil) {
+                    println(revoked_verify.0.ok == false);
+                    println(revoked_verify.0.expired == false);
+                    println(revoked_verify.0.revoked == true);
+                    println((revoked_verify.0.jwtId as string) == issued.0.jwtId);
+                }
+            }
+        }
+
+        var expired = cryptoSessionTokenVerifyText("session-secret",
+                                                   session_config,
+                                                   issued.0.token,
+                                                   7000,
+                                                   cryptoSignedJsonClaimsRevocationStoreNew());
+        println(expired.1 == nil);
+        if (expired.1 == nil) {
+            println(expired.0.ok == false);
+            println(expired.0.expired == true);
+            println(expired.0.revoked == false);
+        }
+    }
+
+    var missing_subject_claims: map<string, any> = {
+        "iss": "session-issuer",
+        "aud": "session-api",
+        "nbf": 1000,
+        "jti": "manual-jti"
+    };
+    var missing_subject_token = cryptoSignedJsonClaimsSealText("session-secret",
+                                                               missing_subject_claims,
+                                                               1000,
+                                                               6000);
+    println(missing_subject_token.1 == nil);
+    if (missing_subject_token.1 == nil) {
+        var missing_subject_verify = cryptoSessionTokenVerifyText("session-secret",
+                                                                  session_config,
+                                                                  missing_subject_token.0,
+                                                                  1200,
+                                                                  cryptoSignedJsonClaimsRevocationStoreNew());
+        println(missing_subject_verify.1 == nil);
+        if (missing_subject_verify.1 == nil) {
+            println(missing_subject_verify.0.ok == false);
+            println(missing_subject_verify.0.expired == false);
+            println(missing_subject_verify.0.revoked == false);
+            println(missing_subject_verify.0.subject == nil);
+            println((missing_subject_verify.0.jwtId as string) == "manual-jti");
+        }
+    }
+
+    var issue_now = cryptoSessionTokenIssueTextNow("session-secret",
+                                                   session_config,
+                                                   "now-user",
+                                                   {});
+    println(issue_now.1 == nil);
+    if (issue_now.1 == nil) {
+        println(issue_now.0.expiresAtMillis > issue_now.0.issuedAtMillis);
+        var verify_now = cryptoSessionTokenVerifyTextNow("session-secret",
+                                                         session_config,
+                                                         issue_now.0.token,
+                                                         cryptoSignedJsonClaimsRevocationStoreNew());
+        println(verify_now.1 == nil);
+        if (verify_now.1 == nil) {
+            println(verify_now.0.ok == true);
+            println((verify_now.0.subject as string) == "now-user");
+        }
+    }
+
+    var key_ring_config = cryptoSessionTokenDefaultConfig();
+    key_ring_config.issuer = "session-issuer";
+    key_ring_config.audience = "session-api";
+    key_ring_config.keyId = "k2";
+    key_ring_config.ttlMillis = 5000;
+
+    var key_ring_claims: map<string, any> = {
+        "scope": "session"
+    };
+    var key_ring_issue = cryptoSessionTokenIssueText("new-secret",
+                                                     key_ring_config,
+                                                     "ring-user",
+                                                     key_ring_claims,
+                                                     2000);
+    println(key_ring_issue.1 == nil);
+    if (key_ring_issue.1 == nil) {
+        println((key_ring_issue.0.keyId as string) == "k2");
+
+        var key_ring: map<string, string> = {};
+        mapSetString(key_ring, "k1", "old-secret");
+        mapSetString(key_ring, "k2", "new-secret");
+
+        var key_ring_verify = cryptoSessionTokenVerifyTextKeyRing(key_ring,
+                                                                  key_ring_config,
+                                                                  key_ring_issue.0.token,
+                                                                  2300,
+                                                                  cryptoSignedJsonClaimsRevocationStoreNew());
+        println(key_ring_verify.1 == nil);
+        if (key_ring_verify.1 == nil) {
+            println(key_ring_verify.0.ok == true);
+            println(key_ring_verify.0.expired == false);
+            println(key_ring_verify.0.revoked == false);
+            println((key_ring_verify.0.keyId as string) == "k2");
+            println((key_ring_verify.0.subject as string) == "ring-user");
+            println((key_ring_verify.0.jwtId as string) == key_ring_issue.0.jwtId);
+            println((mapGetString(key_ring_verify.0.claims.claims, "scope") as string) == "session");
+
+            var revoke_verified = cryptoSessionTokenRevokeVerified(key_ring_verify.0.revocations,
+                                                                   key_ring_verify.0);
+            println(revoke_verified.1 == nil);
+            if (revoke_verified.1 == nil) {
+                var key_ring_revoked = cryptoSessionTokenVerifyTextKeyRing(key_ring,
+                                                                           key_ring_config,
+                                                                           key_ring_issue.0.token,
+                                                                           2300,
+                                                                           revoke_verified.0);
+                println(key_ring_revoked.1 == nil);
+                if (key_ring_revoked.1 == nil) {
+                    println(key_ring_revoked.0.ok == false);
+                    println(key_ring_revoked.0.revoked == true);
+                    println((key_ring_revoked.0.keyId as string) == "k2");
+                }
+            }
+        }
+
+        var key_ring_issue_now = cryptoSessionTokenIssueTextNow("new-secret",
+                                                                key_ring_config,
+                                                                "ring-now",
+                                                                {});
+        println(key_ring_issue_now.1 == nil);
+        if (key_ring_issue_now.1 == nil) {
+            var key_ring_verify_now = cryptoSessionTokenVerifyTextKeyRingNow(key_ring,
+                                                                             key_ring_config,
+                                                                             key_ring_issue_now.0.token,
+                                                                             cryptoSignedJsonClaimsRevocationStoreNew());
+            println(key_ring_verify_now.1 == nil);
+            if (key_ring_verify_now.1 == nil) {
+                println(key_ring_verify_now.0.ok == true);
+                println((key_ring_verify_now.0.subject as string) == "ring-now");
+            }
+        }
+    }
+}
+
+func runSessionTokenPairTests(): void {
+    var default_pair_config = cryptoSessionTokenPairDefaultConfig();
+    println(default_pair_config.access.ttlMillis == 900000);
+    println(default_pair_config.refresh.ttlMillis == 2592000000);
+    println(default_pair_config.access.includeNotBefore == true);
+    println(default_pair_config.refresh.includeNotBefore == true);
+
+    var invalid_pair_config = cryptoSessionTokenPairDefaultConfig();
+    invalid_pair_config.refresh.ttlMillis = 0;
+    var invalid_pair_issue = cryptoSessionTokenPairIssueText("access-secret",
+                                                             "refresh-secret",
+                                                             invalid_pair_config,
+                                                             "pair-user",
+                                                             {},
+                                                             {},
+                                                             1000);
+    println(invalid_pair_issue.1 != nil);
+
+    var pair_config = cryptoSessionTokenPairDefaultConfig();
+    pair_config.access.issuer = "pair-issuer";
+    pair_config.access.audience = "pair-api";
+    pair_config.access.ttlMillis = 5000;
+    pair_config.refresh.issuer = "pair-issuer";
+    pair_config.refresh.audience = "pair-refresh";
+    pair_config.refresh.keyId = "rk2";
+    pair_config.refresh.ttlMillis = 20000;
+    pair_config.refresh.clockSkewMillis = 100;
+
+    var access_claims: map<string, any> = {
+        "role": "reader",
+        "tokenKind": "wrong-kind",
+        "sid": "wrong-session-id"
+    };
+    var refresh_claims: map<string, any> = {
+        "scope": "offline"
+    };
+    var issued_pair = cryptoSessionTokenPairIssueText("access-secret",
+                                                      "refresh-secret",
+                                                      pair_config,
+                                                      "pair-user",
+                                                      access_claims,
+                                                      refresh_claims,
+                                                      1000);
+    println(issued_pair.1 == nil);
+    if (issued_pair.1 == nil) {
+        println(len(issued_pair.0.sessionId) == 36);
+        println(issued_pair.0.access.subject == "pair-user");
+        println(issued_pair.0.refresh.subject == "pair-user");
+        println(issued_pair.0.access.issuedAtMillis == 1000);
+        println(issued_pair.0.access.expiresAtMillis == 6000);
+        println((issued_pair.0.refresh.keyId as string) == "rk2");
+        println(issued_pair.0.refresh.expiresAtMillis == 21000);
+
+        var access_verify = cryptoSessionTokenPairVerifyAccessText("access-secret",
+                                                                   pair_config,
+                                                                   issued_pair.0.access.token,
+                                                                   1200,
+                                                                   cryptoSignedJsonClaimsRevocationStoreNew());
+        println(access_verify.1 == nil);
+        if (access_verify.1 == nil) {
+            println(access_verify.0.ok == true);
+            println(access_verify.0.expired == false);
+            println(access_verify.0.revoked == false);
+            println((access_verify.0.subject as string) == "pair-user");
+            println((access_verify.0.sessionId as string) == issued_pair.0.sessionId);
+            println((access_verify.0.tokenKind as string) == "access");
+            println((mapGetString(access_verify.0.claims.claims, "role") as string) == "reader");
+            println((mapGetString(access_verify.0.claims.claims, "tokenKind") as string) == "access");
+            println((mapGetString(access_verify.0.claims.claims, "sid") as string) == issued_pair.0.sessionId);
+
+            var wrong_pair_kind = cryptoSessionTokenPairValidateRefresh(access_verify.0);
+            println(wrong_pair_kind.ok == false);
+            println((wrong_pair_kind.tokenKind as string) == "access");
+            println((wrong_pair_kind.sessionId as string) == issued_pair.0.sessionId);
+        }
+
+        var refresh_verify = cryptoSessionTokenPairVerifyRefreshText("refresh-secret",
+                                                                     pair_config,
+                                                                     issued_pair.0.refresh.token,
+                                                                     1200,
+                                                                     cryptoSignedJsonClaimsRevocationStoreNew());
+        println(refresh_verify.1 == nil);
+        if (refresh_verify.1 == nil) {
+            println(refresh_verify.0.ok == true);
+            println(refresh_verify.0.expired == false);
+            println(refresh_verify.0.revoked == false);
+            println((refresh_verify.0.subject as string) == "pair-user");
+            println((refresh_verify.0.sessionId as string) == issued_pair.0.sessionId);
+            println((refresh_verify.0.tokenKind as string) == "refresh");
+            println((refresh_verify.0.keyId as string) == "rk2");
+            println((mapGetString(refresh_verify.0.claims.claims, "scope") as string) == "offline");
+        }
+
+        var revoked_pair_store = cryptoSignedJsonClaimsRevocationStoreNew();
+        var revoked_pair = cryptoSessionTokenPairRevokeIssued(revoked_pair_store, issued_pair.0);
+        println(revoked_pair.1 == nil);
+        if (revoked_pair.1 == nil) {
+            revoked_pair_store = revoked_pair.0;
+            println(cryptoSignedJsonClaimsRevocationStoreCount(revoked_pair_store) == 2);
+
+            var access_revoked = cryptoSessionTokenPairVerifyAccessText("access-secret",
+                                                                        pair_config,
+                                                                        issued_pair.0.access.token,
+                                                                        1200,
+                                                                        revoked_pair_store);
+            println(access_revoked.1 == nil);
+            if (access_revoked.1 == nil) {
+                println(access_revoked.0.ok == false);
+                println(access_revoked.0.revoked == true);
+            }
+
+            var refresh_revoked = cryptoSessionTokenPairVerifyRefreshText("refresh-secret",
+                                                                          pair_config,
+                                                                          issued_pair.0.refresh.token,
+                                                                          1200,
+                                                                          revoked_pair_store);
+            println(refresh_revoked.1 == nil);
+            if (refresh_revoked.1 == nil) {
+                println(refresh_revoked.0.ok == false);
+                println(refresh_revoked.0.revoked == true);
+            }
+        }
+
+        var refresh_key_ring: map<string, string> = {};
+        mapSetString(refresh_key_ring, "rk1", "old-refresh");
+        mapSetString(refresh_key_ring, "rk2", "refresh-secret");
+        var refresh_key_ring_verify = cryptoSessionTokenVerifyTextKeyRing(refresh_key_ring,
+                                                                          pair_config.refresh,
+                                                                          issued_pair.0.refresh.token,
+                                                                          1200,
+                                                                          cryptoSignedJsonClaimsRevocationStoreNew());
+        println(refresh_key_ring_verify.1 == nil);
+        if (refresh_key_ring_verify.1 == nil) {
+            var refresh_key_ring_validated = cryptoSessionTokenPairValidateRefresh(refresh_key_ring_verify.0);
+            println(refresh_key_ring_validated.ok == true);
+            println((refresh_key_ring_validated.keyId as string) == "rk2");
+            println((refresh_key_ring_validated.sessionId as string) == issued_pair.0.sessionId);
+            println((refresh_key_ring_validated.tokenKind as string) == "refresh");
+        }
+    }
+
+    var invalid_sid_claims: map<string, any> = {
+        "sid": "not-a-uuid",
+        "tokenKind": "access"
+    };
+    var invalid_sid_token = cryptoSessionTokenIssueText("access-secret",
+                                                        pair_config.access,
+                                                        "pair-user",
+                                                        invalid_sid_claims,
+                                                        1000);
+    println(invalid_sid_token.1 == nil);
+    if (invalid_sid_token.1 == nil) {
+        var invalid_sid_verify = cryptoSessionTokenPairVerifyAccessText("access-secret",
+                                                                        pair_config,
+                                                                        invalid_sid_token.0.token,
+                                                                        1200,
+                                                                        cryptoSignedJsonClaimsRevocationStoreNew());
+        println(invalid_sid_verify.1 == nil);
+        if (invalid_sid_verify.1 == nil) {
+            println(invalid_sid_verify.0.ok == false);
+            println(invalid_sid_verify.0.sessionId == nil);
+            println((invalid_sid_verify.0.tokenKind as string) == "access");
+        }
+    }
+
+    var issued_pair_now = cryptoSessionTokenPairIssueTextNow("access-secret",
+                                                             "refresh-secret",
+                                                             pair_config,
+                                                             "pair-now",
+                                                             {},
+                                                             {});
+    println(issued_pair_now.1 == nil);
+    if (issued_pair_now.1 == nil) {
+        println(len(issued_pair_now.0.sessionId) == 36);
+        var verify_pair_now = cryptoSessionTokenPairVerifyAccessText("access-secret",
+                                                                     pair_config,
+                                                                     issued_pair_now.0.access.token,
+                                                                     timeNowMillis(),
+                                                                     cryptoSignedJsonClaimsRevocationStoreNew());
+        println(verify_pair_now.1 == nil);
+        if (verify_pair_now.1 == nil) {
+            println(verify_pair_now.0.ok == true);
+            println((verify_pair_now.0.subject as string) == "pair-now");
+        }
+    }
+}
+
+func runSessionTokenPairRotationTests(): void {
+    var pair_config = cryptoSessionTokenPairDefaultConfig();
+    pair_config.access.issuer = "rotate-issuer";
+    pair_config.access.audience = "rotate-api";
+    pair_config.access.ttlMillis = 5000;
+    pair_config.refresh.issuer = "rotate-issuer";
+    pair_config.refresh.audience = "rotate-refresh";
+    pair_config.refresh.ttlMillis = 20000;
+
+    var issued_pair = cryptoSessionTokenPairIssueText("access-secret",
+                                                      "refresh-secret",
+                                                      pair_config,
+                                                      "rotate-user",
+                                                      {
+                                                          "role": "reader"
+                                                      },
+                                                      {
+                                                          "scope": "offline",
+                                                          "family": "fam-1"
+                                                      },
+                                                      1000);
+    println(issued_pair.1 == nil);
+    if (issued_pair.1 == nil) {
+        var rotate = cryptoSessionTokenPairRotateRefreshText("access-secret",
+                                                             "refresh-secret",
+                                                             pair_config,
+                                                             issued_pair.0.refresh.token,
+                                                             2000,
+                                                             cryptoSignedJsonClaimsRevocationStoreNew(),
+                                                             {
+                                                                 "role": "writer"
+                                                             },
+                                                             {});
+        println(rotate.1 == nil);
+        if (rotate.1 == nil) {
+            println(rotate.0.ok == true);
+            println(rotate.0.expired == false);
+            println(rotate.0.revoked == false);
+            println((rotate.0.sessionId as string) == issued_pair.0.sessionId);
+            println((rotate.0.previousRefreshJwtId as string) == issued_pair.0.refresh.jwtId);
+            println(cryptoSignedJsonClaimsRevocationStoreCount(rotate.0.revocations) == 1);
+            println(rotate.0.pair.sessionId == issued_pair.0.sessionId);
+            println(rotate.0.pair.access.subject == "rotate-user");
+            println(rotate.0.pair.refresh.subject == "rotate-user");
+            println(rotate.0.pair.refresh.jwtId != issued_pair.0.refresh.jwtId);
+
+            var old_refresh = cryptoSessionTokenPairVerifyRefreshText("refresh-secret",
+                                                                      pair_config,
+                                                                      issued_pair.0.refresh.token,
+                                                                      2500,
+                                                                      rotate.0.revocations);
+            println(old_refresh.1 == nil);
+            if (old_refresh.1 == nil) {
+                println(old_refresh.0.ok == false);
+                println(old_refresh.0.revoked == true);
+            }
+
+            var new_refresh = cryptoSessionTokenPairVerifyRefreshText("refresh-secret",
+                                                                      pair_config,
+                                                                      rotate.0.pair.refresh.token,
+                                                                      2500,
+                                                                      rotate.0.revocations);
+            println(new_refresh.1 == nil);
+            if (new_refresh.1 == nil) {
+                println(new_refresh.0.ok == true);
+                println((new_refresh.0.sessionId as string) == issued_pair.0.sessionId);
+                println((new_refresh.0.tokenKind as string) == "refresh");
+                println((mapGetString(new_refresh.0.claims.claims, "scope") as string) == "offline");
+                println((mapGetString(new_refresh.0.claims.claims, "family") as string) == "fam-1");
+            }
+
+            var new_access = cryptoSessionTokenPairVerifyAccessText("access-secret",
+                                                                    pair_config,
+                                                                    rotate.0.pair.access.token,
+                                                                    2500,
+                                                                    rotate.0.revocations);
+            println(new_access.1 == nil);
+            if (new_access.1 == nil) {
+                println(new_access.0.ok == true);
+                println((new_access.0.sessionId as string) == issued_pair.0.sessionId);
+                println((new_access.0.tokenKind as string) == "access");
+                println((mapGetString(new_access.0.claims.claims, "role") as string) == "writer");
+            }
+        }
+
+        var rotate_with_access = cryptoSessionTokenPairRotateRefreshText("access-secret",
+                                                                         "refresh-secret",
+                                                                         pair_config,
+                                                                         issued_pair.0.access.token,
+                                                                         2000,
+                                                                         cryptoSignedJsonClaimsRevocationStoreNew(),
+                                                                         {},
+                                                                         {});
+        println(rotate_with_access.1 == nil);
+        if (rotate_with_access.1 == nil) {
+            println(rotate_with_access.0.ok == false);
+            println(rotate_with_access.0.expired == false);
+            println(rotate_with_access.0.revoked == false);
+            println(rotate_with_access.0.sessionId == nil);
+            println(rotate_with_access.0.previousRefreshJwtId == nil);
+        }
+
+        var rotate_expired = cryptoSessionTokenPairRotateRefreshText("access-secret",
+                                                                     "refresh-secret",
+                                                                     pair_config,
+                                                                     issued_pair.0.refresh.token,
+                                                                     25000,
+                                                                     cryptoSignedJsonClaimsRevocationStoreNew(),
+                                                                     {},
+                                                                     {});
+        println(rotate_expired.1 == nil);
+        if (rotate_expired.1 == nil) {
+            println(rotate_expired.0.ok == false);
+            println(rotate_expired.0.expired == true);
+            println(rotate_expired.0.revoked == false);
+            println((rotate_expired.0.previousRefreshJwtId as string) == issued_pair.0.refresh.jwtId);
+        }
+
+        var revoked_refresh_store = cryptoSignedJsonClaimsRevocationStoreNew();
+        var revoke_old_refresh = cryptoSessionTokenRevokeIssued(revoked_refresh_store, issued_pair.0.refresh);
+        println(revoke_old_refresh.1 == nil);
+        if (revoke_old_refresh.1 == nil) {
+            revoked_refresh_store = revoke_old_refresh.0;
+            var rotate_revoked = cryptoSessionTokenPairRotateRefreshText("access-secret",
+                                                                         "refresh-secret",
+                                                                         pair_config,
+                                                                         issued_pair.0.refresh.token,
+                                                                         2000,
+                                                                         revoked_refresh_store,
+                                                                         {},
+                                                                         {});
+            println(rotate_revoked.1 == nil);
+            if (rotate_revoked.1 == nil) {
+                println(rotate_revoked.0.ok == false);
+                println(rotate_revoked.0.expired == false);
+                println(rotate_revoked.0.revoked == true);
+            }
+        }
+    }
+
+    var issued_pair_now = cryptoSessionTokenPairIssueTextNow("access-secret",
+                                                             "refresh-secret",
+                                                             pair_config,
+                                                             "rotate-now",
+                                                             {},
+                                                             {
+                                                                 "scope": "offline"
+                                                             });
+    println(issued_pair_now.1 == nil);
+    if (issued_pair_now.1 == nil) {
+        var rotate_now = cryptoSessionTokenPairRotateRefreshTextNow("access-secret",
+                                                                    "refresh-secret",
+                                                                    pair_config,
+                                                                    issued_pair_now.0.refresh.token,
+                                                                    cryptoSignedJsonClaimsRevocationStoreNew(),
+                                                                    {},
+                                                                    {});
+        println(rotate_now.1 == nil);
+        if (rotate_now.1 == nil) {
+            println(rotate_now.0.ok == true);
+            println((rotate_now.0.sessionId as string) == issued_pair_now.0.sessionId);
+            println(rotate_now.0.pair.sessionId == issued_pair_now.0.sessionId);
+        }
+    }
+}
+
+func main(): void {
+    var empty_sha = cryptoSha256TextHex("");
+    println(empty_sha.1 == nil);
+    if (empty_sha.1 == nil) println(empty_sha.0 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+    var abc_sha = cryptoSha256TextHex("abc");
+    println(abc_sha.1 == nil);
+    if (abc_sha.1 == nil) println(abc_sha.0 == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+    var quick_hmac = cryptoHmacSha256TextHex("key", "The quick brown fox jumps over the lazy dog");
+    println(quick_hmac.1 == nil);
+    if (quick_hmac.1 == nil) println(quick_hmac.0 == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
+
+    var long_key: string = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    var long_hmac = cryptoHmacSha256TextHex(long_key, "payload");
+    println(long_hmac.1 == nil);
+    if (long_hmac.1 == nil) println(long_hmac.0 == "c81f9b81d0f83124377b96ee52a725710360a036799d46d447adf457cc5381e3");
+
+    var quick_verify = cryptoHmacSha256VerifyTextHex("key",
+                                                     "The quick brown fox jumps over the lazy dog",
+                                                     "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
+    println(quick_verify.1 == nil);
+    if (quick_verify.1 == nil) println(quick_verify.0 == true);
+
+    var quick_verify_bad = cryptoHmacSha256VerifyTextHex("key",
+                                                         "The quick brown fox jumps over the lazy dog",
+                                                         "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd9");
+    println(quick_verify_bad.1 == nil);
+    if (quick_verify_bad.1 == nil) println(quick_verify_bad.0 == false);
+
+    var pb1 = cryptoPbkdf2HmacSha256TextHex("password", "salt", 1, 32);
+    println(pb1.1 == nil);
+    if (pb1.1 == nil) println(pb1.0 == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+
+    var pb2 = cryptoPbkdf2HmacSha256TextHex("password", "salt", 2, 32);
+    println(pb2.1 == nil);
+    if (pb2.1 == nil) println(pb2.0 == "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
+
+    var pb_bad = cryptoPbkdf2HmacSha256Text("password", "salt", 0, 32);
+    println(pb_bad.1 != nil);
+
+    var pb_zero = cryptoPbkdf2HmacSha256Text("password", "salt", 1, 0);
+    println(pb_zero.1 == nil);
+    if (pb_zero.1 == nil) println(len(pb_zero.0) == 0);
+
+    var hkdf_ikm_1 = hexToBytes("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    var hkdf_salt_1 = hexToBytes("000102030405060708090a0b0c");
+    var hkdf_info_1 = hexToBytes("f0f1f2f3f4f5f6f7f8f9");
+    println(hkdf_ikm_1.1 == nil);
+    println(hkdf_salt_1.1 == nil);
+    println(hkdf_info_1.1 == nil);
+    if (hkdf_ikm_1.1 == nil && hkdf_salt_1.1 == nil && hkdf_info_1.1 == nil) {
+        var hkdf_1 = cryptoHkdfHmacSha256Hex(hkdf_ikm_1.0, hkdf_salt_1.0, hkdf_info_1.0, 42);
+        println(hkdf_1.1 == nil);
+        if (hkdf_1.1 == nil) println(hkdf_1.0 == "3cb25f25faacd57a90434f64d0362f2a"
+                                                        + "2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+                                                        + "34007208d5b887185865");
+    }
+
+    var hkdf_text = cryptoHkdfHmacSha256TextHex("secret", "salt", "info", 32);
+    println(hkdf_text.1 == nil);
+    if (hkdf_text.1 == nil) println(hkdf_text.0 == "f6d2fcc47cb939deafe3853a1e641a27"
+                                                     + "e6924aff7a63d09cb04ccfffbe4776ef");
+
+    var hkdf_bad = cryptoHkdfHmacSha256Text("secret", "salt", "info", 8161);
+    println(hkdf_bad.1 != nil);
+
+    var hkdf_zero = cryptoHkdfHmacSha256Text("secret", "salt", "info", 0);
+    println(hkdf_zero.1 == nil);
+    if (hkdf_zero.1 == nil) println(len(hkdf_zero.0) == 0);
+
+    var ct_left = stringToBytes("shared-secret");
+    var ct_same = stringToBytes("shared-secret");
+    var ct_other = stringToBytes("shared-secreu");
+    var ct_short = stringToBytes("shared");
+    println(ct_left.1 == nil);
+    println(ct_same.1 == nil);
+    println(ct_other.1 == nil);
+    println(ct_short.1 == nil);
+    if (ct_left.1 == nil && ct_same.1 == nil && ct_other.1 == nil && ct_short.1 == nil) {
+        var ct_equal = cryptoConstantTimeBytesEqual(ct_left.0, ct_same.0);
+        println(ct_equal.1 == nil);
+        if (ct_equal.1 == nil) println(ct_equal.0 == true);
+
+        var ct_diff = cryptoConstantTimeBytesEqual(ct_left.0, ct_other.0);
+        println(ct_diff.1 == nil);
+        if (ct_diff.1 == nil) println(ct_diff.0 == false);
+
+        var ct_len = cryptoConstantTimeBytesEqual(ct_left.0, ct_short.0);
+        println(ct_len.1 == nil);
+        if (ct_len.1 == nil) println(ct_len.0 == false);
+    }
+
+    var ct_text_equal = cryptoConstantTimeTextEqual("abc", "abc");
+    println(ct_text_equal.1 == nil);
+    if (ct_text_equal.1 == nil) println(ct_text_equal.0 == true);
+
+    var ct_text_diff = cryptoConstantTimeTextEqual("abc", "abd");
+    println(ct_text_diff.1 == nil);
+    if (ct_text_diff.1 == nil) println(ct_text_diff.0 == false);
+
+    var raw = hexToBytes("000102ff");
+    println(raw.1 == nil);
+    if (raw.1 == nil) {
+        var raw_sha = cryptoSha256Hex(raw.0);
+        println(raw_sha.1 == nil);
+        if (raw_sha.1 == nil) println(raw_sha.0 == "3d1f57c984978ef98a18378c8166c1cb8ede02c03eeb6aee7e2f121dfeee3e56");
+    }
+
+    var aes_ctr = hexToBytes("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+    var aes_plain = hexToBytes("6bc1bee22e409f96e93d7e117393172a"
+                               + "ae2d8a571e03ac9c9eb76fac45af8e51"
+                               + "30c81c46a35ce411e5fbc1191a0a52ef"
+                               + "f69f2445df4f9b17ad2b417be66c3710");
+    var aes_key_128 = hexToBytes("2b7e151628aed2a6abf7158809cf4f3c");
+    var aes_key_256 = hexToBytes("603deb1015ca71be2b73aef0857d7781"
+                                 + "1f352c073b6108d72d9810a30914dff4");
+    println(aes_ctr.1 == nil);
+    println(aes_plain.1 == nil);
+    println(aes_key_128.1 == nil);
+    println(aes_key_256.1 == nil);
+
+    if (aes_ctr.1 == nil && aes_plain.1 == nil && aes_key_128.1 == nil) {
+        var aes_128 = cryptoAesCtrEncrypt(aes_key_128.0, aes_ctr.0, aes_plain.0);
+        println(aes_128.1 == nil);
+        if (aes_128.1 == nil) {
+            var aes_128_hex = bytesToHex(aes_128.0);
+            println(aes_128_hex.1 == nil);
+            if (aes_128_hex.1 == nil) println(aes_128_hex.0 == "874d6191b620e3261bef6864990db6ce"
+                                                                      + "9806f66b7970fdff8617187bb9fffdff"
+                                                                      + "5ae4df3edbd5d35e5b4f09020db03eab"
+                                                                      + "1e031dda2fbe03d1792170a0f3009cee");
+
+            var aes_128_plain = cryptoAesCtrDecrypt(aes_key_128.0, aes_ctr.0, aes_128.0);
+            println(aes_128_plain.1 == nil);
+            if (aes_128_plain.1 == nil) {
+                var aes_128_plain_hex = bytesToHex(aes_128_plain.0);
+                println(aes_128_plain_hex.1 == nil);
+                if (aes_128_plain_hex.1 == nil) println(aes_128_plain_hex.0 == "6bc1bee22e409f96e93d7e117393172a"
+                                                                                  + "ae2d8a571e03ac9c9eb76fac45af8e51"
+                                                                                  + "30c81c46a35ce411e5fbc1191a0a52ef"
+                                                                                  + "f69f2445df4f9b17ad2b417be66c3710");
+            }
+        }
+    }
+
+    if (aes_ctr.1 == nil && aes_plain.1 == nil && aes_key_256.1 == nil) {
+        var aes_256 = cryptoAesCtrEncrypt(aes_key_256.0, aes_ctr.0, aes_plain.0);
+        println(aes_256.1 == nil);
+        if (aes_256.1 == nil) {
+            var aes_256_hex = bytesToHex(aes_256.0);
+            println(aes_256_hex.1 == nil);
+            if (aes_256_hex.1 == nil) println(aes_256_hex.0 == "601ec313775789a5b7a7f504bbf3d228"
+                                                                      + "f443e3ca4d62b59aca84e990cacaf5c5"
+                                                                      + "2b0930daa23de94ce87017ba2d84988d"
+                                                                      + "dfc9c58db67aada613c2dd08457941a6");
+        }
+    }
+
+    if (aes_plain.1 == nil && aes_key_128.1 == nil) {
+        var bad_counter = cryptoAesCtrEncrypt(aes_key_128.0, hexToBytes("00010203").0, aes_plain.0);
+        println(bad_counter.1 != nil);
+    }
+
+    if (aes_ctr.1 == nil && aes_plain.1 == nil) {
+        var bad_key = cryptoAesCtrEncrypt(hexToBytes("001122334455").0, aes_ctr.0, aes_plain.0);
+        println(bad_key.1 != nil);
+    }
+
+    if (aes_ctr.1 == nil && aes_key_128.1 == nil) {
+        var aes_empty = cryptoAesCtrEncrypt(aes_key_128.0, aes_ctr.0, bytesWithSize(0, 0).0);
+        println(aes_empty.1 == nil);
+        if (aes_empty.1 == nil) println(len(aes_empty.0) == 0);
+    }
+
+    var gcm_key_zero = hexToBytes("00000000000000000000000000000000");
+    var gcm_nonce_zero = hexToBytes("000000000000000000000000");
+    println(gcm_key_zero.1 == nil);
+    println(gcm_nonce_zero.1 == nil);
+    if (gcm_key_zero.1 == nil && gcm_nonce_zero.1 == nil) {
+        var gcm_empty = cryptoAesGcmSeal(gcm_key_zero.0,
+                                         gcm_nonce_zero.0,
+                                         bytesWithSize(0, 0).0,
+                                         bytesWithSize(0, 0).0);
+        println(gcm_empty.1 == nil);
+        if (gcm_empty.1 == nil) {
+            var gcm_empty_hex = bytesToHex(gcm_empty.0);
+            println(gcm_empty_hex.1 == nil);
+            if (gcm_empty_hex.1 == nil) println(gcm_empty_hex.0 == "58e2fccefa7e3061367f1d57a4e7455a");
+
+            var gcm_empty_open = cryptoAesGcmOpen(gcm_key_zero.0,
+                                                  gcm_nonce_zero.0,
+                                                  gcm_empty.0,
+                                                  bytesWithSize(0, 0).0);
+            println(gcm_empty_open.1 == nil);
+            if (gcm_empty_open.1 == nil) println(len(gcm_empty_open.0) == 0);
+
+            var gcm_empty_b64 = cryptoAesGcmSealBase64(gcm_key_zero.0,
+                                                       gcm_nonce_zero.0,
+                                                       bytesWithSize(0, 0).0,
+                                                       bytesWithSize(0, 0).0);
+            println(gcm_empty_b64.1 == nil);
+            if (gcm_empty_b64.1 == nil) {
+                println(gcm_empty_b64.0 == "WOL8zvp+MGE2fx1XpOdFWg==");
+                var gcm_empty_b64_open = cryptoAesGcmOpenBase64(gcm_key_zero.0,
+                                                                gcm_nonce_zero.0,
+                                                                gcm_empty_b64.0,
+                                                                bytesWithSize(0, 0).0);
+                println(gcm_empty_b64_open.1 == nil);
+                if (gcm_empty_b64_open.1 == nil) println(len(gcm_empty_b64_open.0) == 0);
+            }
+
+            var gcm_empty_b64url = cryptoAesGcmSealBase64Url(gcm_key_zero.0,
+                                                             gcm_nonce_zero.0,
+                                                             bytesWithSize(0, 0).0,
+                                                             bytesWithSize(0, 0).0,
+                                                             false);
+            println(gcm_empty_b64url.1 == nil);
+            if (gcm_empty_b64url.1 == nil) {
+                println(gcm_empty_b64url.0 == "WOL8zvp-MGE2fx1XpOdFWg");
+                println(find(gcm_empty_b64url.0, "=") < 0);
+                var gcm_empty_b64url_open = cryptoAesGcmOpenBase64Url(gcm_key_zero.0,
+                                                                      gcm_nonce_zero.0,
+                                                                      gcm_empty_b64url.0,
+                                                                      bytesWithSize(0, 0).0);
+                println(gcm_empty_b64url_open.1 == nil);
+                if (gcm_empty_b64url_open.1 == nil) println(len(gcm_empty_b64url_open.0) == 0);
+            }
+        }
+
+        var gcm_zero_plain = hexToBytes("00000000000000000000000000000000");
+        println(gcm_zero_plain.1 == nil);
+        if (gcm_zero_plain.1 == nil) {
+            var gcm_zero = cryptoAesGcmSeal(gcm_key_zero.0,
+                                            gcm_nonce_zero.0,
+                                            gcm_zero_plain.0,
+                                            bytesWithSize(0, 0).0);
+            println(gcm_zero.1 == nil);
+            if (gcm_zero.1 == nil) {
+                var gcm_zero_hex = bytesToHex(gcm_zero.0);
+                println(gcm_zero_hex.1 == nil);
+                if (gcm_zero_hex.1 == nil) println(gcm_zero_hex.0 == "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf");
+
+                var gcm_zero_detached = cryptoAesGcmSealDetached(gcm_key_zero.0,
+                                                                 gcm_nonce_zero.0,
+                                                                 gcm_zero_plain.0,
+                                                                 bytesWithSize(0, 0).0);
+                println(gcm_zero_detached.2 == nil);
+                if (gcm_zero_detached.2 == nil) {
+                    var gcm_zero_cipher_hex = bytesToHex(gcm_zero_detached.0);
+                    var gcm_zero_tag_hex = bytesToHex(gcm_zero_detached.1);
+                    println(gcm_zero_cipher_hex.1 == nil);
+                    println(gcm_zero_tag_hex.1 == nil);
+                    if (gcm_zero_cipher_hex.1 == nil) println(gcm_zero_cipher_hex.0 == "0388dace60b6a392f328c2b971b2fe78");
+                    if (gcm_zero_tag_hex.1 == nil) println(gcm_zero_tag_hex.0 == "ab6e47d42cec13bdf53a67b21257bddf");
+
+                    var gcm_zero_open_detached = cryptoAesGcmOpenDetached(gcm_key_zero.0,
+                                                                          gcm_nonce_zero.0,
+                                                                          gcm_zero_detached.0,
+                                                                          gcm_zero_detached.1,
+                                                                          bytesWithSize(0, 0).0);
+                    println(gcm_zero_open_detached.1 == nil);
+                    if (gcm_zero_open_detached.1 == nil) {
+                        var gcm_zero_open_detached_hex = bytesToHex(gcm_zero_open_detached.0);
+                        println(gcm_zero_open_detached_hex.1 == nil);
+                        if (gcm_zero_open_detached_hex.1 == nil) println(gcm_zero_open_detached_hex.0 == "00000000000000000000000000000000");
+                    }
+
+                    var gcm_zero_detached_hex = cryptoAesGcmSealDetachedHex(gcm_key_zero.0,
+                                                                            gcm_nonce_zero.0,
+                                                                            gcm_zero_plain.0,
+                                                                            bytesWithSize(0, 0).0);
+                    println(gcm_zero_detached_hex.2 == nil);
+                    if (gcm_zero_detached_hex.2 == nil) {
+                        println(gcm_zero_detached_hex.0 == "0388dace60b6a392f328c2b971b2fe78");
+                        println(gcm_zero_detached_hex.1 == "ab6e47d42cec13bdf53a67b21257bddf");
+                    }
+
+                    var gcm_zero_bad_detached = cryptoAesGcmOpenDetached(gcm_key_zero.0,
+                                                                         gcm_nonce_zero.0,
+                                                                         gcm_zero_detached.0,
+                                                                         bytesWithSize(1, 0).0,
+                                                                         bytesWithSize(0, 0).0);
+                    println(gcm_zero_bad_detached.1 != nil);
+                }
+            }
+        }
+    }
+
+    var gcm_key = hexToBytes("feffe9928665731c6d6a8f9467308308");
+    var gcm_nonce = hexToBytes("cafebabefacedbaddecaf888");
+    var gcm_aad = hexToBytes("feedfacedeadbeeffeedfacedeadbeefabaddad2");
+    var gcm_plain = hexToBytes("d9313225f88406e5a55909c5aff5269a"
+                               + "86a7a9531534f7da2e4c303d8a318a72"
+                               + "1c3c0c95956809532fcf0e2449a6b525"
+                               + "b16aedf5aa0de657ba637b39");
+    println(gcm_key.1 == nil);
+    println(gcm_nonce.1 == nil);
+    println(gcm_aad.1 == nil);
+    println(gcm_plain.1 == nil);
+    if (gcm_key.1 == nil && gcm_nonce.1 == nil && gcm_aad.1 == nil && gcm_plain.1 == nil) {
+        var gcm_sealed = cryptoAesGcmSeal(gcm_key.0, gcm_nonce.0, gcm_plain.0, gcm_aad.0);
+        println(gcm_sealed.1 == nil);
+        if (gcm_sealed.1 == nil) {
+            var gcm_sealed_hex = bytesToHex(gcm_sealed.0);
+            println(gcm_sealed_hex.1 == nil);
+            if (gcm_sealed_hex.1 == nil) println(gcm_sealed_hex.0 == "42831ec2217774244b7221b784d0d49c"
+                                                                          + "e3aa212f2c02a4e035c17e2329aca12e"
+                                                                          + "21d514b25466931c7d8f6a5aac84aa05"
+                                                                          + "1ba30b396a0aac973d58e0915bc94fbc"
+                                                                          + "3221a5db94fae95ae7121a47");
+
+            var gcm_open = cryptoAesGcmOpen(gcm_key.0, gcm_nonce.0, gcm_sealed.0, gcm_aad.0);
+            println(gcm_open.1 == nil);
+            if (gcm_open.1 == nil) {
+                var gcm_open_hex = bytesToHex(gcm_open.0);
+                println(gcm_open_hex.1 == nil);
+                if (gcm_open_hex.1 == nil) println(gcm_open_hex.0 == "d9313225f88406e5a55909c5aff5269a"
+                                                                              + "86a7a9531534f7da2e4c303d8a318a72"
+                                                                              + "1c3c0c95956809532fcf0e2449a6b525"
+                                                                              + "b16aedf5aa0de657ba637b39");
+            }
+
+            var gcm_bad_aad = cryptoAesGcmOpen(gcm_key.0, gcm_nonce.0, gcm_sealed.0, hexToBytes("00").0);
+            println(gcm_bad_aad.1 != nil);
+        }
+
+        var gcm_bad_nonce = cryptoAesGcmSeal(gcm_key.0, hexToBytes("00010203").0, gcm_plain.0, gcm_aad.0);
+        println(gcm_bad_nonce.1 != nil);
+    }
+
+    var gcm_key_256 = hexToBytes("000102030405060708090a0b0c0d0e0f"
+                                 + "101112131415161718191a1b1c1d1e1f");
+    var gcm_nonce_256 = hexToBytes("1af38c2dc2b96ffdd8669409");
+    var gcm_aad_256 = hexToBytes("feedfacedeadbeef");
+    var gcm_text_256 = stringToBytes("gcm-256");
+    println(gcm_key_256.1 == nil);
+    println(gcm_nonce_256.1 == nil);
+    println(gcm_aad_256.1 == nil);
+    println(gcm_text_256.1 == nil);
+    if (gcm_key_256.1 == nil && gcm_nonce_256.1 == nil && gcm_aad_256.1 == nil && gcm_text_256.1 == nil) {
+        var gcm_256 = cryptoAesGcmSeal(gcm_key_256.0, gcm_nonce_256.0, gcm_text_256.0, gcm_aad_256.0);
+        println(gcm_256.1 == nil);
+        if (gcm_256.1 == nil) {
+            var gcm_256_open = cryptoAesGcmOpen(gcm_key_256.0, gcm_nonce_256.0, gcm_256.0, gcm_aad_256.0);
+            println(gcm_256_open.1 == nil);
+            if (gcm_256_open.1 == nil) {
+                var gcm_256_hex = bytesToHex(gcm_256_open.0);
+                var gcm_256_text_hex = bytesToHex(gcm_text_256.0);
+                println(gcm_256_hex.1 == nil);
+                println(gcm_256_text_hex.1 == nil);
+                if (gcm_256_hex.1 == nil && gcm_256_text_hex.1 == nil) {
+                    println(gcm_256_hex.0 == gcm_256_text_hex.0);
+                }
+            }
+        }
+
+        var gcm_256_b64 = cryptoAesGcmSealTextBase64(gcm_key_256.0,
+                                                     gcm_nonce_256.0,
+                                                     "gcm-256",
+                                                     gcm_aad_256.0);
+        println(gcm_256_b64.1 == nil);
+        if (gcm_256_b64.1 == nil) {
+            var gcm_256_b64_open = cryptoAesGcmOpenBase64(gcm_key_256.0,
+                                                          gcm_nonce_256.0,
+                                                          gcm_256_b64.0,
+                                                          gcm_aad_256.0);
+            println(gcm_256_b64_open.1 == nil);
+            if (gcm_256_b64_open.1 == nil) {
+                var gcm_256_b64_match = cryptoConstantTimeBytesEqual(gcm_256_b64_open.0, gcm_text_256.0);
+                println(gcm_256_b64_match.1 == nil);
+                if (gcm_256_b64_match.1 == nil) println(gcm_256_b64_match.0 == true);
+            }
+        }
+
+        var gcm_256_b64url = cryptoAesGcmSealTextBase64Url(gcm_key_256.0,
+                                                           gcm_nonce_256.0,
+                                                           "gcm-256",
+                                                           gcm_aad_256.0,
+                                                           false);
+        println(gcm_256_b64url.1 == nil);
+        if (gcm_256_b64url.1 == nil) {
+            println(find(gcm_256_b64url.0, "=") < 0);
+            var gcm_256_b64url_open = cryptoAesGcmOpenBase64Url(gcm_key_256.0,
+                                                                gcm_nonce_256.0,
+                                                                gcm_256_b64url.0,
+                                                                gcm_aad_256.0);
+            println(gcm_256_b64url_open.1 == nil);
+            if (gcm_256_b64url_open.1 == nil) {
+                var gcm_256_b64url_match = cryptoConstantTimeBytesEqual(gcm_256_b64url_open.0, gcm_text_256.0);
+                println(gcm_256_b64url_match.1 == nil);
+                if (gcm_256_b64url_match.1 == nil) println(gcm_256_b64url_match.0 == true);
+            }
+        }
+    }
+
+    var password_plain = stringToBytes("secret message");
+    var password_aad = stringToBytes("aad");
+    println(password_plain.1 == nil);
+    println(password_aad.1 == nil);
+    if (password_plain.1 == nil && password_aad.1 == nil) {
+        var password_env = cryptoPasswordAesGcmSeal("hunter2",
+                                                    password_plain.0,
+                                                    password_aad.0,
+                                                    100000);
+        println(password_env.1 == nil);
+        if (password_env.1 == nil) {
+            println(password_env.0.version == CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION);
+            println(password_env.0.iterations == 100000);
+            println(len(password_env.0.salt) == CRYPTO_PASSWORD_AES_GCM_SALT_BYTES);
+            println(len(password_env.0.nonce) == CRYPTO_PASSWORD_AES_GCM_NONCE_BYTES);
+            println(len(password_env.0.sealed) == len(password_plain.0) + 16);
+
+            var password_open = cryptoPasswordAesGcmOpen("hunter2", password_env.0, password_aad.0);
+            println(password_open.1 == nil);
+            if (password_open.1 == nil) {
+                var password_open_match = cryptoConstantTimeBytesEqual(password_open.0, password_plain.0);
+                println(password_open_match.1 == nil);
+                if (password_open_match.1 == nil) println(password_open_match.0 == true);
+            }
+
+            var password_wrong = cryptoPasswordAesGcmOpen("wrong", password_env.0, password_aad.0);
+            println(password_wrong.1 != nil);
+
+            var password_token = cryptoPasswordAesGcmEncodeEnvelope(password_env.0, false);
+            println(password_token.1 == nil);
+            if (password_token.1 == nil) {
+                var password_parts: array<string> = split(password_token.0, ".");
+                println(len(password_parts) == 5);
+                println(password_parts[0] == CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION);
+                println(password_parts[1] == "100000");
+                println(find(password_parts[2], "=") < 0);
+                println(find(password_parts[3], "=") < 0);
+                println(find(password_parts[4], "=") < 0);
+
+                var password_decode = cryptoPasswordAesGcmDecodeEnvelope(password_token.0);
+                println(password_decode.1 == nil);
+                if (password_decode.1 == nil) {
+                    println(password_decode.0.version == CRYPTO_PASSWORD_AES_GCM_ENVELOPE_VERSION);
+                    println(password_decode.0.iterations == 100000);
+
+                    var password_salt_match = cryptoConstantTimeBytesEqual(password_decode.0.salt,
+                                                                          password_env.0.salt);
+                    var password_nonce_match = cryptoConstantTimeBytesEqual(password_decode.0.nonce,
+                                                                           password_env.0.nonce);
+                    var password_sealed_match = cryptoConstantTimeBytesEqual(password_decode.0.sealed,
+                                                                            password_env.0.sealed);
+                    println(password_salt_match.1 == nil);
+                    println(password_nonce_match.1 == nil);
+                    println(password_sealed_match.1 == nil);
+                    if (password_salt_match.1 == nil) println(password_salt_match.0 == true);
+                    if (password_nonce_match.1 == nil) println(password_nonce_match.0 == true);
+                    if (password_sealed_match.1 == nil) println(password_sealed_match.0 == true);
+                }
+
+                var password_open_token = cryptoPasswordAesGcmOpenBase64Url("hunter2",
+                                                                            password_token.0,
+                                                                            password_aad.0);
+                println(password_open_token.1 == nil);
+                if (password_open_token.1 == nil) {
+                    var password_open_token_match = cryptoConstantTimeBytesEqual(password_open_token.0,
+                                                                                 password_plain.0);
+                    println(password_open_token_match.1 == nil);
+                    if (password_open_token_match.1 == nil) println(password_open_token_match.0 == true);
+                }
+
+                var password_bad_open = cryptoPasswordAesGcmOpenBase64Url("hunter2", "v1.bad", password_aad.0);
+                println(password_bad_open.1 != nil);
+            }
+
+            var password_tampered_sealed = cryptoCopyBytesRange(password_env.0.sealed,
+                                                                0,
+                                                                len(password_env.0.sealed));
+            println(password_tampered_sealed.1 == nil);
+            if (password_tampered_sealed.1 == nil) {
+                if (password_tampered_sealed.0[0] == 0) {
+                    password_tampered_sealed.0[0] = 1;
+                } else {
+                    password_tampered_sealed.0[0] = 0;
+                }
+
+                var password_tampered_env: CryptoPasswordAesGcmEnvelope = {
+                    version: password_env.0.version,
+                    iterations: password_env.0.iterations,
+                    salt: password_env.0.salt,
+                    nonce: password_env.0.nonce,
+                    sealed: password_tampered_sealed.0
+                };
+                var password_tampered_open = cryptoPasswordAesGcmOpen("hunter2",
+                                                                      password_tampered_env,
+                                                                      password_aad.0);
+                println(password_tampered_open.1 != nil);
+            }
+        }
+
+        var password_default_token = cryptoPasswordAesGcmSealTextBase64UrlDefault("hunter2",
+                                                                                   "secret message",
+                                                                                   password_aad.0);
+        println(password_default_token.1 == nil);
+        if (password_default_token.1 == nil) {
+            var password_default_env = cryptoPasswordAesGcmDecodeEnvelope(password_default_token.0);
+            println(password_default_env.1 == nil);
+            if (password_default_env.1 == nil) {
+                println(password_default_env.0.iterations == CRYPTO_PASSWORD_AES_GCM_DEFAULT_ITERATIONS);
+            }
+
+            var password_default_open = cryptoPasswordAesGcmOpenBase64Url("hunter2",
+                                                                          password_default_token.0,
+                                                                          password_aad.0);
+            println(password_default_open.1 == nil);
+            if (password_default_open.1 == nil) {
+                var password_default_match = cryptoConstantTimeBytesEqual(password_default_open.0,
+                                                                         password_plain.0);
+                println(password_default_match.1 == nil);
+                if (password_default_match.1 == nil) println(password_default_match.0 == true);
+            }
+        }
+
+        var password_zero_iter = cryptoPasswordAesGcmSealTextBase64Url("hunter2",
+                                                                       "secret message",
+                                                                       password_aad.0,
+                                                                       0,
+                                                                       false);
+        println(password_zero_iter.1 != nil);
+    }
+
+    var password_hash = cryptoPasswordHashCreate("hunter2", 120000);
+    println(password_hash.1 == nil);
+    if (password_hash.1 == nil) {
+        println(password_hash.0.scheme == CRYPTO_PASSWORD_HASH_SCHEME);
+        println(password_hash.0.version == CRYPTO_PASSWORD_HASH_VERSION);
+        println(password_hash.0.iterations == 120000);
+        println(len(password_hash.0.salt) == CRYPTO_PASSWORD_HASH_SALT_BYTES);
+        println(len(password_hash.0.digest) == CRYPTO_PASSWORD_HASH_BYTES);
+
+        var password_hash_verify = cryptoPasswordHashVerify("hunter2", password_hash.0);
+        println(password_hash_verify.1 == nil);
+        if (password_hash_verify.1 == nil) println(password_hash_verify.0 == true);
+
+        var password_hash_wrong = cryptoPasswordHashVerify("wrong", password_hash.0);
+        println(password_hash_wrong.1 == nil);
+        if (password_hash_wrong.1 == nil) println(password_hash_wrong.0 == false);
+
+        var password_hash_needs_low = cryptoPasswordHashNeedsRehash(password_hash.0, 100000);
+        println(password_hash_needs_low.1 == nil);
+        if (password_hash_needs_low.1 == nil) println(password_hash_needs_low.0 == false);
+
+        var password_hash_needs_high = cryptoPasswordHashNeedsRehash(password_hash.0, 150000);
+        println(password_hash_needs_high.1 == nil);
+        if (password_hash_needs_high.1 == nil) println(password_hash_needs_high.0 == true);
+
+        var password_hash_token = cryptoPasswordHashEncode(password_hash.0, false);
+        println(password_hash_token.1 == nil);
+        if (password_hash_token.1 == nil) {
+            var password_hash_parts: array<string> = split(password_hash_token.0, ".");
+            println(len(password_hash_parts) == 5);
+            println(password_hash_parts[0] == CRYPTO_PASSWORD_HASH_SCHEME);
+            println(password_hash_parts[1] == CRYPTO_PASSWORD_HASH_VERSION);
+            println(password_hash_parts[2] == "120000");
+            println(find(password_hash_parts[3], "=") < 0);
+            println(find(password_hash_parts[4], "=") < 0);
+
+            var password_hash_decode = cryptoPasswordHashDecode(password_hash_token.0);
+            println(password_hash_decode.1 == nil);
+            if (password_hash_decode.1 == nil) {
+                println(password_hash_decode.0.scheme == CRYPTO_PASSWORD_HASH_SCHEME);
+                println(password_hash_decode.0.version == CRYPTO_PASSWORD_HASH_VERSION);
+                println(password_hash_decode.0.iterations == 120000);
+
+                var password_hash_salt_match = cryptoConstantTimeBytesEqual(password_hash_decode.0.salt,
+                                                                           password_hash.0.salt);
+                var password_hash_digest_match = cryptoConstantTimeBytesEqual(password_hash_decode.0.digest,
+                                                                             password_hash.0.digest);
+                println(password_hash_salt_match.1 == nil);
+                println(password_hash_digest_match.1 == nil);
+                if (password_hash_salt_match.1 == nil) println(password_hash_salt_match.0 == true);
+                if (password_hash_digest_match.1 == nil) println(password_hash_digest_match.0 == true);
+            }
+
+            var password_hash_verify_token = cryptoPasswordHashVerifyBase64Url("hunter2",
+                                                                               password_hash_token.0);
+            println(password_hash_verify_token.1 == nil);
+            if (password_hash_verify_token.1 == nil) println(password_hash_verify_token.0 == true);
+
+            var password_hash_verify_token_wrong = cryptoPasswordHashVerifyBase64Url("wrong",
+                                                                                     password_hash_token.0);
+            println(password_hash_verify_token_wrong.1 == nil);
+            if (password_hash_verify_token_wrong.1 == nil) println(password_hash_verify_token_wrong.0 == false);
+
+            var password_hash_bad_token = cryptoPasswordHashVerifyBase64Url("hunter2", "pbkdf2-sha256.v1.bad");
+            println(password_hash_bad_token.1 != nil);
+        }
+
+        var password_hash_tampered_digest = cryptoCopyBytesRange(password_hash.0.digest,
+                                                                 0,
+                                                                 len(password_hash.0.digest));
+        println(password_hash_tampered_digest.1 == nil);
+        if (password_hash_tampered_digest.1 == nil) {
+            if (password_hash_tampered_digest.0[0] == 0) {
+                password_hash_tampered_digest.0[0] = 1;
+            } else {
+                password_hash_tampered_digest.0[0] = 0;
+            }
+
+            var tampered_hash: CryptoPasswordHash = {
+                scheme: password_hash.0.scheme,
+                version: password_hash.0.version,
+                iterations: password_hash.0.iterations,
+                salt: password_hash.0.salt,
+                digest: password_hash_tampered_digest.0
+            };
+            var password_hash_tampered_verify = cryptoPasswordHashVerify("hunter2", tampered_hash);
+            println(password_hash_tampered_verify.1 == nil);
+            if (password_hash_tampered_verify.1 == nil) println(password_hash_tampered_verify.0 == false);
+        }
+    }
+
+    var password_hash_default = cryptoPasswordHashCreateBase64UrlDefault("hunter2");
+    println(password_hash_default.1 == nil);
+    if (password_hash_default.1 == nil) {
+        var password_hash_default_decode = cryptoPasswordHashDecode(password_hash_default.0);
+        println(password_hash_default_decode.1 == nil);
+        if (password_hash_default_decode.1 == nil) {
+            println(password_hash_default_decode.0.iterations == CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS);
+        }
+
+        var password_hash_default_verify = cryptoPasswordHashVerifyBase64Url("hunter2",
+                                                                             password_hash_default.0);
+        println(password_hash_default_verify.1 == nil);
+        if (password_hash_default_verify.1 == nil) println(password_hash_default_verify.0 == true);
+    }
+
+    var password_hash_zero_iter = cryptoPasswordHashCreate("hunter2", 0);
+    println(password_hash_zero_iter.1 != nil);
+
+    var password_hash_bad_rehash = cryptoPasswordHashNeedsRehash({
+        scheme: CRYPTO_PASSWORD_HASH_SCHEME,
+        version: CRYPTO_PASSWORD_HASH_VERSION,
+        iterations: 120000,
+        salt: bytesWithSize(CRYPTO_PASSWORD_HASH_SALT_BYTES, 0).0,
+        digest: bytesWithSize(CRYPTO_PASSWORD_HASH_BYTES, 0).0
+    }, 0);
+    println(password_hash_bad_rehash.1 != nil);
+
+    var password_hash_upgrade_base = cryptoPasswordHashCreate("hunter2", 120000);
+    println(password_hash_upgrade_base.1 == nil);
+    if (password_hash_upgrade_base.1 == nil) {
+        var password_hash_upgrade_no = cryptoPasswordHashVerifyAndUpgrade("hunter2",
+                                                                          password_hash_upgrade_base.0,
+                                                                          100000);
+        println(password_hash_upgrade_no.3 == nil);
+        if (password_hash_upgrade_no.3 == nil) {
+            println(password_hash_upgrade_no.0 == true);
+            println(password_hash_upgrade_no.1 == false);
+            println(password_hash_upgrade_no.2.scheme == "");
+        }
+
+        var password_hash_upgrade_yes = cryptoPasswordHashVerifyAndUpgrade("hunter2",
+                                                                           password_hash_upgrade_base.0,
+                                                                           150000);
+        println(password_hash_upgrade_yes.3 == nil);
+        if (password_hash_upgrade_yes.3 == nil) {
+            println(password_hash_upgrade_yes.0 == true);
+            println(password_hash_upgrade_yes.1 == true);
+            println(password_hash_upgrade_yes.2.iterations == 150000);
+
+            var password_hash_upgrade_verify = cryptoPasswordHashVerify("hunter2",
+                                                                        password_hash_upgrade_yes.2);
+            println(password_hash_upgrade_verify.1 == nil);
+            if (password_hash_upgrade_verify.1 == nil) println(password_hash_upgrade_verify.0 == true);
+        }
+
+        var password_hash_upgrade_wrong = cryptoPasswordHashVerifyAndUpgrade("wrong",
+                                                                             password_hash_upgrade_base.0,
+                                                                             150000);
+        println(password_hash_upgrade_wrong.3 == nil);
+        if (password_hash_upgrade_wrong.3 == nil) {
+            println(password_hash_upgrade_wrong.0 == false);
+            println(password_hash_upgrade_wrong.1 == false);
+            println(password_hash_upgrade_wrong.2.scheme == "");
+        }
+
+        var password_hash_upgrade_bad = cryptoPasswordHashVerifyAndUpgrade("hunter2",
+                                                                           password_hash_upgrade_base.0,
+                                                                           0);
+        println(password_hash_upgrade_bad.3 != nil);
+
+        var password_hash_upgrade_token = cryptoPasswordHashEncode(password_hash_upgrade_base.0, false);
+        println(password_hash_upgrade_token.1 == nil);
+        if (password_hash_upgrade_token.1 == nil) {
+            var password_hash_upgrade_token_no = cryptoPasswordHashVerifyAndUpgradeBase64Url("hunter2",
+                                                                                            password_hash_upgrade_token.0,
+                                                                                            100000,
+                                                                                            false);
+            println(password_hash_upgrade_token_no.3 == nil);
+            if (password_hash_upgrade_token_no.3 == nil) {
+                println(password_hash_upgrade_token_no.0 == true);
+                println(password_hash_upgrade_token_no.1 == false);
+                println(password_hash_upgrade_token_no.2 == "");
+            }
+
+            var password_hash_upgrade_token_yes = cryptoPasswordHashVerifyAndUpgradeBase64Url("hunter2",
+                                                                                             password_hash_upgrade_token.0,
+                                                                                             180000,
+                                                                                             false);
+            println(password_hash_upgrade_token_yes.3 == nil);
+            if (password_hash_upgrade_token_yes.3 == nil) {
+                println(password_hash_upgrade_token_yes.0 == true);
+                println(password_hash_upgrade_token_yes.1 == true);
+                println(password_hash_upgrade_token_yes.2 != "");
+
+                var password_hash_upgrade_token_verify = cryptoPasswordHashVerifyBase64Url("hunter2",
+                                                                                           password_hash_upgrade_token_yes.2);
+                println(password_hash_upgrade_token_verify.1 == nil);
+                if (password_hash_upgrade_token_verify.1 == nil) {
+                    println(password_hash_upgrade_token_verify.0 == true);
+                }
+
+                var password_hash_upgrade_token_decode = cryptoPasswordHashDecode(password_hash_upgrade_token_yes.2);
+                println(password_hash_upgrade_token_decode.1 == nil);
+                if (password_hash_upgrade_token_decode.1 == nil) {
+                    println(password_hash_upgrade_token_decode.0.iterations == 180000);
+                }
+            }
+
+            var password_hash_upgrade_token_wrong = cryptoPasswordHashVerifyAndUpgradeBase64Url("wrong",
+                                                                                               password_hash_upgrade_token.0,
+                                                                                               180000,
+                                                                                               false);
+            println(password_hash_upgrade_token_wrong.3 == nil);
+            if (password_hash_upgrade_token_wrong.3 == nil) {
+                println(password_hash_upgrade_token_wrong.0 == false);
+                println(password_hash_upgrade_token_wrong.1 == false);
+                println(password_hash_upgrade_token_wrong.2 == "");
+            }
+
+            var password_hash_upgrade_token_bad = cryptoPasswordHashVerifyAndUpgradeBase64Url("hunter2",
+                                                                                             "pbkdf2-sha256.v1.bad",
+                                                                                             180000,
+                                                                                             false);
+            println(password_hash_upgrade_token_bad.3 != nil);
+        }
+    }
+
+    var password_hash_upgrade_default_seed = cryptoPasswordHashCreate("hunter2", 120000);
+    println(password_hash_upgrade_default_seed.1 == nil);
+    if (password_hash_upgrade_default_seed.1 == nil) {
+        var password_hash_upgrade_default = cryptoPasswordHashVerifyAndUpgradeDefault("hunter2",
+                                                                                      password_hash_upgrade_default_seed.0);
+        println(password_hash_upgrade_default.3 == nil);
+        if (password_hash_upgrade_default.3 == nil) {
+            println(password_hash_upgrade_default.0 == true);
+            println(password_hash_upgrade_default.1 == true);
+            println(password_hash_upgrade_default.2.iterations == CRYPTO_PASSWORD_HASH_DEFAULT_ITERATIONS);
+        }
+
+        var password_hash_upgrade_default_token_seed = cryptoPasswordHashEncode(password_hash_upgrade_default_seed.0,
+                                                                                false);
+        println(password_hash_upgrade_default_token_seed.1 == nil);
+        if (password_hash_upgrade_default_token_seed.1 == nil) {
+            var password_hash_upgrade_default_token = cryptoPasswordHashVerifyAndUpgradeBase64UrlDefault("hunter2",
+                                                                                                         password_hash_upgrade_default_token_seed.0);
+            println(password_hash_upgrade_default_token.3 == nil);
+            if (password_hash_upgrade_default_token.3 == nil) {
+                println(password_hash_upgrade_default_token.0 == true);
+                println(password_hash_upgrade_default_token.1 == true);
+                println(password_hash_upgrade_default_token.2 != "");
+            }
+        }
+    }
+
+    var signed_payload = stringToBytes("payload");
+    println(signed_payload.1 == nil);
+    if (signed_payload.1 == nil) {
+        var signed_token = cryptoSignedTokenSealText("secret", "payload", 1000, 2000);
+        println(signed_token.1 == nil);
+        if (signed_token.1 == nil) {
+            var signed_parts: array<string> = split(signed_token.0, ".");
+            println(len(signed_parts) == 5);
+            println(signed_parts[0] == CRYPTO_SIGNED_TOKEN_VERSION);
+            println(signed_parts[1] == "1000");
+            println(signed_parts[2] == "2000");
+            println(find(signed_parts[3], "=") < 0);
+            println(find(signed_parts[4], "=") < 0);
+
+            var signed_decode = cryptoSignedTokenDecode(signed_token.0);
+            println(signed_decode.1 == nil);
+            if (signed_decode.1 == nil) {
+                println(signed_decode.0.version == CRYPTO_SIGNED_TOKEN_VERSION);
+                println(signed_decode.0.issuedAtMillis == 1000);
+                println(signed_decode.0.expiresAtMillis == 2000);
+                var signed_decode_match = cryptoConstantTimeBytesEqual(signed_decode.0.payload,
+                                                                       signed_payload.0);
+                println(signed_decode_match.1 == nil);
+                if (signed_decode_match.1 == nil) println(signed_decode_match.0 == true);
+            }
+
+            var signed_ok = cryptoSignedTokenVerifyText("secret", signed_token.0, 1500);
+            println(signed_ok.3 == nil);
+            if (signed_ok.3 == nil) {
+                println(signed_ok.0 == true);
+                println(signed_ok.1 == false);
+                var signed_ok_match = cryptoConstantTimeBytesEqual(signed_ok.2.payload, signed_payload.0);
+                println(signed_ok_match.1 == nil);
+                if (signed_ok_match.1 == nil) println(signed_ok_match.0 == true);
+            }
+
+            var signed_expired = cryptoSignedTokenVerifyText("secret", signed_token.0, 2500);
+            println(signed_expired.3 == nil);
+            if (signed_expired.3 == nil) {
+                println(signed_expired.0 == false);
+                println(signed_expired.1 == true);
+                println(signed_expired.2.expiresAtMillis == 2000);
+            }
+
+            var signed_wrong = cryptoSignedTokenVerifyText("wrong", signed_token.0, 1500);
+            println(signed_wrong.3 == nil);
+            if (signed_wrong.3 == nil) {
+                println(signed_wrong.0 == false);
+                println(signed_wrong.1 == false);
+                println(signed_wrong.2.version == "");
+            }
+
+            var signed_malformed_verify = cryptoSignedTokenVerifyText("secret", "v1.bad", 1500);
+            println(signed_malformed_verify.3 == nil);
+            if (signed_malformed_verify.3 == nil) {
+                println(signed_malformed_verify.0 == false);
+                println(signed_malformed_verify.1 == false);
+                println(signed_malformed_verify.2.version == "");
+            }
+
+            var signed_malformed_decode = cryptoSignedTokenDecode("v1.bad");
+            println(signed_malformed_decode.1 != nil);
+        }
+
+        var signed_bad_time = cryptoSignedTokenSealText("secret", "payload", 2000, 1000);
+        println(signed_bad_time.1 != nil);
+
+        var signed_ttl = cryptoSignedTokenSealTextWithTtl("secret", "payload", 60000);
+        println(signed_ttl.1 == nil);
+        if (signed_ttl.1 == nil) {
+            var signed_ttl_decode = cryptoSignedTokenDecode(signed_ttl.0);
+            println(signed_ttl_decode.1 == nil);
+            if (signed_ttl_decode.1 == nil) {
+                println((signed_ttl_decode.0.expiresAtMillis - signed_ttl_decode.0.issuedAtMillis) == 60000);
+            }
+
+            var signed_ttl_verify_now = cryptoSignedTokenVerifyTextNow("secret", signed_ttl.0);
+            println(signed_ttl_verify_now.3 == nil);
+            if (signed_ttl_verify_now.3 == nil) {
+                println(signed_ttl_verify_now.0 == true);
+                println(signed_ttl_verify_now.1 == false);
+            }
+        }
+
+        var signed_ttl_bad = cryptoSignedTokenSealTextWithTtl("secret", "payload", 0);
+        println(signed_ttl_bad.1 != nil);
+    }
+
+    var bytes_roundtrip_source = stringToBytes("json-claims");
+    println(bytes_roundtrip_source.1 == nil);
+    if (bytes_roundtrip_source.1 == nil) {
+        var bytes_roundtrip = bytesToString(bytes_roundtrip_source.0);
+        println(bytes_roundtrip.1 == nil);
+        if (bytes_roundtrip.1 == nil) println(bytes_roundtrip.0 == "json-claims");
+    }
+
+    var claims_basic: map<string, any> = {
+        "sub": "user-1",
+        "admin": true,
+        "tier": "gold"
+    };
+    var claims_token = cryptoSignedJsonClaimsSealText("secret", claims_basic, 1000, 2000);
+    println(claims_token.1 == nil);
+    if (claims_token.1 == nil) {
+        var claims_decode = cryptoSignedJsonClaimsDecodeUnverified(claims_token.0);
+        println(claims_decode.1 == nil);
+        if (claims_decode.1 == nil) {
+            println(claims_decode.0.keyId == nil);
+            println((mapGetString(claims_decode.0.claims, "sub") as string) == "user-1");
+            println((mapGetString(claims_decode.0.claims, "admin") as bool) == true);
+            println((mapGetString(claims_decode.0.claims, "tier") as string) == "gold");
+        }
+
+        var claims_ok = cryptoSignedJsonClaimsVerifyText("secret", claims_token.0, 1500);
+        println(claims_ok.3 == nil);
+        if (claims_ok.3 == nil) {
+            println(claims_ok.0 == true);
+            println(claims_ok.1 == false);
+            println(claims_ok.2.keyId == nil);
+            println((mapGetString(claims_ok.2.claims, "sub") as string) == "user-1");
+        }
+
+        var claims_expired = cryptoSignedJsonClaimsVerifyText("secret", claims_token.0, 2500);
+        println(claims_expired.3 == nil);
+        if (claims_expired.3 == nil) {
+            println(claims_expired.0 == false);
+            println(claims_expired.1 == true);
+            println(claims_expired.2.expiresAtMillis == 2000);
+        }
+
+        var claims_wrong = cryptoSignedJsonClaimsVerifyText("wrong", claims_token.0, 1500);
+        println(claims_wrong.3 == nil);
+        if (claims_wrong.3 == nil) {
+            println(claims_wrong.0 == false);
+            println(claims_wrong.1 == false);
+            println(claims_wrong.2.version == "");
+        }
+    }
+
+    var non_json_token = cryptoSignedTokenSealText("secret", "not-json", 1000, 2000);
+    println(non_json_token.1 == nil);
+    if (non_json_token.1 == nil) {
+        var non_json_decode = cryptoSignedJsonClaimsDecodeUnverified(non_json_token.0);
+        println(non_json_decode.1 != nil);
+
+        var non_json_verify = cryptoSignedJsonClaimsVerifyText("secret", non_json_token.0, 1500);
+        println(non_json_verify.3 == nil);
+        if (non_json_verify.3 == nil) {
+            println(non_json_verify.0 == false);
+            println(non_json_verify.1 == false);
+            println(non_json_verify.2.version == "");
+        }
+    }
+
+    var claims_kid: map<string, any> = {
+        "sub": "user-2",
+        "scope": "api"
+    };
+    var claims_kid_token = cryptoSignedJsonClaimsSealTextWithKeyId("new-secret",
+                                                                   "k2",
+                                                                   claims_kid,
+                                                                   1000,
+                                                                   3000);
+    println(claims_kid_token.1 == nil);
+    if (claims_kid_token.1 == nil) {
+        var text_key_ring: map<string, string> = {};
+        mapSetString(text_key_ring, "k1", "old-secret");
+        mapSetString(text_key_ring, "k2", "new-secret");
+
+        var claims_kid_verify = cryptoSignedJsonClaimsVerifyTextKeyRing(text_key_ring,
+                                                                        claims_kid_token.0,
+                                                                        1500);
+        println(claims_kid_verify.4 == nil);
+        if (claims_kid_verify.4 == nil) {
+            println(claims_kid_verify.0 == true);
+            println(claims_kid_verify.1 == false);
+            println((claims_kid_verify.2 as string) == "k2");
+            println((claims_kid_verify.3.keyId as string) == "k2");
+            println((mapGetString(claims_kid_verify.3.claims, "scope") as string) == "api");
+        }
+
+        var claims_kid_expired = cryptoSignedJsonClaimsVerifyTextKeyRing(text_key_ring,
+                                                                         claims_kid_token.0,
+                                                                         3500);
+        println(claims_kid_expired.4 == nil);
+        if (claims_kid_expired.4 == nil) {
+            println(claims_kid_expired.0 == false);
+            println(claims_kid_expired.1 == true);
+            println((claims_kid_expired.2 as string) == "k2");
+        }
+
+        var text_key_ring_missing: map<string, string> = {};
+        mapSetString(text_key_ring_missing, "k1", "old-secret");
+        var claims_kid_missing = cryptoSignedJsonClaimsVerifyTextKeyRing(text_key_ring_missing,
+                                                                         claims_kid_token.0,
+                                                                         1500);
+        println(claims_kid_missing.4 == nil);
+        if (claims_kid_missing.4 == nil) {
+            println(claims_kid_missing.0 == false);
+            println(claims_kid_missing.1 == false);
+            println(claims_kid_missing.2 == nil);
+        }
+
+        var claims_kid_bad_token = cryptoSignedJsonClaimsVerifyTextKeyRing(text_key_ring,
+                                                                           "v1.bad",
+                                                                           1500);
+        println(claims_kid_bad_token.4 == nil);
+        if (claims_kid_bad_token.4 == nil) {
+            println(claims_kid_bad_token.0 == false);
+            println(claims_kid_bad_token.1 == false);
+            println(claims_kid_bad_token.2 == nil);
+        }
+
+        var bytes_key_ring: map<string, bytes> = {};
+        var old_secret_bytes = stringToBytes("old-secret");
+        var new_secret_bytes = stringToBytes("new-secret");
+        println(old_secret_bytes.1 == nil);
+        println(new_secret_bytes.1 == nil);
+        if (old_secret_bytes.1 == nil && new_secret_bytes.1 == nil) {
+            mapSetString(bytes_key_ring, "k1", old_secret_bytes.0);
+            mapSetString(bytes_key_ring, "k2", new_secret_bytes.0);
+
+            var claims_kid_verify_bytes = cryptoSignedJsonClaimsVerifyKeyRing(bytes_key_ring,
+                                                                              claims_kid_token.0,
+                                                                              1500);
+            println(claims_kid_verify_bytes.4 == nil);
+            if (claims_kid_verify_bytes.4 == nil) {
+                println(claims_kid_verify_bytes.0 == true);
+                println((claims_kid_verify_bytes.2 as string) == "k2");
+            }
+        }
+    }
+
+    var fallback_ring_claims: map<string, any> = {
+        "sub": "fallback-user"
+    };
+    var fallback_ring_token = cryptoSignedJsonClaimsSealText("old-secret",
+                                                             fallback_ring_claims,
+                                                             1000,
+                                                             3000);
+    println(fallback_ring_token.1 == nil);
+    if (fallback_ring_token.1 == nil) {
+        var fallback_ring: map<string, string> = {};
+        mapSetString(fallback_ring, "k1", "old-secret");
+        mapSetString(fallback_ring, "k2", "new-secret");
+
+        var fallback_verify = cryptoSignedJsonClaimsVerifyTextKeyRing(fallback_ring,
+                                                                      fallback_ring_token.0,
+                                                                      1500);
+        println(fallback_verify.4 == nil);
+        if (fallback_verify.4 == nil) {
+            println(fallback_verify.0 == true);
+            println(fallback_verify.1 == false);
+            println((fallback_verify.2 as string) == "k1");
+            println(fallback_verify.3.keyId == nil);
+            println((mapGetString(fallback_verify.3.claims, "sub") as string) == "fallback-user");
+        }
+    }
+
+    var claims_policy: CryptoSignedJsonClaimsValidationPolicy = {
+        issuer: "issuer-a",
+        audience: "api",
+        requireIssuer: true,
+        requireAudience: true,
+        requireNotBefore: true,
+        requireJti: true,
+        clockSkewMillis: 100
+    };
+    var claims_registered: map<string, any> = {
+        "sub": "policy-user",
+        "iss": "issuer-a",
+        "aud": ["mobile" as any, "api" as any],
+        "nbf": 1600,
+        "jti": "token-1"
+    };
+    var claims_policy_token = cryptoSignedJsonClaimsSealText("policy-secret",
+                                                             claims_registered,
+                                                             1000,
+                                                             3000);
+    println(claims_policy_token.1 == nil);
+    if (claims_policy_token.1 == nil) {
+        var claims_policy_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                              claims_policy_token.0,
+                                                                              1500,
+                                                                              claims_policy);
+        println(claims_policy_verify.3 == nil);
+        if (claims_policy_verify.3 == nil) {
+            println(claims_policy_verify.0 == true);
+            println(claims_policy_verify.1 == false);
+            println((mapGetString(claims_policy_verify.2.claims, "iss") as string) == "issuer-a");
+            println((mapGetString(claims_policy_verify.2.claims, "jti") as string) == "token-1");
+        }
+
+        var claims_policy_decode = cryptoSignedJsonClaimsDecodeUnverified(claims_policy_token.0);
+        println(claims_policy_decode.1 == nil);
+        if (claims_policy_decode.1 == nil) {
+            var claims_policy_validate = cryptoSignedJsonClaimsValidateRegistered(claims_policy_decode.0,
+                                                                                  claims_policy,
+                                                                                  1500);
+            println(claims_policy_validate.1 == nil);
+            if (claims_policy_validate.1 == nil) {
+                println(claims_policy_validate.0 == true);
+            }
+        }
+
+        var claims_policy_tight: CryptoSignedJsonClaimsValidationPolicy = {
+            issuer: "issuer-a",
+            audience: "api",
+            requireIssuer: true,
+            requireAudience: true,
+            requireNotBefore: true,
+            requireJti: true,
+            clockSkewMillis: 0
+        };
+        var claims_policy_nbf = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                           claims_policy_token.0,
+                                                                           1500,
+                                                                           claims_policy_tight);
+        println(claims_policy_nbf.3 == nil);
+        if (claims_policy_nbf.3 == nil) {
+            println(claims_policy_nbf.0 == false);
+            println(claims_policy_nbf.1 == false);
+            println((mapGetString(claims_policy_nbf.2.claims, "jti") as string) == "token-1");
+        }
+
+        var claims_policy_wrong_issuer: CryptoSignedJsonClaimsValidationPolicy = {
+            issuer: "issuer-b",
+            audience: "api",
+            requireIssuer: true,
+            requireAudience: true,
+            requireNotBefore: true,
+            requireJti: true,
+            clockSkewMillis: 100
+        };
+        var claims_policy_issuer_fail = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                                   claims_policy_token.0,
+                                                                                   1500,
+                                                                                   claims_policy_wrong_issuer);
+        println(claims_policy_issuer_fail.3 == nil);
+        if (claims_policy_issuer_fail.3 == nil) {
+            println(claims_policy_issuer_fail.0 == false);
+            println((mapGetString(claims_policy_issuer_fail.2.claims, "iss") as string) == "issuer-a");
+        }
+
+        var claims_policy_wrong_audience: CryptoSignedJsonClaimsValidationPolicy = {
+            issuer: "issuer-a",
+            audience: "admin",
+            requireIssuer: true,
+            requireAudience: true,
+            requireNotBefore: true,
+            requireJti: true,
+            clockSkewMillis: 100
+        };
+        var claims_policy_audience_fail = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                                     claims_policy_token.0,
+                                                                                     1500,
+                                                                                     claims_policy_wrong_audience);
+        println(claims_policy_audience_fail.3 == nil);
+        if (claims_policy_audience_fail.3 == nil) {
+            println(claims_policy_audience_fail.0 == false);
+            println((mapGetString(claims_policy_audience_fail.2.claims, "sub") as string) == "policy-user");
+        }
+    }
+
+    var claims_missing_jti: map<string, any> = {
+        "iss": "issuer-a",
+        "aud": "api",
+        "nbf": 1200
+    };
+    var claims_missing_jti_token = cryptoSignedJsonClaimsSealText("policy-secret",
+                                                                  claims_missing_jti,
+                                                                  1000,
+                                                                  3000);
+    println(claims_missing_jti_token.1 == nil);
+    if (claims_missing_jti_token.1 == nil) {
+        var claims_missing_jti_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                                   claims_missing_jti_token.0,
+                                                                                   1500,
+                                                                                   claims_policy);
+        println(claims_missing_jti_verify.3 == nil);
+        if (claims_missing_jti_verify.3 == nil) {
+            println(claims_missing_jti_verify.0 == false);
+            println((mapGetString(claims_missing_jti_verify.2.claims, "iss") as string) == "issuer-a");
+        }
+    }
+
+    var claims_bad_registered: map<string, any> = {
+        "sub": "bad-user",
+        "aud": 7
+    };
+    var claims_bad_registered_token = cryptoSignedJsonClaimsSealText("policy-secret",
+                                                                     claims_bad_registered,
+                                                                     1000,
+                                                                     3000);
+    println(claims_bad_registered_token.1 == nil);
+    if (claims_bad_registered_token.1 == nil) {
+        var claims_bad_registered_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                                      claims_bad_registered_token.0,
+                                                                                      1500,
+                                                                                      cryptoSignedJsonClaimsDefaultValidationPolicy());
+        println(claims_bad_registered_verify.3 == nil);
+        if (claims_bad_registered_verify.3 == nil) {
+            println(claims_bad_registered_verify.0 == false);
+            println((mapGetString(claims_bad_registered_verify.2.claims, "sub") as string) == "bad-user");
+        }
+    }
+
+    var claims_policy_kid = cryptoSignedJsonClaimsSealTextWithKeyId("new-secret",
+                                                                    "k2",
+                                                                    claims_registered,
+                                                                    1000,
+                                                                    3000);
+    println(claims_policy_kid.1 == nil);
+    if (claims_policy_kid.1 == nil) {
+        var claims_policy_ring: map<string, string> = {};
+        mapSetString(claims_policy_ring, "k1", "old-secret");
+        mapSetString(claims_policy_ring, "k2", "new-secret");
+        var claims_policy_ring_wrong_audience: CryptoSignedJsonClaimsValidationPolicy = {
+            issuer: "issuer-a",
+            audience: "admin",
+            requireIssuer: true,
+            requireAudience: true,
+            requireNotBefore: true,
+            requireJti: true,
+            clockSkewMillis: 100
+        };
+
+        var claims_policy_ring_verify = cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy(claims_policy_ring,
+                                                                                           claims_policy_kid.0,
+                                                                                           1500,
+                                                                                           claims_policy);
+        println(claims_policy_ring_verify.4 == nil);
+        if (claims_policy_ring_verify.4 == nil) {
+            println(claims_policy_ring_verify.0 == true);
+            println((claims_policy_ring_verify.2 as string) == "k2");
+            println((claims_policy_ring_verify.3.keyId as string) == "k2");
+        }
+
+        var claims_policy_ring_fail = cryptoSignedJsonClaimsVerifyTextKeyRingWithPolicy(claims_policy_ring,
+                                                                                         claims_policy_kid.0,
+                                                                                         1500,
+                                                                                         claims_policy_ring_wrong_audience);
+        println(claims_policy_ring_fail.4 == nil);
+        if (claims_policy_ring_fail.4 == nil) {
+            println(claims_policy_ring_fail.0 == false);
+            println((claims_policy_ring_fail.2 as string) == "k2");
+        }
+    }
+
+    var claims_bad_policy: CryptoSignedJsonClaimsValidationPolicy = {
+        issuer: nil,
+        audience: nil,
+        requireIssuer: false,
+        requireAudience: false,
+        requireNotBefore: false,
+        requireJti: false,
+        clockSkewMillis: -1
+    };
+    var claims_bad_policy_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("policy-secret",
+                                                                              "v1.bad",
+                                                                              1500,
+                                                                              claims_bad_policy);
+    println(claims_bad_policy_verify.3 != nil);
+
+    var claims_built = cryptoSignedJsonClaimsNew();
+    println(len(keys(claims_built)) == 0);
+
+    var claims_built_subject = cryptoSignedJsonClaimsSetSubject(claims_built, "builder-user");
+    println(claims_built_subject.1 == nil);
+    if (claims_built_subject.1 == nil) {
+        claims_built = claims_built_subject.0;
+    }
+
+    var claims_built_issuer = cryptoSignedJsonClaimsSetIssuer(claims_built, "builder-issuer");
+    println(claims_built_issuer.1 == nil);
+    if (claims_built_issuer.1 == nil) {
+        claims_built = claims_built_issuer.0;
+    }
+
+    var claims_built_audience = cryptoSignedJsonClaimsSetAudience(claims_built, "api");
+    println(claims_built_audience.1 == nil);
+    if (claims_built_audience.1 == nil) {
+        claims_built = claims_built_audience.0;
+        println((mapGetString(claims_built, "aud") as string) == "api");
+    }
+
+    var claims_built_audiences = cryptoSignedJsonClaimsSetAudiences(claims_built,
+                                                                    ["cli", "api"]);
+    println(claims_built_audiences.1 == nil);
+    if (claims_built_audiences.1 == nil) {
+        claims_built = claims_built_audiences.0;
+        println(typeOf(mapGetString(claims_built, "aud")) == "array");
+    }
+
+    var claims_built_not_before = cryptoSignedJsonClaimsSetNotBefore(claims_built, 1400);
+    println(claims_built_not_before.1 == nil);
+    if (claims_built_not_before.1 == nil) {
+        claims_built = claims_built_not_before.0;
+    }
+
+    var claims_built_jti = cryptoSignedJsonClaimsSetJwtId(claims_built, "builder-jti");
+    println(claims_built_jti.1 == nil);
+    if (claims_built_jti.1 == nil) {
+        claims_built = claims_built_jti.0;
+    }
+
+    mapSetString(claims_built, "role", "admin");
+
+    var claims_built_policy: CryptoSignedJsonClaimsValidationPolicy = {
+        issuer: "builder-issuer",
+        audience: "cli",
+        requireIssuer: true,
+        requireAudience: true,
+        requireNotBefore: true,
+        requireJti: true,
+        clockSkewMillis: 0
+    };
+    var claims_built_token = cryptoSignedJsonClaimsSealText("builder-secret",
+                                                            claims_built,
+                                                            1000,
+                                                            3000);
+    println(claims_built_token.1 == nil);
+    if (claims_built_token.1 == nil) {
+        var claims_built_verify = cryptoSignedJsonClaimsVerifyTextWithPolicy("builder-secret",
+                                                                             claims_built_token.0,
+                                                                             1500,
+                                                                             claims_built_policy);
+        println(claims_built_verify.3 == nil);
+        if (claims_built_verify.3 == nil) {
+            println(claims_built_verify.0 == true);
+            println((mapGetString(claims_built_verify.2.claims, "sub") as string) == "builder-user");
+            println((mapGetString(claims_built_verify.2.claims, "role") as string) == "admin");
+        }
+    }
+
+    var claims_bad_subject = cryptoSignedJsonClaimsSetSubject(cryptoSignedJsonClaimsNew(), "");
+    println(claims_bad_subject.1 != nil);
+
+    var claims_bad_issuer = cryptoSignedJsonClaimsSetIssuer(cryptoSignedJsonClaimsNew(), "");
+    println(claims_bad_issuer.1 != nil);
+
+    var claims_bad_audience = cryptoSignedJsonClaimsSetAudience(cryptoSignedJsonClaimsNew(), "");
+    println(claims_bad_audience.1 != nil);
+
+    var claims_bad_audiences = cryptoSignedJsonClaimsSetAudiences(cryptoSignedJsonClaimsNew(), []);
+    println(claims_bad_audiences.1 != nil);
+
+    var claims_bad_not_before = cryptoSignedJsonClaimsSetNotBefore(cryptoSignedJsonClaimsNew(), -1);
+    println(claims_bad_not_before.1 != nil);
+
+    var claims_bad_jti = cryptoSignedJsonClaimsSetJwtId(cryptoSignedJsonClaimsNew(), "");
+    println(claims_bad_jti.1 != nil);
+
+    var revocations = cryptoSignedJsonClaimsRevocationStoreNew();
+    println(cryptoSignedJsonClaimsRevocationStoreCount(revocations) == 0);
+    if (claims_policy_token.1 == nil) {
+        var verify_unrevoked = cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation("policy-secret",
+                                                                                       claims_policy_token.0,
+                                                                                       1500,
+                                                                                       claims_policy,
+                                                                                       revocations);
+        println(verify_unrevoked.5 == nil);
+        if (verify_unrevoked.5 == nil) {
+            println(verify_unrevoked.0 == true);
+            println(verify_unrevoked.1 == false);
+            println(verify_unrevoked.2 == false);
+            revocations = verify_unrevoked.4;
+
+            var revoke_claims = cryptoSignedJsonClaimsRevocationStoreRevoke(revocations,
+                                                                            verify_unrevoked.3);
+            println(revoke_claims.1 == nil);
+            if (revoke_claims.1 == nil) {
+                revocations = revoke_claims.0;
+            }
+
+            println(cryptoSignedJsonClaimsRevocationStoreCount(revocations) == 1);
+
+            var has_revoked = cryptoSignedJsonClaimsRevocationStoreHasJwtIdAt(revocations,
+                                                                              "token-1",
+                                                                              1500);
+            println(has_revoked.2 == nil);
+            if (has_revoked.2 == nil) {
+                revocations = has_revoked.0;
+                println(has_revoked.1 == true);
+            }
+
+            var is_revoked = cryptoSignedJsonClaimsRevocationStoreIsRevokedAt(revocations,
+                                                                              verify_unrevoked.3,
+                                                                              1500);
+            println(is_revoked.2 == nil);
+            if (is_revoked.2 == nil) {
+                revocations = is_revoked.0;
+                println(is_revoked.1 == true);
+            }
+
+            var verify_revoked = cryptoSignedJsonClaimsVerifyTextWithPolicyAndRevocation("policy-secret",
+                                                                                         claims_policy_token.0,
+                                                                                         1500,
+                                                                                         claims_policy,
+                                                                                         revocations);
+            println(verify_revoked.5 == nil);
+            if (verify_revoked.5 == nil) {
+                println(verify_revoked.0 == false);
+                println(verify_revoked.1 == false);
+                println(verify_revoked.2 == true);
+                revocations = verify_revoked.4;
+            }
+
+            var delete_revoked = cryptoSignedJsonClaimsRevocationStoreDelete(revocations, "token-1");
+            println(delete_revoked.2 == nil);
+            if (delete_revoked.2 == nil) {
+                revocations = delete_revoked.0;
+                println(delete_revoked.1 == true);
+            }
+
+            println(cryptoSignedJsonClaimsRevocationStoreCount(revocations) == 0);
+
+            var delete_missing = cryptoSignedJsonClaimsRevocationStoreDelete(revocations, "token-1");
+            println(delete_missing.2 == nil);
+            if (delete_missing.2 == nil) {
+                println(delete_missing.1 == false);
+            }
+
+            var revoke_id = cryptoSignedJsonClaimsRevocationStoreRevokeId(revocations,
+                                                                          "token-1",
+                                                                          3000);
+            println(revoke_id.1 == nil);
+            if (revoke_id.1 == nil) {
+                revocations = revoke_id.0;
+            }
+
+            var purge_before = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(revocations, 2500);
+            revocations = purge_before.0;
+            println(purge_before.1 == 0);
+
+            var purge_after = cryptoSignedJsonClaimsRevocationStorePurgeExpiredAt(revocations, 3500);
+            revocations = purge_after.0;
+            println(purge_after.1 == 1);
+            println(cryptoSignedJsonClaimsRevocationStoreCount(revocations) == 0);
+        }
+    }
+
+    if (claims_token.1 == nil) {
+        var claims_without_jti = cryptoSignedJsonClaimsDecodeUnverified(claims_token.0);
+        println(claims_without_jti.1 == nil);
+        if (claims_without_jti.1 == nil) {
+            var revoke_missing_jti = cryptoSignedJsonClaimsRevocationStoreRevoke(revocations,
+                                                                                 claims_without_jti.0);
+            println(revoke_missing_jti.1 != nil);
+        }
+    }
+
+    var revoke_bad_id = cryptoSignedJsonClaimsRevocationStoreRevokeId(revocations, "", 3000);
+    println(revoke_bad_id.1 != nil);
+
+    var revoke_bad_expiry = cryptoSignedJsonClaimsRevocationStoreRevokeId(revocations,
+                                                                          "token-1",
+                                                                          0);
+    println(revoke_bad_expiry.1 != nil);
+
+    runAutoJtiSessionTests();
+    runSessionTokenWrapperTests();
+    runSessionTokenPairTests();
+    runSessionTokenPairRotationTests();
+}

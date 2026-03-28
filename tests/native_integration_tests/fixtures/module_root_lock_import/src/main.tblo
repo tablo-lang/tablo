@@ -1,0 +1,5 @@
+import "acme/util/util.tblo";
+
+func main() {
+    println(utilHello());
+}

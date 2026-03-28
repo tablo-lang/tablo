@@ -1,0 +1,153 @@
+import "fixtures/json.tblo";
+
+func main(): void {
+    var headers_any: any = jsonParse("{\"Content-Type\":\"application/json\",\"X-Req\":\"1\"}").0;
+    var headers_r = jsonDecodeAsHttpHeaders(headers_any);
+    println(headers_r.1 == nil);
+    if (headers_r.1 == nil) {
+        println(mapGet(headers_r.0, "Content-Type"));
+        println(mapGet(headers_r.0, "X-Req"));
+    }
+
+    var req_any: any = jsonParse("{\"method\":\"POST\",\"path\":\"/items\",\"headers\":{\"Content-Type\":\"application/json\"},\"query\":{\"page\":\"1\"},\"body\":\"{}\"}").0;
+    var req_r = jsonDecodeAsHttpRequest(req_any);
+    println(req_r.1 == nil);
+    if (req_r.1 == nil) {
+        println(req_r.0.method);
+        println(req_r.0.path);
+        println(mapGet(req_r.0.headers, "Content-Type"));
+        println(mapGet(req_r.0.query, "page"));
+        println(req_r.0.body == "{}");
+    }
+
+    var req_min_any: any = jsonParse("{\"method\":\"GET\",\"path\":\"/health\",\"headers\":{}}").0;
+    var req_min_r = jsonDecodeAsHttpRequest(req_min_any);
+    println(req_min_r.1 == nil);
+    if (req_min_r.1 == nil) {
+        println(mapCount(req_min_r.0.query) == 0);
+        println(req_min_r.0.body == nil);
+    }
+
+    var resp_any: any = jsonParse("{\"status\":201,\"headers\":{\"X\":\"y\"},\"body\":\"ok\"}").0;
+    var resp_r = jsonDecodeAsHttpResponse(resp_any);
+    println(resp_r.1 == nil);
+    if (resp_r.1 == nil) {
+        println(resp_r.0.status);
+        println(mapGet(resp_r.0.headers, "X"));
+        println(resp_r.0.body == "ok");
+    }
+
+    var resp_min_any: any = jsonParse("{\"status\":204}").0;
+    var resp_min_r = jsonDecodeAsHttpResponse(resp_min_any);
+    println(resp_min_r.1 == nil);
+    if (resp_min_r.1 == nil) {
+        println(mapCount(resp_min_r.0.headers) == 0);
+        println(resp_min_r.0.body == nil);
+    }
+
+    var api_err_any: any = jsonParse("{\"code\":409,\"message\":\"conflict\",\"detail\":\"dup\",\"data\":{\"id\":1}}").0;
+    var api_err_r = jsonDecodeAsApiError(api_err_any);
+    println(api_err_r.1 == nil);
+    if (api_err_r.1 == nil) {
+        println(api_err_r.0.code);
+        println(api_err_r.0.message);
+        println(api_err_r.0.detail == "dup");
+        var data_map: map<string, any> = api_err_r.0.data as map<string, any>;
+        println(mapGet(data_map, "id"));
+    }
+
+    var env_ok_any: any = jsonParse("{\"ok\":true,\"requestId\":\"r1\",\"data\":{\"id\":7}}").0;
+    var env_ok_r = jsonDecodeAsApiEnvelope(env_ok_any);
+    println(env_ok_r.1 == nil);
+    if (env_ok_r.1 == nil) {
+        println(env_ok_r.0.ok);
+        println(env_ok_r.0.requestId == "r1");
+        var env_data: map<string, any> = env_ok_r.0.data as map<string, any>;
+        println(mapGet(env_data, "id"));
+        println(env_ok_r.0.error == nil);
+    }
+
+    var env_err_any: any = jsonParse("{\"ok\":false,\"error\":{\"code\":400,\"message\":\"bad\"}}").0;
+    var env_err_r = jsonDecodeAsApiEnvelope(env_err_any);
+    println(env_err_r.1 == nil);
+    if (env_err_r.1 == nil) {
+        println(!env_err_r.0.ok);
+        println(env_err_r.0.error != nil);
+        if (env_err_r.0.error != nil) {
+            var e: JsonApiErrorPayload = env_err_r.0.error as JsonApiErrorPayload;
+            println(e.code);
+            println(e.message);
+        }
+    }
+
+    var bad_headers_any: any = jsonParse("{\"a\":1}").0;
+    var bad_headers_r = jsonDecodeAsHttpHeaders(bad_headers_any);
+    println(bad_headers_r.1 != nil);
+    if (bad_headers_r.1 != nil) {
+        println(find(bad_headers_r.1.message, "jsonDecodeAsHttpHeaders") >= 0);
+        var hdata: map<string, any> = bad_headers_r.1.data as map<string, any>;
+        println(mapGet(hdata, "context"));
+        println(mapGet(hdata, "path"));
+        println(mapGet(hdata, "kind"));
+        println(mapGet(hdata, "expectedType"));
+        println(mapGet(hdata, "actualType"));
+        var hcause: map<string, any> = mapGet(hdata, "cause") as map<string, any>;
+        println(mapGet(hcause, "path"));
+    }
+
+    var bad_req_query_any: any = jsonParse("{\"method\":\"GET\",\"path\":\"/q\",\"headers\":{},\"query\":{\"page\":1}}").0;
+    var bad_req_query_r = jsonDecodeAsHttpRequest(bad_req_query_any);
+    println(bad_req_query_r.1 != nil);
+    if (bad_req_query_r.1 != nil) {
+        var qdata: map<string, any> = bad_req_query_r.1.data as map<string, any>;
+        println(mapGet(qdata, "context"));
+        println(mapGet(qdata, "path"));
+        println(mapGet(qdata, "expectedType"));
+        println(mapGet(qdata, "actualType"));
+    }
+
+    var parse_like_data: map<string, any> = {
+        "path": "$",
+        "line": 3,
+        "column": 9,
+        "expectedType": "string",
+        "actualType": "int"
+    };
+    var parse_like_err: Error = { code: ERR_PARSE, message: "bad value", data: parse_like_data };
+    var wrapped_parse_like = jsonDecodeWrapError(parse_like_err, "jsonDecodeAsHttpRequest.body", "$.body");
+    println(wrapped_parse_like != nil);
+    if (wrapped_parse_like != nil) {
+        var wrapped_data: map<string, any> = wrapped_parse_like.data as map<string, any>;
+        println(mapGet(wrapped_data, "path"));
+        println(mapGet(wrapped_data, "line"));
+        println(mapGet(wrapped_data, "column"));
+        println(mapGet(wrapped_data, "expectedType"));
+        println(mapGet(wrapped_data, "actualType"));
+    }
+
+    var bad_env_any: any = jsonParse("{\"ok\":true,\"error\":{\"code\":1,\"message\":\"oops\"}}").0;
+    var bad_env_r = jsonDecodeAsApiEnvelope(bad_env_any);
+    println(bad_env_r.1 != nil);
+    if (bad_env_r.1 != nil) {
+        println(bad_env_r.1.code == ERR_PARSE);
+        println(find(bad_env_r.1.message, "ok=true") >= 0);
+        var bad_env_data: map<string, any> = bad_env_r.1.data as map<string, any>;
+        println(mapGet(bad_env_data, "path"));
+        println(mapGet(bad_env_data, "kind"));
+        println(mapGet(bad_env_data, "expectedType"));
+        println(mapGet(bad_env_data, "actualType"));
+    }
+
+    var missing_error_env_any: any = jsonParse("{\"ok\":false,\"data\":{}}").0;
+    var missing_error_env_r = jsonDecodeAsApiEnvelope(missing_error_env_any);
+    println(missing_error_env_r.1 != nil);
+    if (missing_error_env_r.1 != nil) {
+        println(missing_error_env_r.1.code == ERR_PARSE);
+        println(find(missing_error_env_r.1.message, "ok=false") >= 0);
+        var missing_data: map<string, any> = missing_error_env_r.1.data as map<string, any>;
+        println(mapGet(missing_data, "path"));
+        println(mapGet(missing_data, "kind"));
+        println(mapGet(missing_data, "expectedType"));
+        println(mapGet(missing_data, "actualType"));
+    }
+}

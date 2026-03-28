@@ -1,0 +1,5 @@
+import "visibility_feature_lib.tblo";
+
+func main(): void {
+    println("tag=" + moduleTag());
+}

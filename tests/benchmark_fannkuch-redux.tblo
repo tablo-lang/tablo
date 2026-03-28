@@ -1,0 +1,92 @@
+// fannkuch-redux benchmark (Computer Language Benchmarks Game)
+// Spec: https://benchmarksgame-team.pages.debian.net/benchmarksgame/performance/fannkuchredux.html
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_fannkuch-redux.tblo 11
+//
+// Input:
+//   N is read from argv[0]. If no argument is provided, defaults to 11.
+
+func fannkuch(n: int): int {
+    // Current permutation and scratch space.
+    var s: array<int> = [];
+    var t: array<int> = [];
+    // Tompkin-Paige counters (same length as s).
+    var c: array<int> = [];
+
+    var j: int = 0;
+    while (j < n) {
+        push(s, j);
+        push(t, 0);
+        push(c, 0);
+        j = j + 1;
+    }
+
+    var max_flips: int = 0;
+    var checksum: int = 0;
+
+    // Sign alternates each time we produce a new permutation (like benchmarksgame).
+    // Starts at +1 so the first permutation after the identity contributes negative.
+    var sign: int = 1;
+
+    // Tompkin-Paige iterative permutation generation.
+    var i: int = 0;
+    while (i < n) {
+        // rotate(i): rotate the prefix [0..i] left by 1 element.
+        rotatePrefixLeft(s, i);
+
+        if (c[i] >= i) {
+            c[i] = 0;
+            i = i + 1;
+            continue;
+        }
+
+        c[i] = c[i] + 1;
+        i = 1;
+        sign = -sign;
+
+        if (s[0] != 0) {
+            var flips: int = 0;
+            var s0: int = s[0];
+
+            // Fast path: if s[s0] == 0 then it takes exactly one flip.
+            if (s[s0] == 0) {
+                flips = 1;
+            } else {
+                // Copy s into t (scratch).
+                copyInto(t, s);
+
+                // Count prefix reversals until 0 is at the front.
+                var head: int = t[0];
+                while (head != 0) {
+                    reversePrefix(t, head);
+                    flips = flips + 1;
+                    head = t[0];
+                }
+            }
+
+            if (flips > max_flips) {
+                max_flips = flips;
+            }
+            checksum = checksum + (sign * flips);
+        }
+    }
+
+    println(str(checksum));
+    return max_flips;
+}
+
+func main(): void {
+    var n: int = 11;
+    if (len(argv) > 0) {
+        n = toInt(argv[0]);
+    }
+
+    // Keep behavior predictable if the input is missing/invalid.
+    if (n < 1) {
+        n = 1;
+    }
+
+    var max_flips: int = fannkuch(n);
+    println("Pfannkuchen(" + str(n) + ") = " + str(max_flips));
+}

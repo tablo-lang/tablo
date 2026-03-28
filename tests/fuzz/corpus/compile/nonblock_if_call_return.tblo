@@ -1,0 +1,12 @@
+func ready(): bool {
+    return true;
+}
+
+func probe(flag: bool): bool {
+    if (!ready()) return false;
+    return flag;
+}
+
+func main(): void {
+    println(str(probe(true)));
+}

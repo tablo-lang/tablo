@@ -1,0 +1,27 @@
+async func load(): int {
+    return 41;
+}
+
+async func pair(): (int, string) {
+    return (3, "z");
+}
+
+async func done(): void {
+    println("body");
+}
+
+func main(): void {
+    var loaded = load();
+    println(typeOf(loaded));
+    println(str(futureIsReady(loaded)));
+    println(str(futureGet(loaded)));
+
+    var paired = pair();
+    var pairValue: (int, string) = futureGet(paired);
+    println(str(pairValue.0) + pairValue.1);
+
+    var finished = done();
+    println(typeOf(finished));
+    println(str(futureIsReady(finished)));
+    println(typeOf(futureGet(finished)));
+}

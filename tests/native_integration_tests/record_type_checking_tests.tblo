@@ -1,0 +1,18 @@
+// Record Type Checking Tests - Tests for record type errors (should fail)
+
+record Point {
+    x: int;
+    y: int
+}
+
+record Person {
+    name: string;
+    age: int
+}
+
+func main() {
+    // This file should produce type errors
+    // Error 1: Assign wrong type to record field
+    var p: Point = { x: 10, y: 20 };
+    p.x = "hello";  // Error: assigning string to int field
+}

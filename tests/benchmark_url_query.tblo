@@ -1,0 +1,168 @@
+// URL/query micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_url_query.tblo
+//   ./build/Release/tablo run tests/benchmark_url_query.tblo 2
+
+import "native_integration_tests/fixtures/url.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchUrlEncode(iters: int): void {
+    var input: string = "user=id-42&name=Alice Doe/West?x=1+y&email=a+b@example.com";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = urlEncode(input);
+        if (r_w.1 != nil) panic("urlEncode warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = urlEncode(input);
+        if (r.1 != nil) panic("urlEncode failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf urlEncode", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchUrlDecode(iters: int): void {
+    var input: string = "user%3Did-42%26name%3DAlice%20Doe%2FWest%3Fx%3D1%2By%26email%3Da%2Bb%40example.com";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = urlDecode(input);
+        if (r_w.1 != nil) panic("urlDecode warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = urlDecode(input);
+        if (r.1 != nil) panic("urlDecode failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf urlDecode", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchQueryParse(iters: int): void {
+    var input: string = "name=Alice+Doe&city=New%20York&token=a%2Bb%2Fc&empty=&lang=en&country=US&page=42";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = queryParse(input);
+        if (r_w.1 != nil) panic("queryParse warmup failed: " + r_w.1.message);
+        sink = sink + mapCount(r_w.0);
+        if (mapGetString(r_w.0, "city") == "New York") {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = queryParse(input);
+        if (r.1 != nil) panic("queryParse failed: " + r.1.message);
+        sink = sink + mapCount(r.0);
+        if (mapGetString(r.0, "city") == "New York") {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf queryParse", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchQueryStringify(iters: int): void {
+    var params: map<string, string> = {};
+    mapSetString(params, "name", "Alice Doe");
+    mapSetString(params, "city", "New York");
+    mapSetString(params, "token", "a+b/c");
+    mapSetString(params, "empty", "");
+    mapSetString(params, "lang", "en");
+    mapSetString(params, "country", "US");
+    mapSetString(params, "page", "42");
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = queryStringify(params);
+        if (r_w.1 != nil) panic("queryStringify warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        if (find(r_w.0, "name=Alice%20Doe") >= 0) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = queryStringify(params);
+        if (r.1 != nil) panic("queryStringify failed: " + r.1.message);
+        sink = sink + len(r.0);
+        if (find(r.0, "name=Alice%20Doe") >= 0) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf queryStringify", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang URL/Query Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    // Keep encode/decode sample windows long enough to reduce timing jitter
+    // on busy CI/desktop machines.
+    benchUrlEncode(160000 * scale);
+    benchUrlDecode(160000 * scale);
+    benchQueryParse(60000 * scale);
+    benchQueryStringify(60000 * scale);
+
+    println("URL/query benchmark complete!");
+}

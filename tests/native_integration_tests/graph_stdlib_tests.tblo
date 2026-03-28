@@ -1,0 +1,219 @@
+import "fixtures/graph.tblo";
+
+func findIndex(items: array<string>, target: string): int {
+    var i: int = 0;
+    while (i < len(items)) {
+        if (items[i] == target) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+func main(): void {
+    var store: GraphStore = graphNew();
+
+    var s0: GraphStats = graphStats(store);
+    println(s0.nodeCount == 0);
+    println(s0.edgeCount == 0);
+    println(s0.isolatedCount == 0);
+
+    var bad_node = graphAddNode(store, "");
+    println(bad_node.2 != nil);
+    if (bad_node.2 != nil) {
+        println(bad_node.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var n1 = graphAddNode(store, "A");
+    store = n1.0;
+    println(n1.2 == nil);
+    println(n1.1);
+
+    var n1_dup = graphAddNode(store, "A");
+    store = n1_dup.0;
+    println(n1_dup.2 == nil);
+    println(!n1_dup.1);
+
+    var e1 = graphAddEdge(store, "A", "B");
+    store = e1.0;
+    println(e1.2 == nil);
+    println(e1.1);
+
+    var e2 = graphAddEdge(store, "A", "C");
+    store = e2.0;
+    println(e2.2 == nil);
+    println(e2.1);
+
+    var e3 = graphAddEdge(store, "B", "D");
+    store = e3.0;
+    println(e3.2 == nil);
+    println(e3.1);
+
+    var e4 = graphAddEdge(store, "C", "D");
+    store = e4.0;
+    println(e4.2 == nil);
+    println(e4.1);
+
+    var e5 = graphAddEdge(store, "D", "E");
+    store = e5.0;
+    println(e5.2 == nil);
+    println(e5.1);
+
+    var e6 = graphAddEdge(store, "B", "C");
+    store = e6.0;
+    println(e6.2 == nil);
+    println(e6.1);
+
+    var e_dup = graphAddEdge(store, "A", "B");
+    store = e_dup.0;
+    println(e_dup.2 == nil);
+    println(!e_dup.1);
+
+    println(graphNodeCount(store) == 5);
+    var names: array<string> = graphNodeNames(store);
+    println(len(names) == 5);
+
+    println(graphHasNode(store, "D"));
+    println(!graphHasNode(store, "Z"));
+
+    var he = graphHasEdge(store, "A", "B");
+    println(he.1 == nil);
+    println(he.0);
+
+    var he2 = graphHasEdge(store, "A", "Z");
+    println(he2.1 == nil);
+    println(!he2.0);
+
+    var neigh_a = graphNeighbors(store, "A");
+    println(neigh_a.1 == nil);
+    if (neigh_a.1 == nil) {
+        println(len(neigh_a.0) == 2);
+        println(neigh_a.0[0] == "B");
+        println(neigh_a.0[1] == "C");
+    }
+
+    var out_b = graphOutDegree(store, "B");
+    println(out_b.1 == nil);
+    if (out_b.1 == nil) {
+        println(out_b.0 == 2);
+    }
+
+    var in_d = graphInDegree(store, "D");
+    println(in_d.1 == nil);
+    if (in_d.1 == nil) {
+        println(in_d.0 == 2);
+    }
+
+    var bfs = graphBfsOrder(store, "A", 10);
+    println(bfs.1 == nil);
+    if (bfs.1 == nil) {
+        println(len(bfs.0) == 5);
+        println(bfs.0[0] == "A");
+        println(findIndex(bfs.0, "E") >= 0);
+        println(findIndex(bfs.0, "D") > findIndex(bfs.0, "A"));
+    }
+
+    var bfs_bad = graphBfsOrder(store, "A", 0);
+    println(bfs_bad.1 != nil);
+    if (bfs_bad.1 != nil) {
+        println(bfs_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var sp = graphShortestPath(store, "A", "E", 20);
+    println(sp.2 == nil);
+    println(sp.1);
+    if (sp.2 == nil && sp.1) {
+        println(len(sp.0) == 4);
+        println(sp.0[0] == "A");
+        println(sp.0[3] == "E");
+        println((sp.0[1] == "B") || (sp.0[1] == "C"));
+    }
+
+    var sp_nf = graphShortestPath(store, "E", "A", 20);
+    println(sp_nf.2 == nil);
+    println(!sp_nf.1);
+    println(len(sp_nf.0) == 0);
+
+    var sp_limit = graphShortestPath(store, "A", "E", 2);
+    println(sp_limit.2 != nil);
+    if (sp_limit.2 != nil) {
+        println(sp_limit.2.code == ERR_LIMIT);
+    }
+
+    var topo = graphTopologicalSort(store, 20);
+    println(topo.2 == nil);
+    println(topo.1);
+    if (topo.2 == nil && topo.1) {
+        println(len(topo.0) == 5);
+        println(findIndex(topo.0, "A") < findIndex(topo.0, "B"));
+        println(findIndex(topo.0, "A") < findIndex(topo.0, "C"));
+        println(findIndex(topo.0, "B") < findIndex(topo.0, "D"));
+        println(findIndex(topo.0, "C") < findIndex(topo.0, "D"));
+        println(findIndex(topo.0, "D") < findIndex(topo.0, "E"));
+    }
+
+    var cyc: GraphStore = graphNew();
+    var c1 = graphAddEdge(cyc, "X", "Y");
+    cyc = c1.0;
+    println(c1.2 == nil);
+    var c2 = graphAddEdge(cyc, "Y", "Z");
+    cyc = c2.0;
+    println(c2.2 == nil);
+    var c3 = graphAddEdge(cyc, "Z", "X");
+    cyc = c3.0;
+    println(c3.2 == nil);
+
+    var topo_c = graphTopologicalSort(cyc, 10);
+    println(topo_c.2 == nil);
+    println(!topo_c.1);
+    println(len(topo_c.0) < 3);
+
+    var re1 = graphRemoveEdge(store, "B", "C");
+    store = re1.0;
+    println(re1.2 == nil);
+    println(re1.1);
+
+    var re2 = graphRemoveEdge(store, "B", "C");
+    store = re2.0;
+    println(re2.2 == nil);
+    println(!re2.1);
+
+    var has_bc = graphHasEdge(store, "B", "C");
+    println(has_bc.1 == nil);
+    println(!has_bc.0);
+
+    var rn = graphRemoveNode(store, "C");
+    store = rn.0;
+    println(rn.2 == nil);
+    println(rn.1);
+
+    println(!graphHasNode(store, "C"));
+
+    var has_ac = graphHasEdge(store, "A", "C");
+    println(has_ac.1 == nil);
+    println(!has_ac.0);
+
+    var has_cd = graphHasEdge(store, "C", "D");
+    println(has_cd.1 == nil);
+    println(!has_cd.0);
+
+    var bfs2 = graphBfsOrder(store, "A", 10);
+    println(bfs2.1 == nil);
+    if (bfs2.1 == nil) {
+        println(len(bfs2.0) == 4);
+        println(findIndex(bfs2.0, "C") == -1);
+        println(findIndex(bfs2.0, "E") >= 0);
+    }
+
+    var neigh_missing = graphNeighbors(store, "MISSING");
+    println(neigh_missing.1 != nil);
+    if (neigh_missing.1 != nil) {
+        println(neigh_missing.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var s1: GraphStats = graphStats(store);
+    println(s1.nodeCount == 4);
+    println(s1.edgeCount == 3);
+    println(s1.isolatedCount == 0);
+}

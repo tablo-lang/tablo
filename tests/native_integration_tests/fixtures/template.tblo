@@ -1,0 +1,259 @@
+// String template helpers for CLI/backend message rendering.
+// Placeholders use {{key}} syntax with strict validation.
+
+var TEMPLATE_ALLOWED_KEY_CHARS: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-";
+
+func templateStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func templateError(code: int,
+                   message: string,
+                   context: string,
+                   templateText: string,
+                   position: int,
+                   detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "template": templateText,
+        "position": position
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return templateStdError(code, message, data);
+}
+
+func templateIsValidKey(key: string): bool {
+    if (key == "") {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(key)) {
+        if (find(TEMPLATE_ALLOWED_KEY_CHARS, substring(key, i, 1)) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func templateFindClose(text: string, startIndex: int): int {
+    var i: int = startIndex;
+    while ((i + 1) < len(text)) {
+        if (substring(text, i, 2) == "}}") {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+func templateNormalizeKey(rawKey: string, templateText: string, openIndex: int): (string, Error?) {
+    var key: string = trim(rawKey);
+    if (key == "") {
+        return ("",
+                templateError(ERR_PARSE,
+                              "template placeholder key cannot be empty",
+                              "template.placeholder.empty",
+                              templateText,
+                              openIndex,
+                              rawKey));
+    }
+
+    if (!templateIsValidKey(key)) {
+        return ("",
+                templateError(ERR_PARSE,
+                              "template placeholder key contains invalid characters",
+                              "template.placeholder.invalidKey",
+                              templateText,
+                              openIndex,
+                              key));
+    }
+
+    return (key, nil);
+}
+
+func templateExtractKeys(templateText: string): (array<string>, Error?) {
+    var keys_out: array<string> = [];
+    var seen: map<string, bool> = {};
+
+    var i: int = 0;
+    while (i < len(templateText)) {
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "{{") {
+            var close: int = templateFindClose(templateText, i + 2);
+            if (close < 0) {
+                return (keys_out,
+                        templateError(ERR_PARSE,
+                                      "template has unmatched opening delimiter",
+                                      "template.parse.unmatchedOpen",
+                                      templateText,
+                                      i,
+                                      nil));
+            }
+
+            var raw_key: string = substring(templateText, i + 2, close - (i + 2));
+            var key_r = templateNormalizeKey(raw_key, templateText, i);
+            if (key_r.1 != nil) {
+                return (keys_out, key_r.1);
+            }
+
+            if (!mapHasString(seen, key_r.0)) {
+                push(keys_out, key_r.0);
+                mapSetString(seen, key_r.0, true);
+            }
+
+            i = close + 2;
+            continue;
+        }
+
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "}}") {
+            return (keys_out,
+                    templateError(ERR_PARSE,
+                                  "template has unmatched closing delimiter",
+                                  "template.parse.unmatchedClose",
+                                  templateText,
+                                  i,
+                                  nil));
+        }
+
+        i = i + 1;
+    }
+
+    return (keys_out, nil);
+}
+
+func templateValidate(templateText: string): Error? {
+    var keys_r = templateExtractKeys(templateText);
+    if (keys_r.1 != nil) {
+        return keys_r.1;
+    }
+    return nil;
+}
+
+func templateRender(templateText: string, values: map<string, any>): (string, Error?) {
+    var out: string = "";
+
+    var i: int = 0;
+    while (i < len(templateText)) {
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "{{") {
+            var close: int = templateFindClose(templateText, i + 2);
+            if (close < 0) {
+                return ("",
+                        templateError(ERR_PARSE,
+                                      "template has unmatched opening delimiter",
+                                      "template.render.unmatchedOpen",
+                                      templateText,
+                                      i,
+                                      nil));
+            }
+
+            var raw_key: string = substring(templateText, i + 2, close - (i + 2));
+            var key_r = templateNormalizeKey(raw_key, templateText, i);
+            if (key_r.1 != nil) {
+                return ("", key_r.1);
+            }
+
+            var key: string = key_r.0;
+            if (!mapHasString(values, key)) {
+                return ("",
+                        templateError(ERR_INVALID_ARGUMENT,
+                                      "templateRender missing required key",
+                                      "template.render.missingKey",
+                                      templateText,
+                                      i,
+                                      key));
+            }
+
+            var value_any: any = mapGetString(values, key);
+            if (value_any == nil) {
+                return ("",
+                        templateError(ERR_INVALID_ARGUMENT,
+                                      "templateRender required key has nil value",
+                                      "template.render.nilValue",
+                                      templateText,
+                                      i,
+                                      key));
+            }
+            out = out + str(value_any);
+
+            i = close + 2;
+            continue;
+        }
+
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "}}") {
+            return ("",
+                    templateError(ERR_PARSE,
+                                  "template has unmatched closing delimiter",
+                                  "template.render.unmatchedClose",
+                                  templateText,
+                                  i,
+                                  nil));
+        }
+
+        out = out + substring(templateText, i, 1);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func templateRenderWithDefault(templateText: string,
+                               values: map<string, any>,
+                               missingDefault: string): (string, Error?) {
+    var out: string = "";
+
+    var i: int = 0;
+    while (i < len(templateText)) {
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "{{") {
+            var close: int = templateFindClose(templateText, i + 2);
+            if (close < 0) {
+                return ("",
+                        templateError(ERR_PARSE,
+                                      "template has unmatched opening delimiter",
+                                      "template.render.unmatchedOpen",
+                                      templateText,
+                                      i,
+                                      nil));
+            }
+
+            var raw_key: string = substring(templateText, i + 2, close - (i + 2));
+            var key_r = templateNormalizeKey(raw_key, templateText, i);
+            if (key_r.1 != nil) {
+                return ("", key_r.1);
+            }
+
+            var key: string = key_r.0;
+            if (!mapHasString(values, key)) {
+                out = out + missingDefault;
+            } else {
+                var value_any: any = mapGetString(values, key);
+                if (value_any == nil) {
+                    out = out + missingDefault;
+                } else {
+                    out = out + str(value_any);
+                }
+            }
+
+            i = close + 2;
+            continue;
+        }
+
+        if ((i + 1) < len(templateText) && substring(templateText, i, 2) == "}}") {
+            return ("",
+                    templateError(ERR_PARSE,
+                                  "template has unmatched closing delimiter",
+                                  "template.render.unmatchedClose",
+                                  templateText,
+                                  i,
+                                  nil));
+        }
+
+        out = out + substring(templateText, i, 1);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}

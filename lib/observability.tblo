@@ -1,0 +1,258 @@
+// Observability helpers: lightweight in-process metrics primitives.
+// Uses syncArc guards so updates are serialized and thread-safe.
+
+var OBS_METRICS_ARC_ID: int = -1;
+
+func observabilityError(code: int, message: string, data: any): Error {
+    var err: Error = {
+        code: code,
+        message: message,
+        data: data
+    };
+    return err;
+}
+
+func metricsDefaultState(): map<string, any> {
+    var state: map<string, any> = {
+        "counters": {},
+        "timers": {}
+    };
+    return state;
+}
+
+func metricsMapIntOrDefault(values: map<string, any>, key: string, fallback: int): int {
+    var current_any: any = mapGetString(values, key);
+    if (current_any == nil || typeOf(current_any) != "int") {
+        return fallback;
+    }
+    return current_any as int;
+}
+
+func metricsNormalizeState(stateAny: any): map<string, any> {
+    var state: map<string, any> = {};
+    if (stateAny != nil && typeOf(stateAny) == "map") {
+        state = stateAny as map<string, any>;
+    }
+
+    var counters_any: any = mapGetString(state, "counters");
+    if (counters_any == nil || typeOf(counters_any) != "map") {
+        mapSetString(state, "counters", {});
+    }
+
+    var timers_any: any = mapGetString(state, "timers");
+    if (timers_any == nil || typeOf(timers_any) != "map") {
+        mapSetString(state, "timers", {});
+    }
+
+    return state;
+}
+
+func metricsEnsureArc(): (int, Error?) {
+    if (OBS_METRICS_ARC_ID >= 0) {
+        return (OBS_METRICS_ARC_ID, nil);
+    }
+
+    var create_r = syncArcCreate(metricsDefaultState() as any);
+    if (create_r.1 != nil) {
+        return (-1,
+                observabilityError(create_r.1.code,
+                                   "metrics init failed: " + create_r.1.message,
+                                   create_r.1.data));
+    }
+
+    OBS_METRICS_ARC_ID = create_r.0;
+    return (OBS_METRICS_ARC_ID, nil);
+}
+
+func metricsAcquireState(): (int, map<string, any>, Error?) {
+    var ensured = metricsEnsureArc();
+    if (ensured.1 != nil) {
+        return (-1, {}, ensured.1);
+    }
+
+    var guard_r = syncArcGuardAcquire(ensured.0);
+    if (guard_r.1 != nil) {
+        return (-1,
+                {},
+                observabilityError(guard_r.1.code,
+                                   "metrics guard acquire failed: " + guard_r.1.message,
+                                   guard_r.1.data));
+    }
+
+    var guard_id: int = guard_r.0;
+    var read_r = syncArcGuardRead(guard_id);
+    if (read_r.1 != nil) {
+        var _ = syncArcGuardRelease(guard_id);
+        return (-1,
+                {},
+                observabilityError(read_r.1.code,
+                                   "metrics guard read failed: " + read_r.1.message,
+                                   read_r.1.data));
+    }
+
+    var state = metricsNormalizeState(read_r.0);
+    return (guard_id, state, nil);
+}
+
+func metricsReleaseGuard(guardId: int): Error? {
+    var release_r = syncArcGuardRelease(guardId);
+    if (release_r.1 != nil) {
+        return observabilityError(release_r.1.code,
+                                  "metrics guard release failed: " + release_r.1.message,
+                                  release_r.1.data);
+    }
+    return nil;
+}
+
+func metricsWriteAndRelease(guardId: int, state: map<string, any>): Error? {
+    var write_r = syncArcGuardWrite(guardId, state as any);
+    var release_err = metricsReleaseGuard(guardId);
+    if (write_r.1 != nil) {
+        return observabilityError(write_r.1.code,
+                                  "metrics guard write failed: " + write_r.1.message,
+                                  write_r.1.data);
+    }
+    return release_err;
+}
+
+func metricsInc(name: string, delta: int): (bool, Error?) {
+    if (name == "") {
+        return (false, observabilityError(ERR_INVALID_ARGUMENT, "metricsInc name cannot be empty", nil));
+    }
+
+    var acquired = metricsAcquireState();
+    if (acquired.2 != nil) {
+        return (false, acquired.2);
+    }
+
+    var guard_id: int = acquired.0;
+    var state: map<string, any> = acquired.1;
+    var counters: map<string, any> = mapGetString(state, "counters") as map<string, any>;
+    var current: int = metricsMapIntOrDefault(counters, name, 0);
+    mapSetString(counters, name, current + delta);
+    mapSetString(state, "counters", counters);
+
+    var write_err = metricsWriteAndRelease(guard_id, state);
+    if (write_err != nil) {
+        return (false, write_err);
+    }
+    return (true, nil);
+}
+
+func metricsObserveMs(name: string, valueMs: int): (bool, Error?) {
+    if (name == "") {
+        return (false, observabilityError(ERR_INVALID_ARGUMENT, "metricsObserveMs name cannot be empty", nil));
+    }
+    if (valueMs < 0) {
+        return (false, observabilityError(ERR_INVALID_ARGUMENT, "metricsObserveMs valueMs must be >= 0", valueMs));
+    }
+
+    var acquired = metricsAcquireState();
+    if (acquired.2 != nil) {
+        return (false, acquired.2);
+    }
+
+    var guard_id: int = acquired.0;
+    var state: map<string, any> = acquired.1;
+    var timers: map<string, any> = mapGetString(state, "timers") as map<string, any>;
+    var bucket_any: any = mapGetString(timers, name);
+    var bucket: map<string, any> = {};
+    if (bucket_any != nil && typeOf(bucket_any) == "map") {
+        bucket = bucket_any as map<string, any>;
+    }
+
+    var count: int = metricsMapIntOrDefault(bucket, "count", 0);
+    var total_ms: int = metricsMapIntOrDefault(bucket, "totalMs", 0);
+    var min_ms: int = metricsMapIntOrDefault(bucket, "minMs", valueMs);
+    var max_ms: int = metricsMapIntOrDefault(bucket, "maxMs", valueMs);
+
+    count = count + 1;
+    total_ms = total_ms + valueMs;
+    if (count == 1 || valueMs < min_ms) {
+        min_ms = valueMs;
+    }
+    if (count == 1 || valueMs > max_ms) {
+        max_ms = valueMs;
+    }
+
+    mapSetString(bucket, "count", count);
+    mapSetString(bucket, "totalMs", total_ms);
+    mapSetString(bucket, "minMs", min_ms);
+    mapSetString(bucket, "maxMs", max_ms);
+    mapSetString(timers, name, bucket);
+    mapSetString(state, "timers", timers);
+
+    var write_err = metricsWriteAndRelease(guard_id, state);
+    if (write_err != nil) {
+        return (false, write_err);
+    }
+    return (true, nil);
+}
+
+func metricsObserveSinceMs(name: string, startMillis: int): (bool, Error?) {
+    if (startMillis < 0) {
+        return (false, observabilityError(ERR_INVALID_ARGUMENT, "metricsObserveSinceMs startMillis must be >= 0", startMillis));
+    }
+    var elapsed_ms: int = timeSinceMillis(startMillis);
+    if (elapsed_ms < 0) {
+        elapsed_ms = 0;
+    }
+    return metricsObserveMs(name, elapsed_ms);
+}
+
+func metricsSnapshot(): (map<string, any>, Error?) {
+    var acquired = metricsAcquireState();
+    if (acquired.2 != nil) {
+        return ({}, acquired.2);
+    }
+
+    var guard_id: int = acquired.0;
+    var state: map<string, any> = acquired.1;
+    var release_err = metricsReleaseGuard(guard_id);
+    if (release_err != nil) {
+        return ({}, release_err);
+    }
+    return (state, nil);
+}
+
+func metricsSnapshotJson(pretty: bool): (string, Error?) {
+    var snapshot_r = metricsSnapshot();
+    if (snapshot_r.1 != nil) {
+        return ("", snapshot_r.1);
+    }
+
+    if (pretty) {
+        var pretty_r = jsonStringifyPretty(snapshot_r.0);
+        if (pretty_r.1 != nil) {
+            return ("",
+                    observabilityError(pretty_r.1.code,
+                                       "metricsSnapshotJson encode failed: " + pretty_r.1.message,
+                                       pretty_r.1.data));
+        }
+        return (pretty_r.0, nil);
+    }
+
+    var compact_r = jsonStringify(snapshot_r.0);
+    if (compact_r.1 != nil) {
+        return ("",
+                observabilityError(compact_r.1.code,
+                                   "metricsSnapshotJson encode failed: " + compact_r.1.message,
+                                   compact_r.1.data));
+    }
+    return (compact_r.0, nil);
+}
+
+func metricsReset(): (bool, Error?) {
+    var acquired = metricsAcquireState();
+    if (acquired.2 != nil) {
+        return (false, acquired.2);
+    }
+
+    var guard_id: int = acquired.0;
+    var write_err = metricsWriteAndRelease(guard_id, metricsDefaultState());
+    if (write_err != nil) {
+        return (false, write_err);
+    }
+    return (true, nil);
+}
+

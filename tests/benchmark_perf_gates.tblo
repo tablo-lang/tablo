@@ -1,0 +1,770 @@
+// Performance gate benchmark set.
+// Focused on JSON + map/set hot paths used by backend workloads.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_perf_gates.tblo
+//   ./build/Release/tablo run tests/benchmark_perf_gates.tblo 2
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchJsonParseGate(iters: int): void {
+    var json: string = "{\"user\":\"u123\",\"amount\":42,\"ok\":true,\"tags\":[\"a\",\"b\",\"c\"]}";
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (_, err_w) = jsonParse(json);
+        if (err_w != nil) panic("jsonParse warmup failed");
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (_, err) = jsonParse(json);
+        if (err != nil) panic("jsonParse failed");
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonParse", iters, start, end);
+}
+
+func benchJsonParseScalarGate(iters: int): void {
+    var json: string = "\"tablo-fast-path\"";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (value_w, err_w) = jsonParse(json);
+        if (err_w != nil) panic("jsonParse scalar warmup failed");
+        sink = sink + len(value_w as string);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (value, err) = jsonParse(json);
+        if (err != nil) panic("jsonParse scalar failed");
+        sink = sink + len(value as string);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonParse scalar", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchJsonParseObjectGate(iters: int): void {
+    var json: string = "{\"ok\":true,\"count\":42,\"name\":\"tablo\",\"tags\":[\"a\",\"b\",\"c\"],\"nums\":[1,2,3,4],\"flags\":[true,false,true]}";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (obj_w, err_w) = jsonParse(json);
+        if (err_w != nil) panic("jsonParse object warmup failed");
+        var m_w: map<string, any> = obj_w as map<string, any>;
+        sink = sink + (mapGet(m_w, "count") as int);
+        var tags_w: array<any> = mapGet(m_w, "tags") as array<any>;
+        sink = sink + len(tags_w[0] as string);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (obj, err) = jsonParse(json);
+        if (err != nil) panic("jsonParse object failed");
+        var m: map<string, any> = obj as map<string, any>;
+        sink = sink + (mapGet(m, "count") as int);
+        var tags: array<any> = mapGet(m, "tags") as array<any>;
+        sink = sink + len(tags[0] as string);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonParse object", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func makePayload(): map<string, any> {
+    var m: map<string, any> = {};
+    mapSet(m, "ok", true);
+    mapSet(m, "message", "hello");
+    mapSet(m, "user", "u123");
+    mapSet(m, "count", 42);
+    mapSet(m, "values", [1, 2, 3, 4, 5]);
+    return m;
+}
+
+func makeObjectPayload(): map<string, any> {
+    var m: map<string, any> = {};
+    mapSet(m, "ok", true);
+    mapSet(m, "count", 42);
+    mapSet(m, "name", "tablo");
+    mapSet(m, "tags", ["a", "b", "c"]);
+    mapSet(m, "nums", [1, 2, 3, 4]);
+    mapSet(m, "flags", [true, false, true]);
+    return m;
+}
+
+func benchJsonStringifyGate(iters: int): void {
+    var payload: map<string, any> = makePayload();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (s_w, err_w) = jsonStringify(payload);
+        if (err_w != nil) panic("jsonStringify warmup failed");
+        sink = sink + len(s_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (s, err) = jsonStringify(payload);
+        if (err != nil) panic("jsonStringify failed");
+        sink = sink + len(s);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonStringify", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchJsonStringifyScalarGate(iters: int): void {
+    var payload: string = "tablo-fast-path";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (s_w, err_w) = jsonStringify(payload);
+        if (err_w != nil) panic("jsonStringify scalar warmup failed");
+        sink = sink + len(s_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (s, err) = jsonStringify(payload);
+        if (err != nil) panic("jsonStringify scalar failed");
+        sink = sink + len(s);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonStringify scalar", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchJsonStringifyObjectGate(iters: int): void {
+    var payload: map<string, any> = makeObjectPayload();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var (s_w, err_w) = jsonStringify(payload);
+        if (err_w != nil) panic("jsonStringify object warmup failed");
+        sink = sink + len(s_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var (s, err) = jsonStringify(payload);
+        if (err != nil) panic("jsonStringify object failed");
+        sink = sink + len(s);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf jsonStringify object", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func buildHeaderKeys(): array<string> {
+    return [
+        "host", "user-agent", "accept", "accept-encoding",
+        "content-type", "content-length", "authorization", "x-request-id",
+        "x-forwarded-for", "x-forwarded-proto", "cache-control", "connection",
+        "date", "etag", "if-none-match", "server"
+    ];
+}
+
+func buildPrefixedKeys(prefix: string, count: int): array<string> {
+    var out_keys: array<string> = [];
+    var i: int = 0;
+    while (i < count) {
+        push(out_keys, prefix + str(i));
+        i = i + 1;
+    }
+    return out_keys;
+}
+
+func buildHighBitIntKeys(count: int): array<int> {
+    var keys_i: array<int> = [];
+    var i: int = 0;
+    while (i < count) {
+        // Keys differ in high 64-bit space to catch low-bit hash truncation.
+        push(keys_i, (i * 8589934592) + 17);
+        i = i + 1;
+    }
+    return keys_i;
+}
+
+func benchMapHeaderGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var h_w: map<string, int> = {};
+        var j_w: int = 0;
+        while (j_w < len(header_keys)) {
+            mapSet(h_w, header_keys[j_w], j_w);
+            j_w = j_w + 1;
+        }
+        var v_w: any = mapGet(h_w, "content-type");
+        if (v_w != nil) sink = sink + (v_w as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var h: map<string, int> = {};
+        var j: int = 0;
+        while (j < len(header_keys)) {
+            mapSet(h, header_keys[j], j);
+            j = j + 1;
+        }
+        var v: any = mapGet(h, "content-type");
+        if (v != nil) sink = sink + (v as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<string,int> build+get", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchMapHeaderSetHasGetGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var h_w: map<string, int> = {};
+        var j_w: int = 0;
+        while (j_w < len(header_keys)) {
+            mapSet(h_w, header_keys[j_w], j_w);
+            j_w = j_w + 1;
+        }
+        if (mapHas(h_w, "content-type")) sink = sink + 1;
+        var v_w: any = mapGet(h_w, "content-type");
+        if (v_w != nil) sink = sink + (v_w as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var h: map<string, int> = {};
+        var j: int = 0;
+        while (j < len(header_keys)) {
+            mapSet(h, header_keys[j], j);
+            j = j + 1;
+        }
+        if (mapHas(h, "content-type")) sink = sink + 1;
+        var v: any = mapGet(h, "content-type");
+        if (v != nil) sink = sink + (v as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<string,int> set+has+get", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchMapHeaderFastStringGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var h_w: map<string, int> = {};
+        var j_w: int = 0;
+        while (j_w < len(header_keys)) {
+            mapSetString(h_w, header_keys[j_w], j_w);
+            j_w = j_w + 1;
+        }
+        if (mapHasString(h_w, "content-type")) sink = sink + 1;
+        var v_w: any = mapGetString(h_w, "content-type");
+        if (v_w != nil) sink = sink + (v_w as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var h: map<string, int> = {};
+        var j: int = 0;
+        while (j < len(header_keys)) {
+            mapSetString(h, header_keys[j], j);
+            j = j + 1;
+        }
+        if (mapHasString(h, "content-type")) sink = sink + 1;
+        var v: any = mapGetString(h, "content-type");
+        if (v != nil) sink = sink + (v as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<string,int> fast-string set+has+get", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchMapHeaderFastStringReadGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var probe_keys: array<string> = [
+        "host", "content-type", "x-request-id", "missing-header",
+        "accept", "authorization", "date", "also-missing"
+    ];
+    var probe_count: int = len(probe_keys);
+    var h: map<string, int> = {};
+    var j: int = 0;
+    while (j < len(header_keys)) {
+        mapSetString(h, header_keys[j], j);
+        j = j + 1;
+    }
+
+    var sink: int = 0;
+    var w: int = 0;
+    var key_idx_w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var key_w: string = probe_keys[key_idx_w];
+        if (mapHasString(h, key_w)) sink = sink + 1;
+        var v_w: any = mapGetString(h, key_w);
+        if (v_w != nil) sink = sink + (v_w as int);
+        key_idx_w = key_idx_w + 1;
+        if (key_idx_w == probe_count) {
+            key_idx_w = 0;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var key_idx: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key: string = probe_keys[key_idx];
+        if (mapHasString(h, key)) sink = sink + 1;
+        var v: any = mapGetString(h, key);
+        if (v != nil) sink = sink + (v as int);
+        key_idx = key_idx + 1;
+        if (key_idx == probe_count) {
+            key_idx = 0;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<string,int> fast-string read-heavy has+get", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchMapHeaderReadGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var probe_keys: array<string> = [
+        "host", "content-type", "x-request-id", "missing-header",
+        "accept", "authorization", "date", "also-missing"
+    ];
+    var probe_count: int = len(probe_keys);
+    var h: map<string, int> = {};
+    var j: int = 0;
+    while (j < len(header_keys)) {
+        mapSet(h, header_keys[j], j);
+        j = j + 1;
+    }
+
+    var sink: int = 0;
+    var w: int = 0;
+    var key_idx_w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var key_w: string = probe_keys[key_idx_w];
+        if (mapHas(h, key_w)) sink = sink + 1;
+        var v_w: any = mapGet(h, key_w);
+        if (v_w != nil) sink = sink + (v_w as int);
+        key_idx_w = key_idx_w + 1;
+        if (key_idx_w == probe_count) {
+            key_idx_w = 0;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var key_idx: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key: string = probe_keys[key_idx];
+        if (mapHas(h, key)) sink = sink + 1;
+        var v: any = mapGet(h, key);
+        if (v != nil) sink = sink + (v as int);
+        key_idx = key_idx + 1;
+        if (key_idx == probe_count) {
+            key_idx = 0;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<string,int> read-heavy has+get", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchSetHeaderGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w: set<string> = {"_seed"};
+        setRemove(s_w, "_seed");
+        var j_w: int = 0;
+        while (j_w < len(header_keys)) {
+            setAdd(s_w, header_keys[j_w]);
+            j_w = j_w + 1;
+        }
+        if (setHas(s_w, "content-type")) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s: set<string> = {"_seed"};
+        setRemove(s, "_seed");
+        var j: int = 0;
+        while (j < len(header_keys)) {
+            setAdd(s, header_keys[j]);
+            j = j + 1;
+        }
+        if (setHas(s, "content-type")) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf set<string> add+has", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchSetHeaderFastStringGate(iters: int): void {
+    var header_keys: array<string> = buildHeaderKeys();
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w: set<string> = {"_seed"};
+        setRemoveString(s_w, "_seed");
+        var j_w: int = 0;
+        while (j_w < len(header_keys)) {
+            setAddString(s_w, header_keys[j_w]);
+            j_w = j_w + 1;
+        }
+        if (setHasString(s_w, "content-type")) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s: set<string> = {"_seed"};
+        setRemoveString(s, "_seed");
+        var j: int = 0;
+        while (j < len(header_keys)) {
+            setAddString(s, header_keys[j]);
+            j = j + 1;
+        }
+        if (setHasString(s, "content-type")) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf set<string> fast-string add+has", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchMapSetChurnGate(iters: int): void {
+    var key_count: int = 512;
+    var keys_a: array<string> = buildPrefixedKeys("a", key_count);
+    var keys_b: array<string> = buildPrefixedKeys("b", key_count);
+
+    var m: map<string, int> = {};
+    var s: set<string> = {"_seed"};
+    setRemove(s, "_seed");
+
+    var seed_i: int = 0;
+    while (seed_i < key_count) {
+        mapSet(m, keys_a[seed_i], seed_i);
+        setAdd(s, keys_a[seed_i]);
+        seed_i = seed_i + 1;
+    }
+
+    var sink: int = 0;
+    var phase: int = 0; // 0 => move A->B, 1 => move B->A
+    var last_key: string = keys_a[0];
+
+    var warm: int = warmup(iters);
+    var warm_cycles: int = warm / key_count;
+    if ((warm % key_count) != 0) {
+        warm_cycles = warm_cycles + 1;
+    }
+    warm = warm_cycles * key_count;
+
+    var w: int = 0;
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var in_key_w: string = keys_b[idx_w];
+        if (phase == 0) {
+            mapDelete(m, keys_a[idx_w]);
+            setRemove(s, keys_a[idx_w]);
+            mapSet(m, keys_b[idx_w], w);
+            setAdd(s, keys_b[idx_w]);
+        } else {
+            in_key_w = keys_a[idx_w];
+            mapDelete(m, keys_b[idx_w]);
+            setRemove(s, keys_b[idx_w]);
+            mapSet(m, keys_a[idx_w], w);
+            setAdd(s, keys_a[idx_w]);
+        }
+        last_key = in_key_w;
+
+        var mv_w: any = mapGet(m, in_key_w);
+        if (mv_w != nil) sink = sink + 1;
+        if (setHas(s, in_key_w)) sink = sink + 1;
+
+        if (idx_w == key_count - 1) {
+            phase = 1 - phase;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var in_key: string = keys_b[idx];
+        if (phase == 0) {
+            mapDelete(m, keys_a[idx]);
+            setRemove(s, keys_a[idx]);
+            mapSet(m, keys_b[idx], i);
+            setAdd(s, keys_b[idx]);
+        } else {
+            in_key = keys_a[idx];
+            mapDelete(m, keys_b[idx]);
+            setRemove(s, keys_b[idx]);
+            mapSet(m, keys_a[idx], i);
+            setAdd(s, keys_a[idx]);
+        }
+        last_key = in_key;
+
+        var mv: any = mapGet(m, in_key);
+        if (mv != nil) sink = sink + 1;
+        if (setHas(s, in_key)) sink = sink + 1;
+
+        if (idx == key_count - 1) {
+            phase = 1 - phase;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map/set churn del+add+probe", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("map churn count drift");
+    if (mapGet(m, last_key) == nil) panic("map churn missing key");
+    if (!setHas(s, last_key)) panic("set churn missing key");
+    if (sink == 0) println("error");
+}
+
+func benchMapSetChurnFastStringGate(iters: int): void {
+    var key_count: int = 512;
+    var keys_a: array<string> = buildPrefixedKeys("a", key_count);
+    var keys_b: array<string> = buildPrefixedKeys("b", key_count);
+
+    var m: map<string, int> = {};
+    var s: set<string> = {"_seed"};
+    setRemoveString(s, "_seed");
+
+    var seed_i: int = 0;
+    while (seed_i < key_count) {
+        mapSetString(m, keys_a[seed_i], seed_i);
+        setAddString(s, keys_a[seed_i]);
+        seed_i = seed_i + 1;
+    }
+
+    var sink: int = 0;
+    var phase: int = 0; // 0 => move A->B, 1 => move B->A
+    var last_key: string = keys_a[0];
+
+    var warm: int = warmup(iters);
+    var warm_cycles: int = warm / key_count;
+    if ((warm % key_count) != 0) {
+        warm_cycles = warm_cycles + 1;
+    }
+    warm = warm_cycles * key_count;
+
+    var w: int = 0;
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var in_key_w: string = keys_b[idx_w];
+        if (phase == 0) {
+            mapDeleteString(m, keys_a[idx_w]);
+            setRemoveString(s, keys_a[idx_w]);
+            mapSetString(m, keys_b[idx_w], w);
+            setAddString(s, keys_b[idx_w]);
+        } else {
+            in_key_w = keys_a[idx_w];
+            mapDeleteString(m, keys_b[idx_w]);
+            setRemoveString(s, keys_b[idx_w]);
+            mapSetString(m, keys_a[idx_w], w);
+            setAddString(s, keys_a[idx_w]);
+        }
+        last_key = in_key_w;
+
+        var mv_w: any = mapGetString(m, in_key_w);
+        if (mv_w != nil) sink = sink + 1;
+        if (setHasString(s, in_key_w)) sink = sink + 1;
+
+        if (idx_w == key_count - 1) {
+            phase = 1 - phase;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var in_key: string = keys_b[idx];
+        if (phase == 0) {
+            mapDeleteString(m, keys_a[idx]);
+            setRemoveString(s, keys_a[idx]);
+            mapSetString(m, keys_b[idx], i);
+            setAddString(s, keys_b[idx]);
+        } else {
+            in_key = keys_a[idx];
+            mapDeleteString(m, keys_b[idx]);
+            setRemoveString(s, keys_b[idx]);
+            mapSetString(m, keys_a[idx], i);
+            setAddString(s, keys_a[idx]);
+        }
+        last_key = in_key;
+
+        var mv: any = mapGetString(m, in_key);
+        if (mv != nil) sink = sink + 1;
+        if (setHasString(s, in_key)) sink = sink + 1;
+
+        if (idx == key_count - 1) {
+            phase = 1 - phase;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map/set churn fast-string del+add+probe", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("map churn fast-string count drift");
+    if (mapGetString(m, last_key) == nil) panic("map churn fast-string missing key");
+    if (!setHasString(s, last_key)) panic("set churn fast-string missing key");
+    if (sink == 0) println("error");
+}
+
+func benchMapHighBitIntGate(iters: int): void {
+    var key_count: int = 1024;
+    var keys_i: array<int> = buildHighBitIntKeys(key_count);
+    var m: map<int, int> = {};
+    var sink: int = 0;
+
+    var j: int = 0;
+    while (j < key_count) {
+        mapSet(m, keys_i[j], j);
+        j = j + 1;
+    }
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var idx_w: int = w % key_count;
+        var k_w: int = keys_i[idx_w];
+        mapSet(m, k_w, w);
+        var v_w: any = mapGet(m, k_w);
+        if (v_w != nil) sink = sink + (v_w as int) + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var idx: int = i % key_count;
+        var k: int = keys_i[idx];
+        mapSet(m, k, i);
+        var v: any = mapGet(m, k);
+        if (v != nil) sink = sink + (v as int) + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf map<int> highbit set+get", iters, start, end);
+
+    if (mapCount(m) != key_count) panic("highbit-int map count drift");
+    if (mapGet(m, keys_i[key_count - 1]) == nil) panic("highbit-int map missing key");
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Perf Gates ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchJsonParseGate(300000 * scale);
+    benchJsonParseScalarGate(450000 * scale);
+    benchJsonParseObjectGate(220000 * scale);
+    benchJsonStringifyGate(200000 * scale);
+    benchJsonStringifyScalarGate(450000 * scale);
+    benchJsonStringifyObjectGate(160000 * scale);
+    benchMapHeaderGate(220000 * scale);
+    benchMapHeaderSetHasGetGate(220000 * scale);
+    benchMapHeaderFastStringGate(220000 * scale);
+    benchMapHeaderReadGate(1200000 * scale);
+    benchMapHeaderFastStringReadGate(1200000 * scale);
+    benchSetHeaderGate(220000 * scale);
+    benchSetHeaderFastStringGate(220000 * scale);
+    benchMapSetChurnGate(260000 * scale);
+    benchMapSetChurnFastStringGate(260000 * scale);
+    benchMapHighBitIntGate(260000 * scale);
+
+    println("Perf-gate benchmark complete!");
+}

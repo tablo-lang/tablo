@@ -1,0 +1,164 @@
+import "fixtures/http.tblo";
+
+func main(): void {
+    var req: map<string, any> = {
+        "query": {
+            "name": "Ada Lovelace",
+            "page": "42",
+            "enabled": "true",
+            "debug": "0",
+            "empty": "",
+            "spaces": "  11  ",
+            "big": "999999999999999999999999999999999999",
+            "badInt": "12x",
+            "badBool": "maybe"
+        }
+    };
+
+    var s_name = httpQueryGetString(req, "name");
+    println(s_name.1 == nil);
+    if (s_name.1 == nil) {
+        println(s_name.0 == "Ada Lovelace");
+    }
+
+    var s_missing = httpQueryGetString(req, "missing");
+    println(s_missing.1 == nil);
+    if (s_missing.1 == nil) {
+        println(s_missing.0 == nil);
+    }
+
+    var s_default = httpQueryGetStringDefault(req, "missing", "guest");
+    println(s_default.1 == nil);
+    if (s_default.1 == nil) {
+        println(s_default.0 == "guest");
+    }
+
+    var i_page = httpQueryGetInt(req, "page");
+    println(i_page.1 == nil);
+    if (i_page.1 == nil) {
+        println(i_page.0 == 42);
+    }
+
+    var i_spaces = httpQueryGetInt(req, "spaces");
+    println(i_spaces.1 == nil);
+    if (i_spaces.1 == nil) {
+        println(i_spaces.0 == 11);
+    }
+
+    var i_missing = httpQueryGetInt(req, "missing");
+    println(i_missing.1 == nil);
+    if (i_missing.1 == nil) {
+        println(i_missing.0 == nil);
+    }
+
+    var i_default = httpQueryGetIntDefault(req, "missing", 7);
+    println(i_default.1 == nil);
+    if (i_default.1 == nil) {
+        println(i_default.0 == 7);
+    }
+
+    var i_range_ok = httpQueryGetIntRange(req, "page", 1, 100);
+    println(i_range_ok.1 == nil);
+    if (i_range_ok.1 == nil) {
+        println(i_range_ok.0 == 42);
+    }
+
+    var i_range_missing = httpQueryGetIntRange(req, "missing", 1, 100);
+    println(i_range_missing.1 == nil);
+    if (i_range_missing.1 == nil) {
+        println(i_range_missing.0 == nil);
+    }
+
+    var i_range_default = httpQueryGetIntRangeDefault(req, "missing", 5, 1, 10);
+    println(i_range_default.1 == nil);
+    if (i_range_default.1 == nil) {
+        println(i_range_default.0 == 5);
+    }
+
+    var i_range_oob = httpQueryGetIntRange(req, "page", 100, 200);
+    println(i_range_oob.1 != nil);
+    if (i_range_oob.1 != nil) {
+        println(i_range_oob.1.code == ERR_PARSE);
+        var i_range_oob_data: map<string, any> = i_range_oob.1.data as map<string, any>;
+        println(mapGetString(i_range_oob_data, "key"));
+    }
+
+    var i_range_bad_bounds = httpQueryGetIntRange(req, "page", 10, 1);
+    println(i_range_bad_bounds.1 != nil);
+    if (i_range_bad_bounds.1 != nil) {
+        println(i_range_bad_bounds.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var i_range_default_bad = httpQueryGetIntRangeDefault(req, "missing", 50, 1, 10);
+    println(i_range_default_bad.1 != nil);
+    if (i_range_default_bad.1 != nil) {
+        println(i_range_default_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var i_bad = httpQueryGetInt(req, "badInt");
+    println(i_bad.1 != nil);
+    if (i_bad.1 != nil) {
+        println(i_bad.1.code == ERR_PARSE);
+        var i_bad_data: map<string, any> = i_bad.1.data as map<string, any>;
+        println(mapGetString(i_bad_data, "key"));
+    }
+
+    var i_big = httpQueryGetInt(req, "big");
+    println(i_big.1 != nil);
+    if (i_big.1 != nil) {
+        println(i_big.1.code == ERR_PARSE);
+        println(find(i_big.1.message, "out of int range") >= 0);
+    }
+
+    var b_enabled = httpQueryGetBool(req, "enabled");
+    println(b_enabled.1 == nil);
+    if (b_enabled.1 == nil) {
+        println(b_enabled.0 == true);
+    }
+
+    var b_debug = httpQueryGetBool(req, "debug");
+    println(b_debug.1 == nil);
+    if (b_debug.1 == nil) {
+        println(b_debug.0 == false);
+    }
+
+    var b_missing = httpQueryGetBool(req, "missing");
+    println(b_missing.1 == nil);
+    if (b_missing.1 == nil) {
+        println(b_missing.0 == nil);
+    }
+
+    var b_default = httpQueryGetBoolDefault(req, "missing", true);
+    println(b_default.1 == nil);
+    if (b_default.1 == nil) {
+        println(b_default.0 == true);
+    }
+
+    var b_bad = httpQueryGetBool(req, "badBool");
+    println(b_bad.1 != nil);
+    if (b_bad.1 != nil) {
+        println(b_bad.1.code == ERR_PARSE);
+        var b_bad_data: map<string, any> = b_bad.1.data as map<string, any>;
+        println(mapGetString(b_bad_data, "key"));
+    }
+
+    var empty_key = httpQueryGetString(req, "");
+    println(empty_key.1 != nil);
+    if (empty_key.1 != nil) {
+        println(empty_key.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var no_query_req: map<string, any> = {};
+    var no_query = httpQueryGetString(no_query_req, "name");
+    println(no_query.1 == nil);
+    if (no_query.1 == nil) {
+        println(no_query.0 == nil);
+    }
+
+    var bad_query_req: map<string, any> = {"query": 123 as any};
+    var bad_query = httpQueryGetString(bad_query_req, "name");
+    println(bad_query.1 != nil);
+    if (bad_query.1 != nil) {
+        println(bad_query.1.code == ERR_INVALID_ARGUMENT);
+    }
+}

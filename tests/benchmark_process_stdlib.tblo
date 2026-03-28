@@ -1,0 +1,360 @@
+// Process stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_process_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_process_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/process.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 10;
+    if (w < 5) {
+        w = 5;
+    }
+    return w;
+}
+
+func isWindowsHost(): bool {
+    var lower = envGet("ComSpec");
+    if (lower.1 == nil && lower.0 != nil) {
+        return true;
+    }
+
+    var upper = envGet("COMSPEC");
+    if (upper.1 == nil && upper.0 != nil) {
+        return true;
+    }
+
+    return false;
+}
+
+func shellEchoCommand(message: string): (string, array<string>) {
+    if (isWindowsHost()) {
+        return ("cmd", ["/c", "echo " + message]);
+    }
+    return ("sh", ["-c", "echo " + message]);
+}
+
+func shellReadEchoCommand(): (string, array<string>) {
+    if (isWindowsHost()) {
+        return ("powershell",
+                [
+                    "-NoProfile",
+                    "-Command",
+                    "$t=[Console]::In.ReadToEnd(); [Console]::Out.Write('stdin:' + $t)"
+                ]);
+    }
+    return ("sh", ["-c", "data=$(cat); printf 'stdin:%s' \"$data\""]);
+}
+
+func runEchoOnce(program: string, args: array<string>): bool {
+    var started = processStartDefault(program, args);
+    if (started.1 != nil) {
+        return false;
+    }
+
+    var close_err = processCloseInput(started.0);
+    if (close_err != nil) {
+        return false;
+    }
+
+    var waited = processWaitFor(started.0, 3000);
+    if (waited.1 != nil) {
+        return false;
+    }
+    if (!waited.0.finished || waited.0.exitCode != 0) {
+        return false;
+    }
+    return true;
+}
+
+func runPipelineOnce(left_program: string,
+                     left_args: array<string>,
+                     right_program: string,
+                     right_args: array<string>): bool {
+    var piped = processRunPipelineDefault(left_program,
+                                          left_args,
+                                          right_program,
+                                          right_args,
+                                          4000);
+    if (piped.1 != nil) {
+        return false;
+    }
+    if (!piped.0.left.finished || !piped.0.right.finished) {
+        return false;
+    }
+    if (piped.0.left.exitCode != 0 || piped.0.right.exitCode != 0) {
+        return false;
+    }
+    if (find(piped.0.right.stdout, "stdin:bench_process_pipe") < 0) {
+        return false;
+    }
+    return true;
+}
+
+func runPipelineStreamOnce(left_program: string,
+                           left_args: array<string>,
+                           right_program: string,
+                           right_args: array<string>): bool {
+    var piped = processRunPipelineStreamDefault(left_program,
+                                                left_args,
+                                                right_program,
+                                                right_args,
+                                                4000,
+                                                64);
+    if (piped.1 != nil) {
+        return false;
+    }
+    if (!piped.0.left.finished || !piped.0.right.finished) {
+        return false;
+    }
+    if (piped.0.left.exitCode != 0 || piped.0.right.exitCode != 0) {
+        return false;
+    }
+    if (find(piped.0.right.stdout, "stdin:bench_process_pipe") < 0) {
+        return false;
+    }
+    return true;
+}
+
+func runWithInputOnce(program: string,
+                      args: array<string>,
+                      input: string,
+                      expected_fragment: string): bool {
+    var run_r = processRunWithInputDefault(program, args, input, 4000);
+    if (run_r.1 != nil) {
+        return false;
+    }
+    if (!run_r.0.finished || run_r.0.exitCode != 0) {
+        return false;
+    }
+    if (find(run_r.0.stdout, expected_fragment) < 0) {
+        return false;
+    }
+    return true;
+}
+
+func runReadStdoutChunkOnce(program: string,
+                            args: array<string>,
+                            needle: string,
+                            chunk_bytes: int): bool {
+    var started = processStartDefault(program, args);
+    if (started.1 != nil) {
+        return false;
+    }
+
+    var close_err = processCloseInput(started.0);
+    if (close_err != nil) {
+        return false;
+    }
+
+    var output: string = "";
+    var idle_rounds_after_finish: int = 0;
+
+    while (true) {
+        var got_chunk: bool = false;
+        while (true) {
+            var chunk_r = processReadStdoutChunk(started.0, chunk_bytes);
+            if (chunk_r.1 != nil) {
+                return false;
+            }
+            if (chunk_r.0 == nil) {
+                break;
+            }
+            output = output + (chunk_r.0 as string);
+            got_chunk = true;
+        }
+
+        var waited = processWaitFor(started.0, 20);
+        if (waited.1 != nil) {
+            return false;
+        }
+
+        if (waited.0.finished) {
+            if (got_chunk) {
+                idle_rounds_after_finish = 0;
+            } else {
+                idle_rounds_after_finish = idle_rounds_after_finish + 1;
+            }
+            if (idle_rounds_after_finish >= 2) {
+                break;
+            }
+        } else {
+            idle_rounds_after_finish = 0;
+        }
+    }
+
+    var tail = processReadStdoutChunk(started.0, chunk_bytes);
+    if (tail.1 != nil || tail.0 != nil) {
+        return false;
+    }
+
+    if (find(output, needle) < 0) {
+        return false;
+    }
+    return true;
+}
+
+func benchProcessStartWait(iters: int): void {
+    var cmd = shellEchoCommand("bench_process");
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (!runEchoOnce(cmd.0, cmd.1)) {
+            println("perf processStartWait: warmup failed");
+            return;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (!runEchoOnce(cmd.0, cmd.1)) {
+            println("perf processStartWait: iteration failed");
+            return;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf processStartWait", iters, start, end);
+}
+
+func benchProcessRunPipeline(iters: int): void {
+    var left = shellEchoCommand("bench_process_pipe");
+    var right = shellReadEchoCommand();
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (!runPipelineOnce(left.0, left.1, right.0, right.1)) {
+            println("perf processRunPipeline: warmup failed");
+            return;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (!runPipelineOnce(left.0, left.1, right.0, right.1)) {
+            println("perf processRunPipeline: iteration failed");
+            return;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf processRunPipeline", iters, start, end);
+}
+
+func benchProcessRunPipelineStream(iters: int): void {
+    var left = shellEchoCommand("bench_process_pipe");
+    var right = shellReadEchoCommand();
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (!runPipelineStreamOnce(left.0, left.1, right.0, right.1)) {
+            println("perf processRunPipelineStream: warmup failed");
+            return;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (!runPipelineStreamOnce(left.0, left.1, right.0, right.1)) {
+            println("perf processRunPipelineStream: iteration failed");
+            return;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf processRunPipelineStream", iters, start, end);
+}
+
+func benchProcessRunWithInput(iters: int): void {
+    var cmd = shellReadEchoCommand();
+    var input: string = "bench_process_input\n";
+    var expected: string = "stdin:bench_process_input";
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (!runWithInputOnce(cmd.0, cmd.1, input, expected)) {
+            println("perf processRunWithInput: warmup failed");
+            return;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (!runWithInputOnce(cmd.0, cmd.1, input, expected)) {
+            println("perf processRunWithInput: iteration failed");
+            return;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf processRunWithInput", iters, start, end);
+}
+
+func benchProcessReadStdoutChunk(iters: int): void {
+    var cmd = shellEchoCommand("bench_chunk_stream_message");
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (!runReadStdoutChunkOnce(cmd.0, cmd.1, "bench_chunk_stream_message", 5)) {
+            println("perf processReadStdoutChunk: warmup failed");
+            return;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (!runReadStdoutChunkOnce(cmd.0, cmd.1, "bench_chunk_stream_message", 5)) {
+            println("perf processReadStdoutChunk: iteration failed");
+            return;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf processReadStdoutChunk", iters, start, end);
+}
+
+func main(): void {
+    println("=== TabloLang Process Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchProcessStartWait(40 * scale);
+    benchProcessRunPipeline(20 * scale);
+    benchProcessRunPipelineStream(20 * scale);
+    benchProcessRunWithInput(20 * scale);
+    benchProcessReadStdoutChunk(20 * scale);
+}

@@ -1,0 +1,394 @@
+import "fixtures/process.tblo";
+
+func isWindowsHost(): bool {
+    var lower = envGet("ComSpec");
+    if (lower.1 == nil && lower.0 != nil) {
+        return true;
+    }
+
+    var upper = envGet("COMSPEC");
+    if (upper.1 == nil && upper.0 != nil) {
+        return true;
+    }
+
+    return false;
+}
+
+func shellEchoOutCommand(message: string): (string, array<string>) {
+    if (isWindowsHost()) {
+        return ("cmd", ["/c", "echo " + message]);
+    }
+    return ("sh", ["-c", "echo " + message]);
+}
+
+func shellEchoErrCommand(message: string): (string, array<string>) {
+    if (isWindowsHost()) {
+        return ("cmd", ["/c", "echo " + message + " 1>&2"]);
+    }
+    return ("sh", ["-c", "echo " + message + " 1>&2"]);
+}
+
+func shellReadEchoCommand(): (string, array<string>) {
+    if (isWindowsHost()) {
+        return ("powershell",
+                [
+                    "-NoProfile",
+                    "-Command",
+                    "$t=[Console]::In.ReadToEnd(); [Console]::Out.Write('stdin:' + $t)"
+                ]);
+    }
+    return ("sh", ["-c", "data=$(cat); printf 'stdin:%s' \"$data\""]);
+}
+
+func shellSleepCommand(seconds: int): (string, array<string>) {
+    if (isWindowsHost()) {
+        // ping -n N waits roughly N-1 seconds.
+        return ("cmd", ["/c", "ping -n " + str(seconds + 1) + " 127.0.0.1 >nul"]);
+    }
+    return ("sh", ["-c", "sleep " + str(seconds)]);
+}
+
+func main(): void {
+    var echo_cmd = shellEchoOutCommand("hello_process");
+    var started1 = processStartDefault(echo_cmd.0, echo_cmd.1);
+    println(started1.1 == nil);
+    if (started1.1 == nil) {
+        var close1 = processCloseInput(started1.0);
+        println(close1 == nil);
+
+        var waited1 = processWaitFor(started1.0, 3000);
+        println(waited1.1 == nil);
+        if (waited1.1 == nil) {
+            println(waited1.0.finished);
+            println(!waited1.0.timedOut);
+            println(waited1.0.exitCode == 0);
+            println(find(waited1.0.stdout, "hello_process") >= 0);
+        } else {
+            println(false);
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var err_cmd = shellEchoErrCommand("err_process");
+    var started2 = processStartDefault(err_cmd.0, err_cmd.1);
+    println(started2.1 == nil);
+    if (started2.1 == nil) {
+        var close2 = processCloseInput(started2.0);
+        println(close2 == nil);
+
+        var waited2 = processWaitFor(started2.0, 3000);
+        println(waited2.1 == nil);
+        if (waited2.1 == nil) {
+            println(waited2.0.finished);
+            println(waited2.0.exitCode == 0);
+            println(find(waited2.0.stderr, "err_process") >= 0);
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var read_cmd = shellReadEchoCommand();
+    var started3 = processStartDefault(read_cmd.0, read_cmd.1);
+    println(started3.1 == nil);
+    if (started3.1 == nil) {
+        var wrote3 = processWriteInput(started3.0, "abc\n");
+        println(wrote3.1 == nil);
+        if (wrote3.1 == nil) {
+            println(wrote3.0 == 4);
+        } else {
+            println(false);
+        }
+
+        var close3 = processCloseInput(started3.0);
+        println(close3 == nil);
+
+        var waited3 = processWaitFor(started3.0, 3000);
+        println(waited3.1 == nil);
+        if (waited3.1 == nil) {
+            println(waited3.0.finished);
+            println(waited3.0.exitCode == 0);
+            println(find(waited3.0.stdout, "stdin:abc") >= 0);
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var sleep_cmd = shellSleepCommand(2);
+    var started4 = processStartDefault(sleep_cmd.0, sleep_cmd.1);
+    println(started4.1 == nil);
+    if (started4.1 == nil) {
+        var close4 = processCloseInput(started4.0);
+        println(close4 == nil);
+
+        var waited4a = processWaitFor(started4.0, 25);
+        println(waited4a.1 == nil);
+        if (waited4a.1 == nil) {
+            println(waited4a.0.timedOut);
+            println(!waited4a.0.finished);
+        } else {
+            println(false);
+            println(false);
+        }
+
+        var terminate4 = processTerminate(started4.0);
+        println(terminate4 == nil);
+
+        var waited4b = processWaitFor(started4.0, 3000);
+        println(waited4b.1 == nil);
+        if (waited4b.1 == nil) {
+            println(waited4b.0.finished);
+            println(waited4b.0.killed);
+        } else {
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var started5 = processStartDefault(sleep_cmd.0, sleep_cmd.1);
+    println(started5.1 == nil);
+    if (started5.1 == nil) {
+        var close5 = processCloseInput(started5.0);
+        println(close5 == nil);
+
+        var ctx5 = contextWithTimeoutMs(contextBackground(), 50);
+        println(ctx5.1 == nil);
+        if (ctx5.1 == nil) {
+            var waited5 = processWaitWithContext(started5.0, ctx5.0, 10);
+            println(waited5.1 != nil);
+            if (waited5.1 != nil) {
+                println(waited5.1.code == ERR_LIMIT);
+            } else {
+                println(false);
+            }
+
+            var done5 = processWaitFor(started5.0, 3000);
+            println(done5.1 == nil);
+            if (done5.1 == nil) {
+                println(done5.0.finished);
+            } else {
+                println(false);
+            }
+        } else {
+            println(false);
+            println(false);
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var run_cmd = shellEchoOutCommand("run_default");
+    var run_r = processRunDefault(run_cmd.0, run_cmd.1, 1000);
+    println(run_r.1 == nil);
+    if (run_r.1 == nil) {
+        println(run_r.0.finished);
+        println(run_r.0.exitCode == 0);
+        println(find(run_r.0.stdout, "run_default") >= 0);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var run_input_cmd = shellReadEchoCommand();
+    var run_input_r = processRunWithInputDefault(run_input_cmd.0,
+                                                 run_input_cmd.1,
+                                                 "run_input\n",
+                                                 1000);
+    println(run_input_r.1 == nil);
+    if (run_input_r.1 == nil) {
+        println(run_input_r.0.finished);
+        println(run_input_r.0.exitCode == 0);
+        println(find(run_input_r.0.stdout, "stdin:run_input") >= 0);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var pipe_left = shellEchoOutCommand("pipe_message");
+    var pipe_right = shellReadEchoCommand();
+    var pipe_default = processRunPipelineDefault(pipe_left.0,
+                                                 pipe_left.1,
+                                                 pipe_right.0,
+                                                 pipe_right.1,
+                                                 1500);
+    println(pipe_default.1 == nil);
+    if (pipe_default.1 == nil) {
+        println(pipe_default.0.left.finished);
+        println(pipe_default.0.left.exitCode == 0);
+        println(find(pipe_default.0.left.stdout, "pipe_message") >= 0);
+        println(pipe_default.0.right.finished);
+        println(pipe_default.0.right.exitCode == 0);
+        println(find(pipe_default.0.right.stdout, "stdin:pipe_message") >= 0);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var left_no_stdout: ProcessOptions = {
+        captureStdout: false,
+        captureStderr: true
+    };
+    var pipe_forced = processRunPipeline(pipe_left.0,
+                                         pipe_left.1,
+                                         pipe_right.0,
+                                         pipe_right.1,
+                                         1500,
+                                         left_no_stdout,
+                                         nil);
+    println(pipe_forced.1 == nil);
+    if (pipe_forced.1 == nil) {
+        println(find(pipe_forced.0.left.stdout, "pipe_message") >= 0);
+        println(find(pipe_forced.0.right.stdout, "stdin:pipe_message") >= 0);
+    } else {
+        println(false);
+        println(false);
+    }
+
+    var chunk_cmd = shellEchoOutCommand("chunk_stream_message");
+    var chunk_started = processStartDefault(chunk_cmd.0, chunk_cmd.1);
+    println(chunk_started.1 == nil);
+    if (chunk_started.1 == nil) {
+        var chunk_close = processCloseInput(chunk_started.0);
+        println(chunk_close == nil);
+
+        var chunk_text: string = "";
+        var chunk_ok: bool = true;
+        var chunk_wait_ok: bool = true;
+        var chunk_done: ProcessResult = processDefaultResult();
+        var chunk_idle_rounds_after_finish: int = 0;
+        while (true) {
+            var got_chunk: bool = false;
+            while (true) {
+                var chunk_r = processReadStdoutChunk(chunk_started.0, 5);
+                if (chunk_r.1 != nil) {
+                    chunk_ok = false;
+                    break;
+                }
+                if (chunk_r.0 == nil) {
+                    break;
+                }
+                chunk_text = chunk_text + (chunk_r.0 as string);
+                got_chunk = true;
+            }
+            if (!chunk_ok) {
+                break;
+            }
+
+            var waited_chunk = processWaitFor(chunk_started.0, 20);
+            if (waited_chunk.1 != nil) {
+                chunk_ok = false;
+                chunk_wait_ok = false;
+                break;
+            }
+            chunk_done = waited_chunk.0;
+
+            if (chunk_done.finished) {
+                if (got_chunk) {
+                    chunk_idle_rounds_after_finish = 0;
+                } else {
+                    chunk_idle_rounds_after_finish = chunk_idle_rounds_after_finish + 1;
+                }
+                if (chunk_idle_rounds_after_finish >= 2) {
+                    break;
+                }
+            } else {
+                chunk_idle_rounds_after_finish = 0;
+            }
+        }
+        println(chunk_ok);
+        println(find(chunk_text, "chunk_stream_message") >= 0);
+        println(chunk_wait_ok);
+        if (chunk_wait_ok) {
+            println(chunk_done.finished);
+        } else {
+            println(false);
+        }
+
+        var chunk_tail = processReadStdoutChunk(chunk_started.0, 5);
+        println(chunk_tail.1 == nil);
+        if (chunk_tail.1 == nil) {
+            println(chunk_tail.0 == nil);
+        } else {
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var pipe_stream = processRunPipelineStreamDefault(pipe_left.0,
+                                                      pipe_left.1,
+                                                      pipe_right.0,
+                                                      pipe_right.1,
+                                                      1500,
+                                                      8);
+    println(pipe_stream.1 == nil);
+    if (pipe_stream.1 == nil) {
+        println(pipe_stream.0.left.finished);
+        println(pipe_stream.0.left.exitCode == 0);
+        println(pipe_stream.0.right.finished);
+        println(pipe_stream.0.right.exitCode == 0);
+        println(find(pipe_stream.0.right.stdout, "stdin:pipe_message") >= 0);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+}

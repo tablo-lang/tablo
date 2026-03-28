@@ -1,0 +1,268 @@
+// Sort stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_sort_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_sort_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/sort.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func buildIntSeries(size: int): array<int> {
+    var out: array<int> = [];
+    var i: int = 0;
+    while (i < size) {
+        var v: int = ((i * 17) % 1009) - 500;
+        push(out, v);
+        i = i + 1;
+    }
+    return out;
+}
+
+func reverseManualInts(items: array<int>): array<int> {
+    var out: array<int> = items;
+    var i: int = 0;
+    var j: int = len(out) - 1;
+    while (i < j) {
+        var temp: int = out[i];
+        out[i] = out[j];
+        out[j] = temp;
+        i = i + 1;
+        j = j - 1;
+    }
+    return out;
+}
+
+func benchSortIntsAsc(iters: int): void {
+    var data: array<int> = buildIntSeries(128);
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var sorted_w: array<int> = sortIntsAsc(data);
+        sink = sink + sorted_w[0];
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var sorted_i: array<int> = sortIntsAsc(data);
+        sink = sink + sorted_i[0];
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf sortIntsAsc", iters, start, end);
+
+    if (sink == 123456789) {
+        println("error");
+    }
+}
+
+func benchSortBuiltinVsPure(iters: int): void {
+    var data: array<int> = buildIntSeries(128);
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var builtin_w: array<int> = sortCopyInts(data);
+        sort(builtin_w);
+        sink = sink + builtin_w[0];
+
+        var pure_w: array<int> = sortIntsAscPure(data);
+        sink = sink + pure_w[0];
+        w = w + 1;
+    }
+
+    var i_builtin: int = 0;
+    var start_builtin: int = timeMonotonicMillis();
+    while (i_builtin < iters) {
+        var builtin_i: array<int> = sortCopyInts(data);
+        sort(builtin_i);
+        sink = sink + builtin_i[0];
+        i_builtin = i_builtin + 1;
+    }
+    var end_builtin: int = timeMonotonicMillis();
+    report("perf sortBuiltinIntsAsc", iters, start_builtin, end_builtin);
+
+    var i_pure: int = 0;
+    var start_pure: int = timeMonotonicMillis();
+    while (i_pure < iters) {
+        var pure_i: array<int> = sortIntsAscPure(data);
+        sink = sink + pure_i[0];
+        i_pure = i_pure + 1;
+    }
+    var end_pure: int = timeMonotonicMillis();
+    report("perf sortPureIntsAsc", iters, start_pure, end_pure);
+
+    if (sink == 123456789) {
+        println("error");
+    }
+}
+
+func benchSortBinarySearchInts(iters: int): void {
+    var sorted: array<int> = [];
+    var i_init: int = 0;
+    while (i_init < 4096) {
+        push(sorted, i_init * 2);
+        i_init = i_init + 1;
+    }
+
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key_hit: int = (w % 4096) * 2;
+        var hit_w = sortBinarySearchInts(sorted, key_hit);
+        if (hit_w.1) {
+            sink = sink + hit_w.0;
+        }
+
+        var key_miss: int = (w % 4096) * 2 + 1;
+        var miss_w = sortBinarySearchInts(sorted, key_miss);
+        if (!miss_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key_hit_i: int = (i % 4096) * 2;
+        var hit_i = sortBinarySearchInts(sorted, key_hit_i);
+        if (hit_i.1) {
+            sink = sink + hit_i.0;
+        }
+
+        var key_miss_i: int = (i % 4096) * 2 + 1;
+        var miss_i = sortBinarySearchInts(sorted, key_miss_i);
+        if (!miss_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf sortBinarySearchInts", iters, start, end);
+
+    if (sink == 123456789) {
+        println("error");
+    }
+}
+
+func benchSortTopKLargestInts(iters: int): void {
+    var data: array<int> = buildIntSeries(256);
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var top_w = sortTopKLargestInts(data, 8);
+        if (top_w.1 != nil) {
+            println("perf sortTopKLargestInts: warm run failed");
+            return;
+        }
+        sink = sink + top_w.0[0];
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var top_i = sortTopKLargestInts(data, 8);
+        if (top_i.1 != nil) {
+            println("perf sortTopKLargestInts: run failed");
+            return;
+        }
+        sink = sink + top_i.0[0];
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf sortTopKLargestInts", iters, start, end);
+
+    if (sink == 123456789) {
+        println("error");
+    }
+}
+
+func benchReverseBuiltinVsManual(iters: int): void {
+    var data: array<int> = buildIntSeries(128);
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var builtin_w: array<int> = sortCopyInts(data);
+        reverse(builtin_w);
+        sink = sink + builtin_w[0];
+
+        var manual_w: array<int> = sortCopyInts(data);
+        manual_w = reverseManualInts(manual_w);
+        sink = sink + manual_w[0];
+        w = w + 1;
+    }
+
+    var i_builtin: int = 0;
+    var start_builtin: int = timeMonotonicMillis();
+    while (i_builtin < iters) {
+        var builtin_i: array<int> = sortCopyInts(data);
+        reverse(builtin_i);
+        sink = sink + builtin_i[0];
+        i_builtin = i_builtin + 1;
+    }
+    var end_builtin: int = timeMonotonicMillis();
+    report("perf reverseBuiltinInts", iters, start_builtin, end_builtin);
+
+    var i_manual: int = 0;
+    var start_manual: int = timeMonotonicMillis();
+    while (i_manual < iters) {
+        var manual_i: array<int> = sortCopyInts(data);
+        manual_i = reverseManualInts(manual_i);
+        sink = sink + manual_i[0];
+        i_manual = i_manual + 1;
+    }
+    var end_manual: int = timeMonotonicMillis();
+    report("perf reverseManualInts", iters, start_manual, end_manual);
+
+    if (sink == 123456789) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Sort Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchSortIntsAsc(120000 * scale);
+    benchSortBuiltinVsPure(80000 * scale);
+    benchSortBinarySearchInts(950000 * scale);
+    benchReverseBuiltinVsManual(140000 * scale);
+    benchSortTopKLargestInts(95000 * scale);
+
+    println("Sort stdlib benchmark complete!");
+}

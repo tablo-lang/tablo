@@ -1,0 +1,285 @@
+// CLI argument parsing helpers.
+// Supports --flag, --flag=value, -f value, -abc, and "--" terminator.
+
+record CliArgs {
+    flags: map<string, string>,
+    present: map<string, bool>,
+    positionals: array<string>
+};
+
+func cliStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func cliError(code: int, message: string, context: string, token: string, index: int): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "token": token,
+        "index": index
+    };
+    return cliStdError(code, message, data);
+}
+
+func cliIsValidLongName(name: string): bool {
+    if (name == "") {
+        return false;
+    }
+
+    var allowed: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+    var i: int = 0;
+    while (i < len(name)) {
+        if (find(allowed, substring(name, i, 1)) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func cliIsValidShortName(name: string): bool {
+    if (len(name) != 1) {
+        return false;
+    }
+    var allowed: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    return find(allowed, name) >= 0;
+}
+
+func cliSetFlag(out: CliArgs, name: string, value: string): CliArgs {
+    mapSetString(out.flags, name, value);
+    mapSetString(out.present, name, true);
+    return out;
+}
+
+func cliParse(args: array<string>): (CliArgs, Error?) {
+    var out: CliArgs = {
+        flags: {},
+        present: {},
+        positionals: []
+    };
+
+    var stop_parsing_flags: bool = false;
+    var i: int = 0;
+    while (i < len(args)) {
+        var token: string = args[i];
+
+        if (stop_parsing_flags) {
+            push(out.positionals, token);
+            i = i + 1;
+            continue;
+        }
+
+        if (token == "--") {
+            stop_parsing_flags = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (startsWith(token, "--") && len(token) > 2) {
+            var body: string = substring(token, 2, len(token) - 2);
+            var eq: int = find(body, "=");
+            var name: string = "";
+            var value: string = "true";
+            var consume_next: bool = false;
+
+            if (eq >= 0) {
+                name = substring(body, 0, eq);
+                value = substring(body, eq + 1, len(body) - (eq + 1));
+            } else {
+                name = body;
+                if ((i + 1) < len(args)) {
+                    var next: string = args[i + 1];
+                    if (!startsWith(next, "-")) {
+                        value = next;
+                        consume_next = true;
+                    }
+                }
+            }
+
+            if (!cliIsValidLongName(name)) {
+                return (out,
+                        cliError(ERR_PARSE,
+                                 "cliParse: invalid long flag name",
+                                 "cliParse.longName",
+                                 token,
+                                 i));
+            }
+
+            out = cliSetFlag(out, name, value);
+            i = i + 1;
+            if (consume_next) {
+                i = i + 1;
+            }
+            continue;
+        }
+
+        if (startsWith(token, "-") && len(token) > 1) {
+            var short_body: string = substring(token, 1, len(token) - 1);
+            var eq_short: int = find(short_body, "=");
+            if (eq_short >= 0) {
+                var short_name: string = substring(short_body, 0, eq_short);
+                var short_value: string = substring(short_body, eq_short + 1, len(short_body) - (eq_short + 1));
+                if (!cliIsValidShortName(short_name)) {
+                    return (out,
+                            cliError(ERR_PARSE,
+                                     "cliParse: short flag with value must be one character",
+                                     "cliParse.shortWithValue",
+                                     token,
+                                     i));
+                }
+                out = cliSetFlag(out, short_name, short_value);
+                i = i + 1;
+                continue;
+            }
+
+            if (len(short_body) > 1) {
+                var j: int = 0;
+                while (j < len(short_body)) {
+                    var cluster_name: string = substring(short_body, j, 1);
+                    if (!cliIsValidShortName(cluster_name)) {
+                        return (out,
+                                cliError(ERR_PARSE,
+                                         "cliParse: invalid short flag in cluster",
+                                         "cliParse.shortCluster",
+                                         token,
+                                         i));
+                    }
+                    out = cliSetFlag(out, cluster_name, "true");
+                    j = j + 1;
+                }
+                i = i + 1;
+                continue;
+            }
+
+            var name1: string = short_body;
+            if (!cliIsValidShortName(name1)) {
+                return (out,
+                        cliError(ERR_PARSE,
+                                 "cliParse: invalid short flag name",
+                                 "cliParse.shortName",
+                                 token,
+                                 i));
+            }
+
+            var value1: string = "true";
+            var consume_next1: bool = false;
+            if ((i + 1) < len(args)) {
+                var next1: string = args[i + 1];
+                if (!startsWith(next1, "-")) {
+                    value1 = next1;
+                    consume_next1 = true;
+                }
+            }
+
+            out = cliSetFlag(out, name1, value1);
+            i = i + 1;
+            if (consume_next1) {
+                i = i + 1;
+            }
+            continue;
+        }
+
+        push(out.positionals, token);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func cliHas(parsed: CliArgs, name: string): bool {
+    return mapHasString(parsed.present, name);
+}
+
+func cliGet(parsed: CliArgs, name: string, defaultValue: string): string {
+    var value_any: any = mapGetString(parsed.flags, name);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return defaultValue;
+    }
+    return value_any as string;
+}
+
+func cliGetRequired(parsed: CliArgs, name: string): (string, Error?) {
+    var value_any: any = mapGetString(parsed.flags, name);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return ("",
+                cliError(ERR_INVALID_ARGUMENT,
+                         "cliGetRequired: missing required flag",
+                         "cliGetRequired.missing",
+                         name,
+                         -1));
+    }
+    return (value_any as string, nil);
+}
+
+func cliIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func cliParseInt(value: string): (int, Error?) {
+    var trimmed: string = trim(value);
+    if (trimmed == "") {
+        return (0, cliError(ERR_PARSE, "cliParseInt: value is empty", "cliParseInt.empty", value, -1));
+    }
+
+    var i: int = 0;
+    if (substring(trimmed, 0, 1) == "+" || substring(trimmed, 0, 1) == "-") {
+        if (len(trimmed) == 1) {
+            return (0, cliError(ERR_PARSE, "cliParseInt: sign without digits", "cliParseInt.sign", value, -1));
+        }
+        i = 1;
+    }
+
+    while (i < len(trimmed)) {
+        if (!cliIsDigit(substring(trimmed, i, 1))) {
+            return (0, cliError(ERR_PARSE, "cliParseInt: invalid integer", "cliParseInt.invalid", value, i));
+        }
+        i = i + 1;
+    }
+
+    return (toInt(trimmed), nil);
+}
+
+func cliParseBool(value: string): (bool, Error?) {
+    var v: string = trim(value);
+    if (v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES" || v == "on" || v == "ON") {
+        return (true, nil);
+    }
+    if (v == "0" || v == "false" || v == "FALSE" || v == "no" || v == "NO" || v == "off" || v == "OFF") {
+        return (false, nil);
+    }
+    return (false, cliError(ERR_PARSE, "cliParseBool: invalid boolean", "cliParseBool.invalid", value, -1));
+}
+
+func cliGetInt(parsed: CliArgs, name: string, defaultValue: int): (int, Error?) {
+    var value_any: any = mapGetString(parsed.flags, name);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return (defaultValue, nil);
+    }
+    var parsed_int = cliParseInt(value_any as string);
+    if (parsed_int.1 != nil) {
+        return (defaultValue, wrapError(parsed_int.1, "cliGetInt failed for flag " + name));
+    }
+    return parsed_int;
+}
+
+func cliGetBool(parsed: CliArgs, name: string, defaultValue: bool): (bool, Error?) {
+    var value_any: any = mapGetString(parsed.flags, name);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return (defaultValue, nil);
+    }
+    var parsed_bool = cliParseBool(value_any as string);
+    if (parsed_bool.1 != nil) {
+        return (defaultValue, wrapError(parsed_bool.1, "cliGetBool failed for flag " + name));
+    }
+    return parsed_bool;
+}
+
+func cliPositionalAt(parsed: CliArgs, index: int): (string?, Error?) {
+    if (index < 0) {
+        return (nil, cliError(ERR_INVALID_ARGUMENT, "cliPositionalAt: index must be non-negative", "cliPositionalAt.index", "", index));
+    }
+    if (index >= len(parsed.positionals)) {
+        return (nil, nil);
+    }
+    return (parsed.positionals[index], nil);
+}

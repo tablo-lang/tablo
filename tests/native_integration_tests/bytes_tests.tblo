@@ -1,0 +1,29 @@
+func main() {
+    var z = bytesWithSize(3, 7).0;
+    println(bytesToHex(z).0);
+
+    var b = hexToBytes("00 01 ff").0;
+    println(typeOf(b));
+    println(len(b));
+    println(b[0]);
+    println(b[1]);
+    println(b[2]);
+
+    b[1] = 42;
+    println(bytesToHex(b).0);
+
+    var s = slice(b, 1, 3);
+    println(typeOf(s));
+    println(len(s));
+
+    // Slice is a view; changes propagate to the original bytes.
+    s[0] = 0x11;
+    println(bytesToHex(b).0);
+    println(bytesToHex(s).0);
+
+    var sum: int = 0;
+    foreach (x in b) {
+        sum = sum + x;
+    }
+    println(sum);
+}

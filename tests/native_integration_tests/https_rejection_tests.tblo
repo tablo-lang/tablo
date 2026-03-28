@@ -1,0 +1,11 @@
+func main(): void {
+    var r = httpGet("https://nonexistent.invalid");
+    println(r.1 != nil);
+    if (r.1 != nil) {
+        if (tlsIsAvailable()) {
+            println(r.1.code == ERR_NETWORK);
+        } else {
+            println(r.1.code == ERR_UNSUPPORTED);
+        }
+    }
+}

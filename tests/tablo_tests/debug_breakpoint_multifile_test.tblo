@@ -1,0 +1,6 @@
+import "fixtures/debug_breakpoint_helper.tblo";
+
+func main(): void {
+    var total: int = compute(5);
+    println(total);
+}

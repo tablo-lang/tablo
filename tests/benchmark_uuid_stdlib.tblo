@@ -1,0 +1,185 @@
+// UUID stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_uuid_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_uuid_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/uuid.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchUuidNormalize(iters: int): void {
+    var dashed_upper: string = "550E8400-E29B-41D4-A716-446655440000";
+    var compact_upper: string = "550E8400E29B41D4A716446655440000";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var src_w: string = dashed_upper;
+        if ((w % 2) == 1) {
+            src_w = compact_upper;
+        }
+        var n_w = uuidNormalize(src_w);
+        if (n_w.1 != nil) {
+            panic("benchUuidNormalize warmup failed: " + n_w.1.message);
+        }
+        sink = sink + len(n_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var src: string = dashed_upper;
+        if ((i % 2) == 1) {
+            src = compact_upper;
+        }
+        var n = uuidNormalize(src);
+        if (n.1 != nil) {
+            panic("benchUuidNormalize failed: " + n.1.message);
+        }
+        sink = sink + len(n.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf uuidNormalize", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchUuidRoundTrip(iters: int): void {
+    var input: string = "550e8400-e29b-41d4-a716-446655440000";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var b_w = uuidToBytes(input);
+        if (b_w.1 != nil) {
+            panic("benchUuidRoundTrip warmup toBytes failed: " + b_w.1.message);
+        }
+        var s_w = uuidFromBytes(b_w.0);
+        if (s_w.1 != nil) {
+            panic("benchUuidRoundTrip warmup fromBytes failed: " + s_w.1.message);
+        }
+        sink = sink + len(s_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var b = uuidToBytes(input);
+        if (b.1 != nil) {
+            panic("benchUuidRoundTrip toBytes failed: " + b.1.message);
+        }
+        var s = uuidFromBytes(b.0);
+        if (s.1 != nil) {
+            panic("benchUuidRoundTrip fromBytes failed: " + s.1.message);
+        }
+        sink = sink + len(s.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf uuidRoundTripBytes", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchUuidIsValid(iters: int): void {
+    var valid_1: string = "550e8400-e29b-41d4-a716-446655440000";
+    var valid_2: string = "550e8400e29b41d4a716446655440000";
+    var invalid: string = "550e8400-e29b-41d4-a716-44665544zzzz";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        if (uuidIsValid(valid_1)) sink = sink + 1;
+        if (uuidIsValid(valid_2)) sink = sink + 1;
+        if (!uuidIsValid(invalid)) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (uuidIsValid(valid_1)) sink = sink + 1;
+        if (uuidIsValid(valid_2)) sink = sink + 1;
+        if (!uuidIsValid(invalid)) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf uuidIsValid", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchUuidV4(iters: int): void {
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var id_w = uuidV4();
+        if (id_w.1 != nil) {
+            panic("benchUuidV4 warmup failed: " + id_w.1.message);
+        }
+        sink = sink + len(id_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var id = uuidV4();
+        if (id.1 != nil) {
+            panic("benchUuidV4 failed: " + id.1.message);
+        }
+        sink = sink + len(id.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf uuidV4", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang UUID Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchUuidNormalize(180000 * scale);
+    benchUuidRoundTrip(120000 * scale);
+    benchUuidIsValid(180000 * scale);
+    benchUuidV4(12000 * scale);
+
+    println("UUID stdlib benchmark complete!");
+}

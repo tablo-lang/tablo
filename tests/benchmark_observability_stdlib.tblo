@@ -1,0 +1,174 @@
+// Observability stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_observability_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_observability_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/observability.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchMetricsInc(iters: int): void {
+    var reset = metricsReset();
+    if (reset.1 != nil || !reset.0) {
+        println("perf metricsInc: reset failed");
+        return;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var inc_w = metricsInc("bench.counter.total", 1);
+        if (inc_w.1 != nil || !inc_w.0) {
+            println("perf metricsInc: warmup failed");
+            return;
+        }
+        sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var inc_r = metricsInc("bench.counter.total", 1);
+        if (inc_r.1 != nil || !inc_r.0) {
+            println("perf metricsInc: iteration failed");
+            return;
+        }
+        sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf metricsInc", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchMetricsObserveMs(iters: int): void {
+    var reset = metricsReset();
+    if (reset.1 != nil || !reset.0) {
+        println("perf metricsObserveMs: reset failed");
+        return;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var obs_w = metricsObserveMs("bench.latency.ms", w % 17);
+        if (obs_w.1 != nil || !obs_w.0) {
+            println("perf metricsObserveMs: warmup failed");
+            return;
+        }
+        sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var obs_r = metricsObserveMs("bench.latency.ms", i % 23);
+        if (obs_r.1 != nil || !obs_r.0) {
+            println("perf metricsObserveMs: iteration failed");
+            return;
+        }
+        sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf metricsObserveMs", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchMetricsSnapshotJson(iters: int): void {
+    var reset = metricsReset();
+    if (reset.1 != nil || !reset.0) {
+        println("perf metricsSnapshotJson: reset failed");
+        return;
+    }
+
+    var seed_i: int = 0;
+    while (seed_i < 256) {
+        var inc_seed = metricsInc("bench.seed.total", 1);
+        if (inc_seed.1 != nil || !inc_seed.0) {
+            println("perf metricsSnapshotJson: seed inc failed");
+            return;
+        }
+        var obs_seed = metricsObserveMs("bench.seed.latency", seed_i % 31);
+        if (obs_seed.1 != nil || !obs_seed.0) {
+            println("perf metricsSnapshotJson: seed observe failed");
+            return;
+        }
+        seed_i = seed_i + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var json_w = metricsSnapshotJson(false);
+        if (json_w.1 != nil) {
+            println("perf metricsSnapshotJson: warmup failed");
+            return;
+        }
+        sink = sink + len(json_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var json_r = metricsSnapshotJson(false);
+        if (json_r.1 != nil) {
+            println("perf metricsSnapshotJson: iteration failed");
+            return;
+        }
+        sink = sink + len(json_r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf metricsSnapshotJson", iters, start, end);
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Observability Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchMetricsInc(120000 * scale);
+    benchMetricsObserveMs(110000 * scale);
+    benchMetricsSnapshotJson(40000 * scale);
+
+    println("Observability stdlib benchmark complete!");
+}

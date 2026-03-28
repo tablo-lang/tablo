@@ -1,0 +1,810 @@
+// Process execution wrappers around runtime builtins.
+// Provides context-aware waiting and captured stdout/stderr results.
+
+import "context.tblo";
+
+record ProcessHandle {
+    id: int
+};
+
+record ProcessOptions {
+    captureStdout: bool,
+    captureStderr: bool
+};
+
+record ProcessResult {
+    finished: bool,
+    timedOut: bool,
+    exitCode: int,
+    stdout: string,
+    stderr: string,
+    killed: bool,
+    stdoutTruncated: bool,
+    stderrTruncated: bool
+};
+
+record ProcessPipelineResult {
+    left: ProcessResult,
+    right: ProcessResult
+};
+
+func processStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func processError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return processStdError(code, message, data);
+}
+
+func processWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return processStdError(err.code, err.message, data);
+}
+
+func processDefaultHandle(): ProcessHandle {
+    var handle: ProcessHandle = { id: -1 };
+    return handle;
+}
+
+func processDefaultOptions(): ProcessOptions {
+    var options: ProcessOptions = {
+        captureStdout: true,
+        captureStderr: true
+    };
+    return options;
+}
+
+func processDefaultResult(): ProcessResult {
+    var result: ProcessResult = {
+        finished: false,
+        timedOut: false,
+        exitCode: -1,
+        stdout: "",
+        stderr: "",
+        killed: false,
+        stdoutTruncated: false,
+        stderrTruncated: false
+    };
+    return result;
+}
+
+func processDefaultPipelineResult(): ProcessPipelineResult {
+    var result: ProcessPipelineResult = {
+        left: processDefaultResult(),
+        right: processDefaultResult()
+    };
+    return result;
+}
+
+func processMapBool(raw: map<string, any>, key: string, fallback: bool): bool {
+    var value_any: any = mapGetString(raw, key);
+    if (value_any == nil || typeOf(value_any) != "bool") {
+        return fallback;
+    }
+    return value_any as bool;
+}
+
+func processMapInt(raw: map<string, any>, key: string, fallback: int): int {
+    var value_any: any = mapGetString(raw, key);
+    if (value_any == nil || typeOf(value_any) != "int") {
+        return fallback;
+    }
+    return value_any as int;
+}
+
+func processMapString(raw: map<string, any>, key: string, fallback: string): string {
+    var value_any: any = mapGetString(raw, key);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return fallback;
+    }
+    return value_any as string;
+}
+
+func processDecodeResult(raw_any: any): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    if (raw_any == nil || typeOf(raw_any) != "map") {
+        return (empty,
+                processError(ERR_PARSE,
+                             "process result payload must be map",
+                             "process.decodeResult.type",
+                             raw_any));
+    }
+
+    var raw: map<string, any> = raw_any as map<string, any>;
+    var result: ProcessResult = {
+        finished: processMapBool(raw, "finished", false),
+        timedOut: processMapBool(raw, "timedOut", false),
+        exitCode: processMapInt(raw, "exitCode", -1),
+        stdout: processMapString(raw, "stdout", ""),
+        stderr: processMapString(raw, "stderr", ""),
+        killed: processMapBool(raw, "killed", false),
+        stdoutTruncated: processMapBool(raw, "stdoutTruncated", false),
+        stderrTruncated: processMapBool(raw, "stderrTruncated", false)
+    };
+    return (result, nil);
+}
+
+func processStart(program: string,
+                  args: array<string>,
+                  options: ProcessOptions?): (ProcessHandle, Error?) {
+    var empty: ProcessHandle = processDefaultHandle();
+    var resolved: ProcessOptions = processDefaultOptions();
+    if (options != nil) {
+        resolved = options as ProcessOptions;
+    }
+
+    var spawned = processSpawn(program,
+                               args,
+                               resolved.captureStdout,
+                               resolved.captureStderr);
+    if (spawned.1 != nil) {
+        return (empty,
+                processWrapError(spawned.1,
+                                 "process.start",
+                                 {
+                                     "program": program,
+                                     "argCount": len(args),
+                                     "captureStdout": resolved.captureStdout,
+                                     "captureStderr": resolved.captureStderr
+                                 } as any));
+    }
+
+    var handle: ProcessHandle = { id: spawned.0 as int };
+    return (handle, nil);
+}
+
+func processStartDefault(program: string,
+                         args: array<string>): (ProcessHandle, Error?) {
+    return processStart(program, args, nil);
+}
+
+func processWriteInput(handle: ProcessHandle,
+                       data: string): (int, Error?) {
+    var wrote = processWriteStdin(handle.id, data);
+    if (wrote.1 != nil) {
+        return (wrote.0 as int,
+                processWrapError(wrote.1,
+                                 "process.writeInput",
+                                 { "processId": handle.id } as any));
+    }
+    return (wrote.0 as int, nil);
+}
+
+func processReadStdoutChunk(handle: ProcessHandle,
+                            max_bytes: int): (string?, Error?) {
+    var empty: string? = nil;
+    if (max_bytes < 1 || max_bytes > 1048576) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "maxBytes must be between 1 and 1048576",
+                             "process.readStdoutChunk.maxBytes",
+                             max_bytes));
+    }
+
+    var chunk_r = processReadStdout(handle.id, max_bytes);
+    if (chunk_r.1 != nil) {
+        return (empty,
+                processWrapError(chunk_r.1,
+                                 "process.readStdoutChunk",
+                                 {
+                                     "processId": handle.id,
+                                     "maxBytes": max_bytes
+                                 } as any));
+    }
+
+    if (chunk_r.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(chunk_r.0) != "string") {
+        return (empty,
+                processError(ERR_PARSE,
+                             "process stdout chunk must be string or nil",
+                             "process.readStdoutChunk.type",
+                             chunk_r.0));
+    }
+    return (chunk_r.0 as string, nil);
+}
+
+func processReadStderrChunk(handle: ProcessHandle,
+                            max_bytes: int): (string?, Error?) {
+    var empty: string? = nil;
+    if (max_bytes < 1 || max_bytes > 1048576) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "maxBytes must be between 1 and 1048576",
+                             "process.readStderrChunk.maxBytes",
+                             max_bytes));
+    }
+
+    var chunk_r = processReadStderr(handle.id, max_bytes);
+    if (chunk_r.1 != nil) {
+        return (empty,
+                processWrapError(chunk_r.1,
+                                 "process.readStderrChunk",
+                                 {
+                                     "processId": handle.id,
+                                     "maxBytes": max_bytes
+                                 } as any));
+    }
+
+    if (chunk_r.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(chunk_r.0) != "string") {
+        return (empty,
+                processError(ERR_PARSE,
+                             "process stderr chunk must be string or nil",
+                             "process.readStderrChunk.type",
+                             chunk_r.0));
+    }
+    return (chunk_r.0 as string, nil);
+}
+
+func processCloseInput(handle: ProcessHandle): Error? {
+    var closed = processCloseStdin(handle.id);
+    if (closed.1 != nil) {
+        return processWrapError(closed.1,
+                                "process.closeInput",
+                                { "processId": handle.id } as any);
+    }
+    return nil;
+}
+
+func processTerminate(handle: ProcessHandle): Error? {
+    var killed = processKill(handle.id);
+    if (killed.1 != nil) {
+        return processWrapError(killed.1,
+                                "process.terminate",
+                                { "processId": handle.id } as any);
+    }
+    return nil;
+}
+
+func processWaitFor(handle: ProcessHandle,
+                    timeout_ms: int): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    if (timeout_ms < 0 || timeout_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be between 0 and 120000",
+                             "process.waitFor.timeoutMs",
+                             timeout_ms));
+    }
+
+    var waited = processWait(handle.id, timeout_ms);
+    if (waited.1 != nil) {
+        return (empty,
+                processWrapError(waited.1,
+                                 "process.waitFor",
+                                 {
+                                     "processId": handle.id,
+                                     "timeoutMs": timeout_ms
+                                 } as any));
+    }
+
+    return processDecodeResult(waited.0 as any);
+}
+
+func processWaitWithContext(handle: ProcessHandle,
+                            ctx: Context,
+                            poll_ms: int): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    if (poll_ms < 1 || poll_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "pollMs must be between 1 and 120000",
+                             "process.waitWithContext.pollMs",
+                             poll_ms));
+    }
+
+    while (true) {
+        var ctx_err = contextErr(ctx);
+        if (ctx_err != nil) {
+            var _killed = processKill(handle.id);
+            var flushed = processWait(handle.id, 25);
+            if (flushed.1 == nil) {
+                var decoded_flush = processDecodeResult(flushed.0 as any);
+                if (decoded_flush.1 == nil) {
+                    empty = decoded_flush.0;
+                }
+            }
+            return (empty,
+                    processWrapError(ctx_err,
+                                     "process.waitWithContext",
+                                     { "processId": handle.id } as any));
+        }
+
+        var slice_ms: int = contextTimeoutSliceMs(ctx, poll_ms);
+        if (slice_ms < 1) {
+            slice_ms = 1;
+        }
+
+        var waited = processWaitFor(handle, slice_ms);
+        if (waited.1 != nil) {
+            return waited;
+        }
+        if (waited.0.finished) {
+            return waited;
+        }
+    }
+}
+
+func processRunWithContext(program: string,
+                           args: array<string>,
+                           ctx: Context,
+                           options: ProcessOptions?): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    var started = processStart(program, args, options);
+    if (started.1 != nil) {
+        return (empty, started.1);
+    }
+
+    var close_err = processCloseInput(started.0);
+    if (close_err != nil) {
+        return (empty, close_err);
+    }
+
+    return processWaitWithContext(started.0, ctx, 50);
+}
+
+func processRunWithInputWithContext(program: string,
+                                    args: array<string>,
+                                    input: string,
+                                    ctx: Context,
+                                    options: ProcessOptions?): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    var started = processStart(program, args, options);
+    if (started.1 != nil) {
+        return (empty, started.1);
+    }
+
+    if (len(input) > 0) {
+        var wrote = processWriteInput(started.0, input);
+        if (wrote.1 != nil) {
+            var _kill1 = processTerminate(started.0);
+            return (empty,
+                    processWrapError(wrote.1,
+                                     "process.runWithInput.write",
+                                     {
+                                         "program": program,
+                                         "argCount": len(args),
+                                         "processId": started.0.id
+                                     } as any));
+        }
+    }
+
+    var close_err = processCloseInput(started.0);
+    if (close_err != nil) {
+        var _kill2 = processTerminate(started.0);
+        return (empty,
+                processWrapError(close_err,
+                                 "process.runWithInput.close",
+                                 {
+                                     "program": program,
+                                     "argCount": len(args),
+                                     "processId": started.0.id
+                                 } as any));
+    }
+
+    return processWaitWithContext(started.0, ctx, 50);
+}
+
+func processRunWithInput(program: string,
+                         args: array<string>,
+                         input: string,
+                         timeout_ms: int,
+                         options: ProcessOptions?): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    if (timeout_ms < 0 || timeout_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be between 0 and 120000",
+                             "process.runWithInput.timeoutMs",
+                             timeout_ms));
+    }
+
+    var ctx_r = contextWithTimeoutMs(contextBackground(), timeout_ms);
+    if (ctx_r.1 != nil) {
+        return (empty,
+                processWrapError(ctx_r.1,
+                                 "process.runWithInput.context",
+                                 { "timeoutMs": timeout_ms } as any));
+    }
+
+    return processRunWithInputWithContext(program, args, input, ctx_r.0, options);
+}
+
+func processRunWithInputDefault(program: string,
+                                args: array<string>,
+                                input: string,
+                                timeout_ms: int): (ProcessResult, Error?) {
+    return processRunWithInput(program, args, input, timeout_ms, nil);
+}
+
+func processPipelineLeftOptions(options: ProcessOptions?): ProcessOptions {
+    var resolved: ProcessOptions = processDefaultOptions();
+    if (options != nil) {
+        resolved = options as ProcessOptions;
+    }
+    var forced: ProcessOptions = {
+        captureStdout: true,
+        captureStderr: resolved.captureStderr
+    };
+    return forced;
+}
+
+func processRunPipelineWithContext(left_program: string,
+                                   left_args: array<string>,
+                                   right_program: string,
+                                   right_args: array<string>,
+                                   ctx: Context,
+                                   left_options: ProcessOptions?,
+                                   right_options: ProcessOptions?): (ProcessPipelineResult, Error?) {
+    var result: ProcessPipelineResult = processDefaultPipelineResult();
+
+    var left_resolved: ProcessOptions = processPipelineLeftOptions(left_options);
+    var left_r = processRunWithContext(left_program, left_args, ctx, left_resolved);
+    if (left_r.1 != nil) {
+        return (result,
+                processWrapError(left_r.1,
+                                 "process.runPipeline.left",
+                                 {
+                                     "leftProgram": left_program,
+                                     "leftArgCount": len(left_args)
+                                 } as any));
+    }
+    result.left = left_r.0;
+
+    var right_r = processRunWithInputWithContext(right_program,
+                                                 right_args,
+                                                 result.left.stdout,
+                                                 ctx,
+                                                 right_options);
+    if (right_r.1 != nil) {
+        return (result,
+                processWrapError(right_r.1,
+                                 "process.runPipeline.right",
+                                 {
+                                     "rightProgram": right_program,
+                                     "rightArgCount": len(right_args),
+                                     "leftExitCode": result.left.exitCode,
+                                     "leftStdoutTruncated": result.left.stdoutTruncated
+                                 } as any));
+    }
+    result.right = right_r.0;
+
+    return (result, nil);
+}
+
+func processRunPipeline(left_program: string,
+                        left_args: array<string>,
+                        right_program: string,
+                        right_args: array<string>,
+                        timeout_ms: int,
+                        left_options: ProcessOptions?,
+                        right_options: ProcessOptions?): (ProcessPipelineResult, Error?) {
+    var empty: ProcessPipelineResult = processDefaultPipelineResult();
+    if (timeout_ms < 0 || timeout_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be between 0 and 120000",
+                             "process.runPipeline.timeoutMs",
+                             timeout_ms));
+    }
+
+    var ctx_r = contextWithTimeoutMs(contextBackground(), timeout_ms);
+    if (ctx_r.1 != nil) {
+        return (empty,
+                processWrapError(ctx_r.1,
+                                 "process.runPipeline.context",
+                                 { "timeoutMs": timeout_ms } as any));
+    }
+
+    return processRunPipelineWithContext(left_program,
+                                         left_args,
+                                         right_program,
+                                         right_args,
+                                         ctx_r.0,
+                                         left_options,
+                                         right_options);
+}
+
+func processRunPipelineDefault(left_program: string,
+                               left_args: array<string>,
+                               right_program: string,
+                               right_args: array<string>,
+                               timeout_ms: int): (ProcessPipelineResult, Error?) {
+    return processRunPipeline(left_program,
+                              left_args,
+                              right_program,
+                              right_args,
+                              timeout_ms,
+                              nil,
+                              nil);
+}
+
+func processPipelineTerminateAndDrain(handle: ProcessHandle): void {
+    var _terminate = processTerminate(handle);
+    var _wait = processWaitFor(handle, 50);
+}
+
+func processPipelineForwardStdout(left_handle: ProcessHandle,
+                                  right_handle: ProcessHandle,
+                                  chunk_bytes: int): (bool, Error?) {
+    var forwarded_any: bool = false;
+    while (true) {
+        var stdout_chunk = processReadStdoutChunk(left_handle, chunk_bytes);
+        if (stdout_chunk.1 != nil) {
+            return (forwarded_any, stdout_chunk.1);
+        }
+        if (stdout_chunk.0 == nil) {
+            break;
+        }
+
+        var write_r = processWriteInput(right_handle, stdout_chunk.0 as string);
+        if (write_r.1 != nil) {
+            return (forwarded_any, write_r.1);
+        }
+        forwarded_any = true;
+    }
+    return (forwarded_any, nil);
+}
+
+func processRunPipelineStreamWithContext(left_program: string,
+                                         left_args: array<string>,
+                                         right_program: string,
+                                         right_args: array<string>,
+                                         ctx: Context,
+                                         left_options: ProcessOptions?,
+                                         right_options: ProcessOptions?,
+                                         chunk_bytes: int,
+                                         poll_ms: int): (ProcessPipelineResult, Error?) {
+    var result: ProcessPipelineResult = processDefaultPipelineResult();
+
+    if (chunk_bytes < 1 || chunk_bytes > 1048576) {
+        return (result,
+                processError(ERR_INVALID_ARGUMENT,
+                             "chunkBytes must be between 1 and 1048576",
+                             "process.runPipelineStream.chunkBytes",
+                             chunk_bytes));
+    }
+    if (poll_ms < 1 || poll_ms > 120000) {
+        return (result,
+                processError(ERR_INVALID_ARGUMENT,
+                             "pollMs must be between 1 and 120000",
+                             "process.runPipelineStream.pollMs",
+                             poll_ms));
+    }
+
+    var left_resolved: ProcessOptions = processPipelineLeftOptions(left_options);
+    var left_started = processStart(left_program, left_args, left_resolved);
+    if (left_started.1 != nil) {
+        return (result,
+                processWrapError(left_started.1,
+                                 "process.runPipelineStream.leftStart",
+                                 {
+                                     "leftProgram": left_program,
+                                     "leftArgCount": len(left_args)
+                                 } as any));
+    }
+
+    var right_started = processStart(right_program, right_args, right_options);
+    if (right_started.1 != nil) {
+        processPipelineTerminateAndDrain(left_started.0);
+        return (result,
+                processWrapError(right_started.1,
+                                 "process.runPipelineStream.rightStart",
+                                 {
+                                     "rightProgram": right_program,
+                                     "rightArgCount": len(right_args)
+                                 } as any));
+    }
+
+    var left_handle: ProcessHandle = left_started.0;
+    var right_handle: ProcessHandle = right_started.0;
+
+    var close_left_input = processCloseInput(left_handle);
+    if (close_left_input != nil) {
+        processPipelineTerminateAndDrain(left_handle);
+        processPipelineTerminateAndDrain(right_handle);
+        return (result,
+                processWrapError(close_left_input,
+                                 "process.runPipelineStream.leftCloseInput",
+                                 { "leftProcessId": left_handle.id } as any));
+    }
+
+    var left_finished_idle_rounds: int = 0;
+    while (true) {
+        var ctx_err = contextErr(ctx);
+        if (ctx_err != nil) {
+            processPipelineTerminateAndDrain(left_handle);
+            processPipelineTerminateAndDrain(right_handle);
+            return (result,
+                    processWrapError(ctx_err,
+                                     "process.runPipelineStream.context",
+                                     {
+                                         "leftProcessId": left_handle.id,
+                                         "rightProcessId": right_handle.id
+                                     } as any));
+        }
+
+        var forwarded_before_wait = processPipelineForwardStdout(left_handle, right_handle, chunk_bytes);
+        if (forwarded_before_wait.1 != nil) {
+            processPipelineTerminateAndDrain(left_handle);
+            processPipelineTerminateAndDrain(right_handle);
+            return (result,
+                    processWrapError(forwarded_before_wait.1,
+                                     "process.runPipelineStream.forwardBeforeWait",
+                                     {
+                                         "leftProcessId": left_handle.id,
+                                         "rightProcessId": right_handle.id
+                                     } as any));
+        }
+
+        var wait_slice_ms: int = contextTimeoutSliceMs(ctx, poll_ms);
+        if (wait_slice_ms < 1) {
+            wait_slice_ms = 1;
+        }
+
+        var left_wait = processWaitFor(left_handle, wait_slice_ms);
+        if (left_wait.1 != nil) {
+            processPipelineTerminateAndDrain(left_handle);
+            processPipelineTerminateAndDrain(right_handle);
+            return (result,
+                    processWrapError(left_wait.1,
+                                     "process.runPipelineStream.leftWait",
+                                     { "leftProcessId": left_handle.id } as any));
+        }
+
+        var forwarded_after_wait = processPipelineForwardStdout(left_handle, right_handle, chunk_bytes);
+        if (forwarded_after_wait.1 != nil) {
+            processPipelineTerminateAndDrain(left_handle);
+            processPipelineTerminateAndDrain(right_handle);
+            return (result,
+                    processWrapError(forwarded_after_wait.1,
+                                     "process.runPipelineStream.forwardAfterWait",
+                                     {
+                                         "leftProcessId": left_handle.id,
+                                         "rightProcessId": right_handle.id
+                                     } as any));
+        }
+
+        var forwarded_any: bool = forwarded_before_wait.0 || forwarded_after_wait.0;
+        if (left_wait.0.finished) {
+            if (forwarded_any) {
+                left_finished_idle_rounds = 0;
+            } else {
+                left_finished_idle_rounds = left_finished_idle_rounds + 1;
+            }
+            if (left_finished_idle_rounds >= 2) {
+                break;
+            }
+        } else {
+            left_finished_idle_rounds = 0;
+        }
+    }
+
+    var left_final = processWaitFor(left_handle, 0);
+    if (left_final.1 != nil) {
+        processPipelineTerminateAndDrain(right_handle);
+        return (result,
+                processWrapError(left_final.1,
+                                 "process.runPipelineStream.leftFinal",
+                                 { "leftProcessId": left_handle.id } as any));
+    }
+    result.left = left_final.0;
+
+    var right_close_input = processCloseInput(right_handle);
+    if (right_close_input != nil) {
+        processPipelineTerminateAndDrain(right_handle);
+        return (result,
+                processWrapError(right_close_input,
+                                 "process.runPipelineStream.rightCloseInput",
+                                 { "rightProcessId": right_handle.id } as any));
+    }
+
+    var right_wait = processWaitWithContext(right_handle, ctx, poll_ms);
+    if (right_wait.1 != nil) {
+        return (result,
+                processWrapError(right_wait.1,
+                                 "process.runPipelineStream.rightWait",
+                                 { "rightProcessId": right_handle.id } as any));
+    }
+    result.right = right_wait.0;
+
+    return (result, nil);
+}
+
+func processRunPipelineStream(left_program: string,
+                              left_args: array<string>,
+                              right_program: string,
+                              right_args: array<string>,
+                              timeout_ms: int,
+                              left_options: ProcessOptions?,
+                              right_options: ProcessOptions?,
+                              chunk_bytes: int): (ProcessPipelineResult, Error?) {
+    var empty: ProcessPipelineResult = processDefaultPipelineResult();
+    if (timeout_ms < 0 || timeout_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be between 0 and 120000",
+                             "process.runPipelineStream.timeoutMs",
+                             timeout_ms));
+    }
+
+    var ctx_r = contextWithTimeoutMs(contextBackground(), timeout_ms);
+    if (ctx_r.1 != nil) {
+        return (empty,
+                processWrapError(ctx_r.1,
+                                 "process.runPipelineStream.context",
+                                 { "timeoutMs": timeout_ms } as any));
+    }
+
+    return processRunPipelineStreamWithContext(left_program,
+                                               left_args,
+                                               right_program,
+                                               right_args,
+                                               ctx_r.0,
+                                               left_options,
+                                               right_options,
+                                               chunk_bytes,
+                                               50);
+}
+
+func processRunPipelineStreamDefault(left_program: string,
+                                     left_args: array<string>,
+                                     right_program: string,
+                                     right_args: array<string>,
+                                     timeout_ms: int,
+                                     chunk_bytes: int): (ProcessPipelineResult, Error?) {
+    return processRunPipelineStream(left_program,
+                                    left_args,
+                                    right_program,
+                                    right_args,
+                                    timeout_ms,
+                                    nil,
+                                    nil,
+                                    chunk_bytes);
+}
+
+func processRun(program: string,
+                args: array<string>,
+                timeout_ms: int,
+                options: ProcessOptions?): (ProcessResult, Error?) {
+    var empty: ProcessResult = processDefaultResult();
+    if (timeout_ms < 0 || timeout_ms > 120000) {
+        return (empty,
+                processError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be between 0 and 120000",
+                             "process.run.timeoutMs",
+                             timeout_ms));
+    }
+
+    var ctx_r = contextWithTimeoutMs(contextBackground(), timeout_ms);
+    if (ctx_r.1 != nil) {
+        return (empty,
+                processWrapError(ctx_r.1,
+                                 "process.run.context",
+                                 { "timeoutMs": timeout_ms } as any));
+    }
+
+    return processRunWithContext(program, args, ctx_r.0, options);
+}
+
+func processRunDefault(program: string,
+                       args: array<string>,
+                       timeout_ms: int): (ProcessResult, Error?) {
+    return processRun(program, args, timeout_ms, nil);
+}

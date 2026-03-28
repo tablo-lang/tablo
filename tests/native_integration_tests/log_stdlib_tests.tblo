@@ -1,0 +1,86 @@
+import "fixtures/log.tblo";
+
+func main(): void {
+    var created = logNew("info");
+    println(created.1 == nil);
+    if (created.1 == nil) {
+        var logger: Logger = created.0;
+
+        var should_debug = logWouldEmit(logger, "debug");
+        println(should_debug.1 == nil);
+        if (should_debug.1 == nil) {
+            println(should_debug.0 == false);
+        }
+
+        var should_info = logWouldEmit(logger, "info");
+        println(should_info.1 == nil);
+        if (should_info.1 == nil) {
+            println(should_info.0);
+        }
+
+        var with_service = logWithField(logger, "service", "billing");
+        println(with_service.1 == nil);
+        if (with_service.1 == nil) {
+            logger = with_service.0;
+            println(mapHasString(logger.fields, "service"));
+            println((mapGetString(logger.fields, "service") as string) == "billing");
+        }
+
+        var bad_field = logWithField(logger, "   ", 1);
+        println(bad_field.1 != nil);
+        if (bad_field.1 != nil) {
+            println(bad_field.1.code == ERR_INVALID_ARGUMENT);
+        }
+
+        var child: Logger = logWithFields(logger, {"component": "auth"});
+        println(mapHasString(child.fields, "service"));
+        println(mapHasString(child.fields, "component"));
+
+        var dropped_debug = logDebug(child, "debug hidden", {});
+        println(dropped_debug.1 == nil);
+        println(dropped_debug.0 == false);
+
+        var emitted_info = logInfo(child, "request accepted", {"route": "/health"});
+        println(emitted_info.1 == nil);
+        if (emitted_info.1 == nil) {
+            println(emitted_info.0);
+        }
+
+        var elevated = logWithMinLevel(child, "error");
+        println(elevated.1 == nil);
+        if (elevated.1 == nil) {
+            var err_logger: Logger = elevated.0;
+
+            var dropped_warn = logWarn(err_logger, "warn hidden", {});
+            println(dropped_warn.1 == nil);
+            println(dropped_warn.0 == false);
+
+            var emitted_error = logError(err_logger, "request failed", {"status": 500});
+            println(emitted_error.1 == nil);
+            if (emitted_error.1 == nil) {
+                println(emitted_error.0);
+            }
+        }
+
+        var invalid_emit = logEmit(child, "trace", "bad level", {});
+        println(invalid_emit.1 != nil);
+        if (invalid_emit.1 != nil) {
+            println(invalid_emit.1.code == ERR_INVALID_ARGUMENT);
+        }
+    }
+
+    var bad_new = logNew("trace");
+    println(bad_new.1 != nil);
+    if (bad_new.1 != nil) {
+        println(bad_new.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var default_logger: Logger = logDefault();
+    println(default_logger.minLevel == "info");
+
+    var default_info = logInfo(default_logger, "default logger", {});
+    println(default_info.1 == nil);
+    if (default_info.1 == nil) {
+        println(default_info.0);
+    }
+}

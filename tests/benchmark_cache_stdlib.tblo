@@ -1,0 +1,236 @@
+// Cache stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_cache_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_cache_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/cache.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 500) {
+        w = 500;
+    }
+    return w;
+}
+
+func benchCacheSetGetHot(iters: int): void {
+    var opened = cacheNew(4096, 0);
+    if (opened.1 != nil) {
+        println("perf cacheSetGetHot: setup failed");
+        return;
+    }
+    var store: CacheStore = opened.0;
+    var sink: int = 0;
+    var now_ms: int = 1000;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key: string = "k" + str(w % 1024);
+        var set_r = cacheSetWithTtlAt(store, key, w as any, 0, now_ms);
+        if (set_r.1 != nil) {
+            println("perf cacheSetGetHot: warmup set failed");
+            return;
+        }
+        store = set_r.0;
+
+        var get_r = cacheGetAt(store, key, now_ms);
+        store = get_r.0;
+        if (get_r.2) {
+            sink = sink + (get_r.1 as int);
+        }
+
+        now_ms = now_ms + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key2: string = "k" + str(i % 1024);
+        var set_r2 = cacheSetWithTtlAt(store, key2, i as any, 0, now_ms);
+        if (set_r2.1 != nil) {
+            println("perf cacheSetGetHot: set failed");
+            return;
+        }
+        store = set_r2.0;
+
+        var get_r2 = cacheGetAt(store, key2, now_ms);
+        store = get_r2.0;
+        if (get_r2.2) {
+            sink = sink + (get_r2.1 as int);
+        }
+
+        now_ms = now_ms + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf cacheSetGetHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchCacheGetTypedHit(iters: int): void {
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+    var opened = cacheNew(2048, 0);
+    if (opened.1 != nil) {
+        println("perf cacheGetTypedHit: setup failed");
+        return;
+    }
+    var store: CacheStore = opened.0;
+    var now_ms: int = 5000;
+    var sink: int = 0;
+
+    var p: int = 0;
+    while (p < 1024) {
+        var key: string = "u" + str(p);
+        var payload: map<string, any> = {
+            "id": p,
+            "name": "user" + str(p)
+        };
+        var set_r = cacheSetTypedWithTtlAt(store, key, payload as any, schema as any, 0, now_ms);
+        if (set_r.1 != nil) {
+            println("perf cacheGetTypedHit: preload failed");
+            return;
+        }
+        store = set_r.0;
+        now_ms = now_ms + 1;
+        p = p + 1;
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key_w: string = "u" + str(w % 1024);
+        var get_w = cacheGetTypedAt(store, key_w, schema as any, now_ms);
+        store = get_w.0;
+        if (get_w.2 && get_w.3 == nil) {
+            var row_w: map<string, any> = get_w.1 as map<string, any>;
+            sink = sink + (mapGetString(row_w, "id") as int);
+        }
+        now_ms = now_ms + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key_i: string = "u" + str(i % 1024);
+        var get_i = cacheGetTypedAt(store, key_i, schema as any, now_ms);
+        store = get_i.0;
+        if (get_i.2 && get_i.3 == nil) {
+            var row_i: map<string, any> = get_i.1 as map<string, any>;
+            sink = sink + (mapGetString(row_i, "id") as int);
+        }
+        now_ms = now_ms + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf cacheGetTypedHit", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchCacheEvictLru(iters: int): void {
+    var opened = cacheNewWithPolicy(256, 0, "lru");
+    if (opened.1 != nil) {
+        println("perf cacheEvictLru: setup failed");
+        return;
+    }
+    var store: CacheStore = opened.0;
+    var now_ms: int = 9000;
+    var sink: int = 0;
+
+    var p: int = 0;
+    while (p < 256) {
+        var set_p = cacheSetWithTtlAt(store, "p" + str(p), p as any, 0, now_ms);
+        if (set_p.1 != nil) {
+            println("perf cacheEvictLru: preload failed");
+            return;
+        }
+        store = set_p.0;
+        now_ms = now_ms + 1;
+        p = p + 1;
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var hot_key: string = "p" + str(w % 128);
+        var hot = cacheGetAt(store, hot_key, now_ms);
+        store = hot.0;
+        if (hot.2) {
+            sink = sink + (hot.1 as int);
+        }
+
+        var set_w = cacheSetWithTtlAt(store, "x" + str(w), w as any, 0, now_ms);
+        if (set_w.1 != nil) {
+            println("perf cacheEvictLru: warmup set failed");
+            return;
+        }
+        store = set_w.0;
+        now_ms = now_ms + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var hot_key2: string = "p" + str(i % 128);
+        var hot2 = cacheGetAt(store, hot_key2, now_ms);
+        store = hot2.0;
+        if (hot2.2) {
+            sink = sink + (hot2.1 as int);
+        }
+
+        var set_i = cacheSetWithTtlAt(store, "y" + str(i), i as any, 0, now_ms);
+        if (set_i.1 != nil) {
+            println("perf cacheEvictLru: set failed");
+            return;
+        }
+        store = set_i.0;
+        now_ms = now_ms + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf cacheEvictLru", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Cache Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchCacheSetGetHot(40000 * scale);
+    benchCacheGetTypedHit(30000 * scale);
+    benchCacheEvictLru(20000 * scale);
+
+    println("Cache stdlib benchmark complete!");
+}

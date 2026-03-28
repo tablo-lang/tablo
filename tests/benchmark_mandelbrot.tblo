@@ -1,0 +1,127 @@
+// Mandelbrot benchmark (ported from tests/benchmark_mandelbrot.cpp).
+//
+// Run (stdout):
+//   ./build/Release/tablo run tests/benchmark_mandelbrot.tblo 16000 > mandel.pbm
+//
+// NOTE (Windows PowerShell): `>` redirects as text. Use cmd.exe to keep binary output:
+//   cmd /c "build\\Release\\tablo.exe run tests\\benchmark_mandelbrot.tblo 16000 > mandel.pbm"
+//
+// Run (write file directly; avoids shell redirection but is slower due to append-per-row):
+//   ./build/Release/tablo run tests/benchmark_mandelbrot.tblo 16000 mandel.pbm
+//
+// Input:
+//   argv[0] = N (image width/height). Defaults to 0 if omitted. Negative clamps to 0.
+//   argv[1] (optional) = output file path (relative to sandbox root)
+//
+// Output:
+//   PBM (P4) image written to stdout or to the output file.
+
+func main(): void {
+    var n: int = 0;
+    if (len(argv) > 0) {
+        n = toInt(argv[0]);
+    }
+    if (n < 0) {
+        n = 0;
+    }
+
+    var width: int = n;
+    var height: int = n;
+    var max_x: int = (width + 7) / 8;
+    var max_iterations: int = 50;
+    var limit_sq: double = 4.0;
+
+    var inv_w: double = 0.0;
+    var inv_h: double = 0.0;
+    if (width > 0) {
+        inv_w = 1.0 / (width as double);
+    }
+    if (height > 0) {
+        inv_h = 1.0 / (height as double);
+    }
+
+    var header: string = "P4\n" + str(width) + " " + str(height) + "\n";
+
+    var out_file: any = nil;
+    if (len(argv) > 1) {
+        out_file = argv[1];
+    }
+
+    if (out_file != nil) {
+        write_all(out_file, header);
+    } else {
+        // Ensure stdout is in binary mode on Windows before emitting the header.
+        stdoutWriteBytes(bytesWithSize(0, 0).0);
+        print(header);
+    }
+
+    var row: bytes = bytesWithSize(max_x, 0).0;
+    var cr0: array<double> = arrayWithSize(8, 0.0).0;
+    var cr: array<double> = arrayWithSize(8, 0.0).0;
+    var ci: array<double> = arrayWithSize(8, 0.0).0;
+    var alive: array<bool> = arrayWithSize(8, true).0;
+
+    var y: int = 0;
+    while (y < height) {
+        var ci0: double = (2.0 * (y as double) * inv_h) - 1.0;
+
+        var x: int = 0;
+        while (x < max_x) {
+            var base: int = 8 * x;
+
+            var k: int = 0;
+            while (k < 8) {
+                cr0[k] = (2.0 * ((base + k) as double) * inv_w) - 1.5;
+                cr[k] = cr0[k];
+                ci[k] = ci0;
+                alive[k] = true;
+                k = k + 1;
+            }
+
+            var alive_count: int = 8;
+            var i: int = 0;
+            while (i < max_iterations && alive_count > 0) {
+                k = 0;
+                while (k < 8) {
+                    if (alive[k]) {
+                        var crk: double = cr[k];
+                        var cik: double = ci[k];
+                        var cr2k: double = crk * crk;
+                        var ci2k: double = cik * cik;
+
+                        cr[k] = (cr2k - ci2k) + cr0[k];
+                        ci[k] = (2.0 * crk * cik) + ci0;
+
+                        if ((cr2k + ci2k) > limit_sq) {
+                            alive[k] = false;
+                            alive_count = alive_count - 1;
+                        }
+                    }
+                    k = k + 1;
+                }
+                i = i + 1;
+            }
+
+            var out: int = 0;
+            if (alive[0]) { out = out + 128; }
+            if (alive[1]) { out = out + 64; }
+            if (alive[2]) { out = out + 32; }
+            if (alive[3]) { out = out + 16; }
+            if (alive[4]) { out = out + 8; }
+            if (alive[5]) { out = out + 4; }
+            if (alive[6]) { out = out + 2; }
+            if (alive[7]) { out = out + 1; }
+
+            row[x] = out;
+            x = x + 1;
+        }
+
+        if (out_file != nil) {
+            appendBytes(out_file, row);
+        } else {
+            stdoutWriteBytes(row);
+        }
+
+        y = y + 1;
+    }
+}

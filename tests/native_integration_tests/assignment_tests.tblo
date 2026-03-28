@@ -1,0 +1,16 @@
+func main() {
+    var x: int = 1;
+    x = 2;
+    println(x);
+
+    var arr: array<int> = [1, 2, 3];
+    arr[0] = 9;
+    // Compound assignment on array elements (should not change arr[0] output)
+    var i: int = 0;
+    arr[i] += 1;
+    arr[i] -= 1;
+    arr[1] *= 2;
+    arr[1] /= 2;
+    arr[2] %= 3;
+    println(arr[0]);
+}

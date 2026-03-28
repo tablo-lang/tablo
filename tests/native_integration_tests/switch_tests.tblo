@@ -1,0 +1,128 @@
+record Point {
+    x: int
+};
+
+record Box[T] {
+    value: T
+};
+
+type Count = int;
+
+interface Named {
+    name(): string;
+};
+
+interface Renderable {
+    render(): string;
+};
+
+enum Status {
+    Ok = 200,
+    NotFound = 404,
+    Retry = 429
+};
+
+func name(point: Point): string {
+    return "point";
+}
+
+func renderBox[T](box: Box[T]): string {
+    return "box";
+}
+
+impl Renderable as Box[T] {
+    render = renderBox;
+};
+
+func classifyCode(code: int): string {
+    switch (code) {
+        case 200, 201: return "ok";
+        case 404: return "missing";
+        default: return "other";
+    }
+    return "bad";
+}
+
+func classifyLabel(label: string): int {
+    switch (label) {
+        case "ready", "set": return 1;
+        default: return 0;
+    }
+    return -1;
+}
+
+func classifyFlag(flag: bool): int {
+    switch (flag) {
+        case true: return 1;
+        default: return 2;
+    }
+    return -1;
+}
+
+func classifyStatus(status: Status): int {
+    switch (status) {
+        case Status.Ok: return 7;
+        case Status.NotFound: return 9;
+        default: return 0;
+    }
+    return -1;
+}
+
+func classifyType(value: any): string {
+    switch (value) {
+        case type Count, string: return "scalar";
+        case type Point: return "point";
+        case type Box[int]: return "box";
+        default: return "other";
+    }
+    return "bad";
+}
+
+func classifyInterface(value: any): string {
+    switch (value) {
+        case type Renderable: return "renderable";
+        case type Named: return "named";
+        default: return "other";
+    }
+    return "bad";
+}
+
+func classifyBound(value: any): string {
+    switch (value) {
+        case type Point as point: return point.x as string;
+        case type Renderable as renderable: return renderable.render();
+        case type Named as named: return named.name();
+        default: return "other";
+    }
+    return "bad";
+}
+
+func main(): void {
+    var point: Point = { x: 7 };
+    var boxed: Box[int] = { value: 11 };
+
+    println(classifyCode(200));
+    println(classifyCode(201));
+    println(classifyCode(500));
+    println(classifyLabel("ready"));
+    println(classifyLabel("set"));
+    println(classifyLabel("other"));
+    println(classifyFlag(true));
+    println(classifyFlag(false));
+    println(classifyStatus(Status.Ok));
+    println(classifyStatus(Status.NotFound));
+    println(classifyStatus(Status.Retry));
+    println(typeOf(point));
+    println(typeOf(boxed));
+    println(classifyType(42));
+    println(classifyType("hello"));
+    println(classifyType(point));
+    println(classifyType(boxed));
+    println(classifyType(false));
+    println(classifyInterface(point));
+    println(classifyInterface(boxed));
+    println(classifyInterface(false));
+    println(classifyBound(point));
+    println(classifyBound(boxed));
+    println(classifyBound(false));
+}

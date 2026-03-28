@@ -1,0 +1,135 @@
+import "fixtures/rate_limit.tblo";
+
+func main(): void {
+    var tb_new = rateLimitTokenBucketNewAt(10, 5, 10, 1000);
+    println(tb_new.1 == nil);
+    if (tb_new.1 == nil) {
+        var tb: RateLimitTokenBucket = tb_new.0;
+        println(tb.capacity == 10);
+        println(tb.refillPerSecond == 5);
+        println(tb.tokens == 10);
+        println(tb.lastRefillMs == 1000);
+
+        var t1 = rateLimitTokenBucketTryConsumeAt(tb, 3, 1000);
+        tb = t1.0;
+        println(t1.1);
+        println(t1.2 == 0);
+        println(tb.tokens == 7);
+
+        var t2 = rateLimitTokenBucketTryConsumeAt(tb, 8, 1000);
+        tb = t2.0;
+        println(!t2.1);
+        println(t2.2 == 200);
+        println(tb.tokens == 7);
+
+        var a1 = rateLimitTokenBucketAvailableAt(tb, 1200);
+        tb = a1.0;
+        println(a1.1 == 8);
+        println(tb.lastRefillMs == 1200);
+
+        var t3 = rateLimitTokenBucketTryConsumeAt(tb, 8, 1200);
+        tb = t3.0;
+        println(t3.1);
+        println(tb.tokens == 0);
+
+        var t4 = rateLimitTokenBucketTryConsumeAt(tb, 1, 1200);
+        tb = t4.0;
+        println(!t4.1);
+        println(t4.2 == 200);
+
+        var a2 = rateLimitTokenBucketAvailableAt(tb, 2200);
+        tb = a2.0;
+        println(a2.1 == 5);
+        println(tb.tokens == 5);
+    }
+
+    var tb_bad_cfg = rateLimitTokenBucketNewAt(0, 5, 0, 0);
+    println(tb_bad_cfg.1 != nil);
+    if (tb_bad_cfg.1 != nil) {
+        println(tb_bad_cfg.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var tb_for_bad = rateLimitTokenBucketNewAt(4, 2, 4, 0);
+    println(tb_for_bad.1 == nil);
+    if (tb_for_bad.1 == nil) {
+        var tb2: RateLimitTokenBucket = tb_for_bad.0;
+        var t_bad_1 = rateLimitTokenBucketTryConsumeAt(tb2, 0, 0);
+        println(t_bad_1.3 != nil);
+        if (t_bad_1.3 != nil) {
+            println(t_bad_1.3.code == ERR_INVALID_ARGUMENT);
+        }
+
+        var t_bad_2 = rateLimitTokenBucketTryConsumeAt(tb2, 5, 0);
+        println(t_bad_2.3 != nil);
+        if (t_bad_2.3 != nil) {
+            println(t_bad_2.3.code == ERR_INVALID_ARGUMENT);
+        }
+    }
+
+    var fw_new = rateLimitFixedWindowNewAt(5, 1000, 1500);
+    println(fw_new.1 == nil);
+    if (fw_new.1 == nil) {
+        var fw: RateLimitFixedWindow = fw_new.0;
+        println(fw.windowStartMs == 1000);
+        println(fw.used == 0);
+
+        var f1 = rateLimitFixedWindowTryConsumeAt(fw, 3, 1600);
+        fw = f1.0;
+        println(f1.1);
+        println(fw.used == 3);
+
+        var fr1 = rateLimitFixedWindowRemainingAt(fw, 1600);
+        fw = fr1.0;
+        println(fr1.1 == 2);
+        println(fr1.2 == 400);
+
+        var f2 = rateLimitFixedWindowTryConsumeAt(fw, 3, 1700);
+        fw = f2.0;
+        println(!f2.1);
+        println(f2.2 == 300);
+
+        var f3 = rateLimitFixedWindowTryConsumeAt(fw, 2, 1999);
+        fw = f3.0;
+        println(f3.1);
+        println(fw.used == 5);
+
+        var f4 = rateLimitFixedWindowTryConsumeAt(fw, 1, 1999);
+        fw = f4.0;
+        println(!f4.1);
+        println(f4.2 == 1);
+
+        var f5 = rateLimitFixedWindowTryConsumeAt(fw, 1, 2000);
+        fw = f5.0;
+        println(f5.1);
+        println(fw.windowStartMs == 2000);
+        println(fw.used == 1);
+
+        var fr2 = rateLimitFixedWindowRemainingAt(fw, 2000);
+        fw = fr2.0;
+        println(fr2.1 == 4);
+        println(fr2.2 == 1000);
+    }
+
+    var fw_bad_cfg = rateLimitFixedWindowNewAt(1, 0, 0);
+    println(fw_bad_cfg.1 != nil);
+    if (fw_bad_cfg.1 != nil) {
+        println(fw_bad_cfg.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var fw_for_bad = rateLimitFixedWindowNewAt(4, 1000, 0);
+    println(fw_for_bad.1 == nil);
+    if (fw_for_bad.1 == nil) {
+        var fw2: RateLimitFixedWindow = fw_for_bad.0;
+        var f_bad_1 = rateLimitFixedWindowTryConsumeAt(fw2, 0, 0);
+        println(f_bad_1.3 != nil);
+        if (f_bad_1.3 != nil) {
+            println(f_bad_1.3.code == ERR_INVALID_ARGUMENT);
+        }
+
+        var f_bad_2 = rateLimitFixedWindowTryConsumeAt(fw2, 5, 0);
+        println(f_bad_2.3 != nil);
+        if (f_bad_2.3 != nil) {
+            println(f_bad_2.3.code == ERR_INVALID_ARGUMENT);
+        }
+    }
+}

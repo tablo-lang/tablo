@@ -1,0 +1,2296 @@
+// HTTP server stdlib helpers built on top of tcpListen/tcpAccept/httpReadRequest/httpWriteResponse.
+// The default model is synchronous; httpServerServeConcurrent adds a bounded accept queue.
+
+import "observability.tblo";
+import "url.tblo";
+
+func httpMetricsIncSilent(name: string, delta: int): void {
+    var _ = metricsInc(name, delta);
+}
+
+func httpMetricsObserveSinceSilent(name: string, startMs: int): void {
+    if (startMs < 0) {
+        return;
+    }
+    var _ = metricsObserveSinceMs(name, startMs);
+}
+
+func httpClientStatusClass(status: int): string {
+    var class_digit: int = status / 100;
+    if (class_digit < 1 || class_digit > 5) {
+        return "other";
+    }
+    return str(class_digit) + "xx";
+}
+
+func httpClientRecordStatusMetric(status: int): void {
+    httpMetricsIncSilent("http.client.status_" + httpClientStatusClass(status) + "_total", 1);
+}
+
+func httpAsciiLower(text: string): string {
+    var upper: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var lower: string = "abcdefghijklmnopqrstuvwxyz";
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        var idx: int = find(upper, ch);
+        if (idx >= 0) {
+            out = out + substring(lower, idx, 1);
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func httpHeaderGetInsensitive(headers: map<string, string>?, name: string): string? {
+    if (headers == nil) {
+        return nil;
+    }
+    var target: string = httpAsciiLower(name);
+    foreach (key_any in keys(headers as map<string, any>)) {
+        if (typeOf(key_any) != "string") {
+            continue;
+        }
+        var key: string = key_any as string;
+        if (httpAsciiLower(key) != target) {
+            continue;
+        }
+        var value_any: any = mapGet(headers as map<string, any>, key);
+        if (value_any != nil && typeOf(value_any) == "string") {
+            return value_any as string;
+        }
+    }
+    return nil;
+}
+
+func httpHeaderDeleteInsensitive(headers: map<string, string>, name: string): void {
+    var target: string = httpAsciiLower(name);
+    foreach (key_any in keys(headers as map<string, any>)) {
+        if (typeOf(key_any) != "string") {
+            continue;
+        }
+        var key: string = key_any as string;
+        if (httpAsciiLower(key) == target) {
+            mapDeleteString(headers as map<string, any>, key);
+        }
+    }
+}
+
+func httpHeaderSetInsensitive(headers: map<string, string>, name: string, value: string): void {
+    httpHeaderDeleteInsensitive(headers, name);
+    mapSetString(headers as map<string, any>, name, value);
+}
+
+func httpHeaderValueHasToken(value: string?, token: string): bool {
+    if (value == nil) {
+        return false;
+    }
+    var parts: array<string> = split(value as string, ",");
+    var want: string = httpAsciiLower(token);
+    foreach (part in parts) {
+        if (httpAsciiLower(trim(part)) == want) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func httpHeaderAppendTokenInsensitive(headers: map<string, string>, name: string, token: string): void {
+    var current = httpHeaderGetInsensitive(headers, name);
+    if (current == nil || trim(current as string) == "") {
+        httpHeaderSetInsensitive(headers, name, token);
+        return;
+    }
+    if (httpHeaderValueHasToken(current, token)) {
+        return;
+    }
+    httpHeaderSetInsensitive(headers, name, (current as string) + ", " + token);
+}
+
+func httpServerRequestAcceptsGzip(req: map<string, any>): bool {
+    var headers_any: any = mapGetString(req, "headers");
+    if (headers_any == nil || typeOf(headers_any) != "map") {
+        return false;
+    }
+    return httpHeaderValueHasToken(httpHeaderGetInsensitive(headers_any as map<string, string>, "Accept-Encoding"), "gzip");
+}
+
+func httpServerResponseIsCompressible(headers: map<string, string>?): bool {
+    var content_type = httpHeaderGetInsensitive(headers, "Content-Type");
+    if (content_type == nil) {
+        return true;
+    }
+    var lower: string = httpAsciiLower(content_type as string);
+    return startsWith(lower, "text/") ||
+           find(lower, "json") >= 0 ||
+           find(lower, "javascript") >= 0 ||
+           find(lower, "xml") >= 0 ||
+           find(lower, "svg") >= 0 ||
+           find(lower, "form-urlencoded") >= 0;
+}
+
+func httpServerMaybeGzipResponse(req: map<string, any>, response: map<string, any>): (map<string, any>, Error?) {
+    var gzip_any: any = mapGetString(response, "gzip");
+    if (gzip_any == nil) {
+        return (response, nil);
+    }
+    if (typeOf(gzip_any) != "bool") {
+        return (response, httpServerError(ERR_INVALID_ARGUMENT, "response.gzip must be bool", typeOf(gzip_any)));
+    }
+    if (!(gzip_any as bool)) {
+        return (response, nil);
+    }
+
+    var body_any: any = mapGetString(response, "body");
+    if (body_any == nil) {
+        return (response, nil);
+    }
+    if (typeOf(body_any) != "string") {
+        return (response, httpServerError(ERR_INVALID_ARGUMENT, "response.gzip requires string body", typeOf(body_any)));
+    }
+
+    var body: string = body_any as string;
+    if (len(body) < 256) {
+        return (response, nil);
+    }
+    if (!httpServerRequestAcceptsGzip(req)) {
+        return (response, nil);
+    }
+
+    var headers_any: any = mapGetString(response, "headers");
+    var headers: map<string, string> = {};
+    if (headers_any != nil) {
+        if (typeOf(headers_any) != "map") {
+            return (response, httpServerError(ERR_INVALID_ARGUMENT, "response.headers must be map<string, string>", typeOf(headers_any)));
+        }
+        headers = headers_any as map<string, string>;
+    }
+
+    if (httpHeaderGetInsensitive(headers, "Content-Encoding") != nil) {
+        return (response, nil);
+    }
+    if (!httpServerResponseIsCompressible(headers)) {
+        return (response, nil);
+    }
+
+    httpHeaderSetInsensitive(headers, "Content-Encoding", "gzip");
+    httpHeaderAppendTokenInsensitive(headers, "Vary", "Accept-Encoding");
+    mapSetString(response, "headers", headers as any);
+    return (response, nil);
+}
+
+record HttpServer {
+    listener: any,
+    host: string,
+    port: int,
+    acceptTimeoutMs: int,
+    maxRequestBytes: int
+}
+
+func httpServerEmpty(): HttpServer {
+    var server: HttpServer = {
+        listener: nil,
+        host: "",
+        port: 0,
+        acceptTimeoutMs: 1000,
+        maxRequestBytes: 65536
+    };
+    return server;
+}
+
+func httpServerError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func httpServerIsTimeout(err: Error?): bool {
+    if (err == nil) {
+        return false;
+    }
+    if (err.code != ERR_NETWORK && err.code != ERR_LIMIT) {
+        return false;
+    }
+    return find(err.message, "timed out") >= 0;
+}
+
+func httpServerIsClosed(err: Error?): bool {
+    if (err == nil) {
+        return false;
+    }
+    if (err.code != ERR_NETWORK && err.code != ERR_IO) {
+        return false;
+    }
+    return find(err.message, "closed") >= 0;
+}
+
+func httpServerStart(host: string, port: int, acceptTimeoutMs: int, maxRequestBytes: int): (HttpServer, Error?) {
+    var empty = httpServerEmpty();
+
+    if (acceptTimeoutMs < 1 || acceptTimeoutMs > 120000) {
+        return (empty, httpServerError(ERR_INVALID_ARGUMENT, "acceptTimeoutMs must be between 1 and 120000", acceptTimeoutMs));
+    }
+    if (maxRequestBytes < 1 || maxRequestBytes > 8388608) {
+        return (empty, httpServerError(ERR_INVALID_ARGUMENT, "maxRequestBytes must be between 1 and 8388608", maxRequestBytes));
+    }
+
+    var lr = tcpListen(host, port);
+    if (lr.1 != nil) {
+        return (empty, lr.1);
+    }
+
+    var server: HttpServer = {
+        listener: lr.0,
+        host: host,
+        port: port,
+        acceptTimeoutMs: acceptTimeoutMs,
+        maxRequestBytes: maxRequestBytes
+    };
+    return (server, nil);
+}
+
+func httpServerClose(server: HttpServer): void {
+    if (server.listener != nil) {
+        tcpClose(server.listener);
+    }
+}
+
+func httpServerRouteKey(method: string, path: string): string {
+    return method + " " + path;
+}
+
+func httpServerRoute(routes: map<string, any>, method: string, path: string, handler: any): void {
+    mapSetString(routes, httpServerRouteKey(method, path), handler);
+}
+
+func httpServerResponse(statusCode: int, body: string, headers: map<string, string>?): map<string, any> {
+    var out: map<string, any> = {
+        "status": statusCode,
+        "body": body
+    };
+    if (headers != nil) {
+        mapSetString(out, "headers", headers as map<string, string>);
+    }
+    return out;
+}
+
+func httpServerGzipResponse(statusCode: int, body: string, headers: map<string, string>?): map<string, any> {
+    var out = httpServerResponse(statusCode, body, headers);
+    mapSetString(out, "gzip", true as any);
+    return out;
+}
+
+func httpServerApplyMiddleware(req: map<string, any>, middleware: array<any>): (map<string, any>, Error?) {
+    var current: map<string, any> = req;
+    var i: int = 0;
+    while (i < len(middleware)) {
+        var mw = middleware[i];
+        if (typeOf(mw) != "function") {
+            return (current, httpServerError(ERR_INVALID_ARGUMENT, "middleware entry must be function", i));
+        }
+
+        var next_any: any = mw(current);
+        if (next_any == nil) {
+            return (current, httpServerError(ERR_INVALID_ARGUMENT, "middleware returned nil", i));
+        }
+        if (typeOf(next_any) != "map") {
+            return (current, httpServerError(ERR_INVALID_ARGUMENT, "middleware must return map<string, any>", typeOf(next_any)));
+        }
+
+        current = next_any as map<string, any>;
+        i = i + 1;
+    }
+    return (current, nil);
+}
+
+func httpServerResolveRoute(routes: map<string, any>, req: map<string, any>): any {
+    var method_any: any = mapGetString(req, "method");
+    var path_any: any = mapGetString(req, "path");
+    if (method_any == nil || path_any == nil) {
+        return nil;
+    }
+    if (typeOf(method_any) != "string" || typeOf(path_any) != "string") {
+        return nil;
+    }
+
+    var method: string = method_any as string;
+    var path: string = path_any as string;
+
+    var handler = mapGetString(routes, httpServerRouteKey(method, path));
+    if (handler != nil) return handler;
+
+    handler = mapGetString(routes, httpServerRouteKey("ANY", path));
+    if (handler != nil) return handler;
+
+    return mapGetString(routes, "ANY *");
+}
+
+func httpServerNormalizeRequest(req: map<string, any>): map<string, any> {
+    var path_any: any = mapGetString(req, "path");
+    if (path_any == nil || typeOf(path_any) != "string") {
+        mapSetString(req, "query", {});
+        return req;
+    }
+
+    var raw_path: string = path_any as string;
+    var normalized_path: string = raw_path;
+    var raw_query: string = "";
+
+    var query_index: int = find(raw_path, "?");
+    if (query_index >= 0) {
+        normalized_path = substring(raw_path, 0, query_index);
+        var q_start: int = query_index + 1;
+        raw_query = substring(raw_path, q_start, len(raw_path) - q_start);
+    }
+
+    mapSetString(req, "rawPath", raw_path);
+    mapSetString(req, "path", normalized_path);
+    mapSetString(req, "queryRaw", raw_query);
+
+    if (raw_query == "") {
+        mapSetString(req, "query", {});
+        return req;
+    }
+
+    var parsed = queryParse(raw_query);
+    if (parsed.1 != nil) {
+        mapSetString(req, "query", {});
+        mapSetString(req, "queryError", parsed.1 as any);
+        return req;
+    }
+
+    mapSetString(req, "query", parsed.0);
+    return req;
+}
+
+func httpQueryError(code: int, message: string, key: string, value: any, cause: Error?): Error {
+    var data: map<string, any> = {
+        "key": key,
+        "value": value
+    };
+    if (cause != nil) {
+        mapSetString(data, "cause", cause as any);
+    }
+    return httpServerError(code, message, data);
+}
+
+func httpQueryGetString(req: map<string, any>, key: string): (string?, Error?) {
+    if (key == "") {
+        return (nil, httpQueryError(ERR_INVALID_ARGUMENT, "httpQueryGetString key cannot be empty", key, nil, nil));
+    }
+
+    var query_any: any = mapGetString(req, "query");
+    if (query_any == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(query_any) != "map") {
+        return (nil,
+                httpQueryError(ERR_INVALID_ARGUMENT,
+                               "httpQueryGetString request.query must be map<string, string>",
+                               key,
+                               typeOf(query_any),
+                               nil));
+    }
+
+    var query: map<string, string> = query_any as map<string, string>;
+    var value_any: any = mapGetString(query, key);
+    if (value_any == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(value_any) != "string") {
+        return (nil,
+                httpQueryError(ERR_INVALID_ARGUMENT,
+                               "httpQueryGetString query value must be string",
+                               key,
+                               typeOf(value_any),
+                               nil));
+    }
+
+    return (value_any as string, nil);
+}
+
+func httpQueryGetStringDefault(req: map<string, any>, key: string, defaultValue: string): (string, Error?) {
+    var got = httpQueryGetString(req, key);
+    if (got.1 != nil) {
+        return (defaultValue, got.1);
+    }
+    if (got.0 == nil) {
+        return (defaultValue, nil);
+    }
+    return (got.0 as string, nil);
+}
+
+func httpQueryGetInt(req: map<string, any>, key: string): (int?, Error?) {
+    var got = httpQueryGetString(req, key);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+
+    var raw: string = trim(got.0 as string);
+    if (raw == "") {
+        return (nil, httpQueryError(ERR_PARSE, "httpQueryGetInt query value must be non-empty int", key, got.0, nil));
+    }
+
+    var bi = toBigInt(raw);
+    if (bi.1 != nil) {
+        return (nil, httpQueryError(ERR_PARSE, "httpQueryGetInt query value must be int", key, got.0, bi.1));
+    }
+
+    var parsed: int = toInt(bi.0);
+    var parsed_bi = toBigInt(parsed);
+    if (parsed_bi.1 != nil || parsed_bi.0 != bi.0) {
+        return (nil, httpQueryError(ERR_PARSE, "httpQueryGetInt query value is out of int range", key, got.0, nil));
+    }
+
+    return (parsed, nil);
+}
+
+func httpQueryGetIntDefault(req: map<string, any>, key: string, defaultValue: int): (int, Error?) {
+    var got = httpQueryGetInt(req, key);
+    if (got.1 != nil) {
+        return (defaultValue, got.1);
+    }
+    if (got.0 == nil) {
+        return (defaultValue, nil);
+    }
+    return (got.0 as int, nil);
+}
+
+func httpQueryGetIntRange(req: map<string, any>, key: string, minValue: int, maxValue: int): (int?, Error?) {
+    if (minValue > maxValue) {
+        return (nil,
+                httpQueryError(ERR_INVALID_ARGUMENT,
+                               "httpQueryGetIntRange requires minValue <= maxValue",
+                               key,
+                               {"minValue": minValue, "maxValue": maxValue},
+                               nil));
+    }
+
+    var got = httpQueryGetInt(req, key);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+
+    var value: int = got.0 as int;
+    if (value < minValue || value > maxValue) {
+        return (nil,
+                httpQueryError(ERR_PARSE,
+                               "httpQueryGetIntRange query value is out of range",
+                               key,
+                               {
+                                   "value": value,
+                                   "minValue": minValue,
+                                   "maxValue": maxValue
+                               },
+                               nil));
+    }
+    return (value, nil);
+}
+
+func httpQueryGetIntRangeDefault(req: map<string, any>,
+                                 key: string,
+                                 defaultValue: int,
+                                 minValue: int,
+                                 maxValue: int): (int, Error?) {
+    if (minValue > maxValue) {
+        return (defaultValue,
+                httpQueryError(ERR_INVALID_ARGUMENT,
+                               "httpQueryGetIntRangeDefault requires minValue <= maxValue",
+                               key,
+                               {"minValue": minValue, "maxValue": maxValue},
+                               nil));
+    }
+    if (defaultValue < minValue || defaultValue > maxValue) {
+        return (defaultValue,
+                httpQueryError(ERR_INVALID_ARGUMENT,
+                               "httpQueryGetIntRangeDefault defaultValue is out of range",
+                               key,
+                               {
+                                   "defaultValue": defaultValue,
+                                   "minValue": minValue,
+                                   "maxValue": maxValue
+                               },
+                               nil));
+    }
+
+    var got = httpQueryGetIntRange(req, key, minValue, maxValue);
+    if (got.1 != nil) {
+        return (defaultValue, got.1);
+    }
+    if (got.0 == nil) {
+        return (defaultValue, nil);
+    }
+    return (got.0 as int, nil);
+}
+
+func httpQueryGetBool(req: map<string, any>, key: string): (bool?, Error?) {
+    var got = httpQueryGetString(req, key);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+
+    var raw: string = trim(got.0 as string);
+    if (raw == "1" || raw == "true" || raw == "TRUE" || raw == "True" ||
+        raw == "yes" || raw == "YES" || raw == "on" || raw == "ON") {
+        return (true, nil);
+    }
+    if (raw == "0" || raw == "false" || raw == "FALSE" || raw == "False" ||
+        raw == "no" || raw == "NO" || raw == "off" || raw == "OFF") {
+        return (false, nil);
+    }
+
+    return (nil, httpQueryError(ERR_PARSE, "httpQueryGetBool query value must be bool", key, got.0, nil));
+}
+
+func httpQueryGetBoolDefault(req: map<string, any>, key: string, defaultValue: bool): (bool, Error?) {
+    var got = httpQueryGetBool(req, key);
+    if (got.1 != nil) {
+        return (defaultValue, got.1);
+    }
+    if (got.0 == nil) {
+        return (defaultValue, nil);
+    }
+    return (got.0 as bool, nil);
+}
+
+func httpServerWriteFromDescriptor(client: any, response: map<string, any>): (bool, Error?) {
+    var status: int = 200;
+    var body: string = "";
+    var headers: map<string, string>? = nil;
+
+    var status_any: any = mapGetString(response, "status");
+    if (status_any != nil) {
+        if (typeOf(status_any) != "int") {
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "response.status must be int", typeOf(status_any)));
+        }
+        status = status_any as int;
+    }
+
+    var body_any: any = mapGetString(response, "body");
+    if (body_any != nil) {
+        if (typeOf(body_any) != "string") {
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "response.body must be string", typeOf(body_any)));
+        }
+        body = body_any as string;
+    }
+
+    var headers_any: any = mapGetString(response, "headers");
+    if (headers_any != nil) {
+        if (typeOf(headers_any) != "map") {
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "response.headers must be map<string, string>", typeOf(headers_any)));
+        }
+        headers = headers_any as map<string, string>;
+    }
+
+    return httpWriteResponse(client, status, body, headers);
+}
+
+func httpServerServeAcceptedClient(client: any,
+                                   routes: map<string, any>,
+                                   middleware: array<any>,
+                                   maxRequestBytes: int): (bool, Error?) {
+    var started_ms: int = timeMonotonicMillis();
+    httpMetricsIncSilent("http.server.requests_total", 1);
+
+    var rr = httpReadRequest(client, maxRequestBytes);
+    if (rr.1 != nil) {
+        tcpClose(client);
+        httpMetricsIncSilent("http.server.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        return (false, rr.1);
+    }
+    var req: map<string, any> = rr.0 as map<string, any>;
+    req = httpServerNormalizeRequest(req);
+
+    var mw = httpServerApplyMiddleware(req, middleware);
+    if (mw.1 != nil) {
+        tcpClose(client);
+        httpMetricsIncSilent("http.server.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        return (false, mw.1);
+    }
+    req = mw.0;
+
+    var handler = httpServerResolveRoute(routes, req);
+
+    var response: map<string, any> = {};
+    if (handler == nil) {
+        var not_found_headers: map<string, string> = {"Content-Type": "text/plain; charset=utf-8"};
+        response = httpServerResponse(404, "Not Found", not_found_headers);
+    } else {
+        if (typeOf(handler) != "function") {
+            tcpClose(client);
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "route handler must be function", typeOf(handler)));
+        }
+        var response_any: any = handler(req);
+        if (response_any == nil) {
+            tcpClose(client);
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "route handler returned nil", nil));
+        }
+        if (typeOf(response_any) != "map") {
+            tcpClose(client);
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+            return (false, httpServerError(ERR_INVALID_ARGUMENT, "route handler must return map<string, any>", typeOf(response_any)));
+        }
+        response = response_any as map<string, any>;
+    }
+
+    var gzip_response = httpServerMaybeGzipResponse(req, response);
+    if (gzip_response.1 != nil) {
+        tcpClose(client);
+        httpMetricsIncSilent("http.server.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        return (false, gzip_response.1);
+    }
+    response = gzip_response.0;
+
+    var wr = httpServerWriteFromDescriptor(client, response);
+    tcpClose(client);
+    if (wr.1 != nil) {
+        httpMetricsIncSilent("http.server.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        return (false, wr.1);
+    }
+
+    httpMetricsIncSilent("http.server.responses_total", 1);
+    httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+    return (true, nil);
+}
+
+func httpServerServeOne(server: HttpServer, routes: map<string, any>, middleware: array<any>): (bool, Error?) {
+    if (server.listener == nil) {
+        return (false, httpServerError(ERR_INVALID_ARGUMENT, "server listener is nil", nil));
+    }
+
+    var ar = tcpAccept(server.listener, server.acceptTimeoutMs);
+    if (ar.1 != nil) {
+        if (!httpServerIsTimeout(ar.1)) {
+            httpMetricsIncSilent("http.server.accept_errors_total", 1);
+        }
+        return (false, ar.1);
+    }
+    var client: any = ar.0;
+
+    return httpServerServeAcceptedClient(client, routes, middleware, server.maxRequestBytes);
+}
+
+func httpServerServeConcurrent(server: HttpServer,
+                               routes: map<string, any>,
+                               middleware: array<any>,
+                               maxRequests: int,
+                               workerCount: int,
+                               queueCapacity: int): (int, Error?) {
+    if (server.listener == nil) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "server listener is nil", nil));
+    }
+    if (maxRequests < 1) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "maxRequests must be >= 1", maxRequests));
+    }
+    if (workerCount < 1 || workerCount > 256) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "workerCount must be between 1 and 256", workerCount));
+    }
+    if (queueCapacity < 1 || queueCapacity > 4096) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "queueCapacity must be between 1 and 4096", queueCapacity));
+    }
+
+    var served: int = 0;
+    var idle_timeout_streak: int = 0;
+    var max_idle_timeouts: int = 3;
+    while (served < maxRequests) {
+        var remaining: int = maxRequests - served;
+        var accept_batch: int = workerCount * queueCapacity;
+        if (accept_batch < 1) {
+            accept_batch = 1;
+        }
+        if (accept_batch > remaining) {
+            accept_batch = remaining;
+        }
+
+        var pending: array<any> = [];
+        var accepted: int = 0;
+        while (accepted < accept_batch) {
+            // After the first accepted client, poll non-blocking so we can quickly
+            // drain any already-queued connections without introducing timer sleeps.
+            var timeout_ms: int = 0;
+            if (accepted == 0) {
+                timeout_ms = server.acceptTimeoutMs;
+            }
+
+            var ar = tcpAccept(server.listener, timeout_ms);
+            if (ar.1 != nil) {
+                if (httpServerIsTimeout(ar.1)) {
+                    if (accepted == 0) {
+                        idle_timeout_streak = idle_timeout_streak + 1;
+                    }
+                    break;
+                }
+                httpMetricsIncSilent("http.server.accept_errors_total", 1);
+                return (served, ar.1);
+            }
+
+            push(pending, ar.0);
+            accepted = accepted + 1;
+        }
+
+        if (accepted == 0) {
+            // In fixed-request mode tolerate brief accept lulls so transient
+            // scheduler/network jitter does not terminate request-limited runs.
+            if (idle_timeout_streak < max_idle_timeouts) {
+                continue;
+            }
+            break;
+        }
+        idle_timeout_streak = 0;
+
+        var i: int = 0;
+        while (i < accepted) {
+            var one = httpServerServeAcceptedClient(pending[i], routes, middleware, server.maxRequestBytes);
+            if (one.1 != nil) {
+                var j: int = i + 1;
+                while (j < accepted) {
+                    tcpClose(pending[j]);
+                    j = j + 1;
+                }
+                return (served, one.1);
+            }
+            if (!one.0) {
+                var k: int = i + 1;
+                while (k < accepted) {
+                    tcpClose(pending[k]);
+                    k = k + 1;
+                }
+                return (served, nil);
+            }
+
+            served = served + 1;
+            i = i + 1;
+        }
+    }
+
+    return (served, nil);
+}
+
+func httpServerServeMany(server: HttpServer,
+                         routes: map<string, any>,
+                         middleware: array<any>,
+                         maxRequests: int): (int, Error?) {
+    return httpServerServeConcurrent(server, routes, middleware, maxRequests, 1, 1);
+}
+
+func httpServerWorkerRecv(timeoutMs: int): (any, Error?) {
+    var inbox: int = syncThreadInbox();
+    if (inbox < 0) {
+        return (nil, httpServerError(ERR_INVALID_ARGUMENT, "worker inbox is unavailable", nil));
+    }
+    return syncChannelRecvTyped(inbox, "any", timeoutMs);
+}
+
+func httpServerWorkerSendOk(requestId: int, response: map<string, any>, timeoutMs: int): (bool, Error?) {
+    var outbox: int = syncThreadOutbox();
+    if (outbox < 0) {
+        return (false, httpServerError(ERR_INVALID_ARGUMENT, "worker outbox is unavailable", nil));
+    }
+
+    var payload: map<string, any> = {
+        "id": requestId,
+        "ok": true,
+        "response": response
+    };
+    return syncChannelSendTyped(outbox, payload as any, "any", timeoutMs);
+}
+
+func httpServerWorkerSendErr(requestId: int, code: int, message: string, timeoutMs: int): (bool, Error?) {
+    var outbox: int = syncThreadOutbox();
+    if (outbox < 0) {
+        return (false, httpServerError(ERR_INVALID_ARGUMENT, "worker outbox is unavailable", nil));
+    }
+
+    var err_payload: map<string, any> = {
+        "code": code,
+        "message": message
+    };
+    var payload: map<string, any> = {
+        "id": requestId,
+        "ok": false,
+        "error": err_payload
+    };
+    return syncChannelSendTyped(outbox, payload as any, "any", timeoutMs);
+}
+
+func httpServerWorkerHandlePayload(routes: map<string, any>,
+                                   middleware: array<any>,
+                                   payload: any,
+                                   timeoutMs: int): (bool, Error?) {
+    if (payload == nil) {
+        return (false, nil);
+    }
+    if (typeOf(payload) != "map") {
+        var send_bad_type = httpServerWorkerSendErr(0, ERR_INVALID_ARGUMENT, "worker payload must be map<string, any>", timeoutMs);
+        if (send_bad_type.1 != nil) {
+            return (false, send_bad_type.1);
+        }
+        return (false, nil);
+    }
+
+    var msg: map<string, any> = payload as map<string, any>;
+    var id_any = mapGetString(msg, "id");
+    var req_any = mapGetString(msg, "request");
+
+    if (id_any == nil || typeOf(id_any) != "int") {
+        var send_bad_id = httpServerWorkerSendErr(0, ERR_INVALID_ARGUMENT, "worker payload missing int id", timeoutMs);
+        if (send_bad_id.1 != nil) {
+            return (false, send_bad_id.1);
+        }
+        return (false, nil);
+    }
+
+    var request_id: int = id_any as int;
+    if (req_any == nil || typeOf(req_any) != "map") {
+        var send_bad_req = httpServerWorkerSendErr(request_id, ERR_INVALID_ARGUMENT, "worker payload missing request map", timeoutMs);
+        if (send_bad_req.1 != nil) {
+            return (false, send_bad_req.1);
+        }
+        return (false, nil);
+    }
+
+    var req: map<string, any> = req_any as map<string, any>;
+    req = httpServerNormalizeRequest(req);
+    var mw = httpServerApplyMiddleware(req, middleware);
+    if (mw.1 != nil) {
+        var send_mw_err = httpServerWorkerSendErr(request_id, mw.1.code, mw.1.message, timeoutMs);
+        if (send_mw_err.1 != nil) {
+            return (false, send_mw_err.1);
+        }
+        return (true, nil);
+    }
+    req = mw.0;
+
+    var handler = httpServerResolveRoute(routes, req);
+    var response: map<string, any> = {};
+    if (handler == nil) {
+        var not_found_headers: map<string, string> = {"Content-Type": "text/plain; charset=utf-8"};
+        response = httpServerResponse(404, "Not Found", not_found_headers);
+    } else {
+        if (typeOf(handler) != "function") {
+            var send_bad_handler = httpServerWorkerSendErr(request_id, ERR_INVALID_ARGUMENT, "route handler must be function", timeoutMs);
+            if (send_bad_handler.1 != nil) {
+                return (false, send_bad_handler.1);
+            }
+            return (true, nil);
+        }
+
+        var response_any: any = handler(req);
+        if (response_any == nil) {
+            var send_nil = httpServerWorkerSendErr(request_id, ERR_INVALID_ARGUMENT, "route handler returned nil", timeoutMs);
+            if (send_nil.1 != nil) {
+                return (false, send_nil.1);
+            }
+            return (true, nil);
+        }
+        if (typeOf(response_any) != "map") {
+            var send_bad_resp = httpServerWorkerSendErr(request_id, ERR_INVALID_ARGUMENT, "route handler must return map<string, any>", timeoutMs);
+            if (send_bad_resp.1 != nil) {
+                return (false, send_bad_resp.1);
+            }
+            return (true, nil);
+        }
+        response = response_any as map<string, any>;
+    }
+
+    var gzip_response = httpServerMaybeGzipResponse(req, response);
+    if (gzip_response.1 != nil) {
+        var send_gzip_err = httpServerWorkerSendErr(request_id, gzip_response.1.code, gzip_response.1.message, timeoutMs);
+        if (send_gzip_err.1 != nil) {
+            return (false, send_gzip_err.1);
+        }
+        return (true, nil);
+    }
+    response = gzip_response.0;
+
+    var send_ok = httpServerWorkerSendOk(request_id, response, timeoutMs);
+    if (send_ok.1 != nil) {
+        return (false, send_ok.1);
+    }
+    return (true, nil);
+}
+
+func httpServerWorkerServeLoop(routes: map<string, any>,
+                               middleware: array<any>,
+                               timeoutMs: int): (int, Error?) {
+    if (timeoutMs < 1 || timeoutMs > 120000) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "timeoutMs must be between 1 and 120000", timeoutMs));
+    }
+
+    var served: int = 0;
+    while (true) {
+        var recv_r = httpServerWorkerRecv(timeoutMs);
+        if (recv_r.1 != nil) {
+            if (httpServerIsTimeout(recv_r.1)) {
+                continue;
+            }
+            return (served, recv_r.1);
+        }
+
+        var handled = httpServerWorkerHandlePayload(routes, middleware, recv_r.0, timeoutMs);
+        if (handled.1 != nil) {
+            return (served, handled.1);
+        }
+
+        if (recv_r.0 == nil) {
+            return (served, nil);
+        }
+        if (handled.0) {
+            served = served + 1;
+        }
+    }
+}
+
+func httpServerThreadPoolShutdown(workerThreads: array<int>, inboxId: int, outboxId: int): Error? {
+    var shutdown_err: Error? = nil;
+
+    if (inboxId >= 0) {
+        var close_in = syncChannelClose(inboxId);
+        if (shutdown_err == nil && close_in.1 != nil && !httpServerIsClosed(close_in.1)) {
+            shutdown_err = httpServerError(close_in.1.code,
+                                           "worker inbox close failed: " + close_in.1.message,
+                                           close_in.1.data);
+        }
+    }
+
+    var i: int = 0;
+    while (i < len(workerThreads)) {
+        var join_r = syncThreadJoin(workerThreads[i], 5000);
+        if (shutdown_err == nil && join_r.1 != nil) {
+            shutdown_err = httpServerError(join_r.1.code,
+                                           "worker thread join failed: " + join_r.1.message,
+                                           {
+                                               "threadId": workerThreads[i],
+                                               "joinErrorData": join_r.1.data
+                                           });
+        }
+        i = i + 1;
+    }
+
+    if (outboxId >= 0) {
+        var close_out = syncChannelClose(outboxId);
+        if (shutdown_err == nil && close_out.1 != nil && !httpServerIsClosed(close_out.1)) {
+            shutdown_err = httpServerError(close_out.1.code,
+                                           "worker outbox close failed: " + close_out.1.message,
+                                           close_out.1.data);
+        }
+    }
+
+    return shutdown_err;
+}
+
+func httpServerCloseInFlight(inFlight: map<string, any>): void {
+    var ids = keys(inFlight);
+    foreach (id_any in ids) {
+        if (id_any != nil && typeOf(id_any) == "string") {
+            var client = mapGetString(inFlight, id_any as string);
+            if (client != nil) {
+                tcpClose(client);
+            }
+        }
+    }
+}
+
+func httpServerThreadPoolStopWithError(served: int,
+                                       err: Error,
+                                       inFlight: map<string, any>,
+                                       workerThreads: array<int>,
+                                       inboxId: int,
+                                       outboxId: int): (int, Error?) {
+    httpServerCloseInFlight(inFlight);
+    var shutdown_err = httpServerThreadPoolShutdown(workerThreads, inboxId, outboxId);
+    if (shutdown_err != nil) {
+        return (served, shutdown_err);
+    }
+    return (served, err);
+}
+
+func httpServerExpireInFlightRequests(inFlight: map<string, any>,
+                                      inFlightStarted: map<string, any>,
+                                      requestDeadlineMs: int): int {
+    if (requestDeadlineMs <= 0) {
+        return 0;
+    }
+
+    var now_ms: int = timeMonotonicMillis();
+    var ids = keys(inFlightStarted);
+    var expired: int = 0;
+    foreach (id_any in ids) {
+        if (id_any == nil || typeOf(id_any) != "string") {
+            continue;
+        }
+        var id: string = id_any as string;
+        var started_any = mapGetString(inFlightStarted, id);
+        if (started_any == nil || typeOf(started_any) != "int") {
+            mapDeleteString(inFlightStarted, id);
+            continue;
+        }
+        var started_ms: int = started_any as int;
+        if (started_ms < 0) {
+            started_ms = now_ms;
+        }
+        if (now_ms - started_ms < requestDeadlineMs) {
+            continue;
+        }
+
+        var client = mapGetString(inFlight, id);
+        mapDeleteString(inFlight, id);
+        mapDeleteString(inFlightStarted, id);
+        if (client != nil) {
+            var timeout_headers: map<string, string> = {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Connection": "close"
+            };
+            var wr_timeout = httpWriteResponse(client, 504, "Gateway Timeout", timeout_headers);
+            tcpClose(client);
+            if (wr_timeout.1 != nil && !httpServerIsClosed(wr_timeout.1)) {
+                httpMetricsIncSilent("http.server.errors_total", 1);
+            } else {
+                httpMetricsIncSilent("http.server.responses_total", 1);
+            }
+            httpMetricsIncSilent("http.server.deadline_timeouts_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+            expired = expired + 1;
+        }
+    }
+    return expired;
+}
+
+func httpServerWriteBackpressure(client: any, statusCode: int, message: string): (bool, Error?) {
+    var status: int = statusCode;
+    if (status < 100 || status > 999) {
+        status = 503;
+    }
+    var body: string = message;
+    if (body == "") {
+        body = "Server Busy";
+    }
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Connection": "close"
+    };
+    httpMetricsIncSilent("http.server.backpressure_total", 1);
+    return httpWriteResponse(client, status, body, headers);
+}
+
+func httpServerPollStopSignal(stopChannelId: int, timeoutMs: int): (bool, Error?) {
+    if (stopChannelId < 0) {
+        return (false, nil);
+    }
+    if (timeoutMs < 1 || timeoutMs > 120000) {
+        return (false, httpServerError(ERR_INVALID_ARGUMENT, "timeoutMs must be between 1 and 120000", timeoutMs));
+    }
+
+    var recv_r = syncChannelRecv(stopChannelId, timeoutMs);
+    if (recv_r.1 == nil) {
+        return (true, nil);
+    }
+    if (httpServerIsTimeout(recv_r.1)) {
+        return (false, nil);
+    }
+    if (httpServerIsClosed(recv_r.1)) {
+        return (true, nil);
+    }
+    return (false, recv_r.1);
+}
+
+func httpServerServeThreadPoolControlledWithDeadline(server: HttpServer,
+                                                     workerFunctionName: string,
+                                                     maxRequests: int,
+                                                     workerCount: int,
+                                                     queueCapacity: int,
+                                                     stopChannelId: int,
+                                                     stopPollTimeoutMs: int,
+                                                     requestDeadlineMs: int): (int, Error?) {
+    if (server.listener == nil) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "server listener is nil", nil));
+    }
+    if (workerFunctionName == "") {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "workerFunctionName cannot be empty", nil));
+    }
+    if (maxRequests < 0) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "maxRequests must be >= 0", maxRequests));
+    }
+    if (workerCount < 1 || workerCount > 256) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "workerCount must be between 1 and 256", workerCount));
+    }
+    if (queueCapacity < 1 || queueCapacity > 4096) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "queueCapacity must be between 1 and 4096", queueCapacity));
+    }
+    if (stopChannelId < -1) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "stopChannelId must be >= -1", stopChannelId));
+    }
+    if (stopChannelId >= 0 && (stopPollTimeoutMs < 1 || stopPollTimeoutMs > 120000)) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "stopPollTimeoutMs must be between 1 and 120000", stopPollTimeoutMs));
+    }
+    if (requestDeadlineMs < 0 || requestDeadlineMs > 600000) {
+        return (0, httpServerError(ERR_INVALID_ARGUMENT, "requestDeadlineMs must be between 0 and 600000", requestDeadlineMs));
+    }
+
+    var in_r = syncChannelCreate(queueCapacity);
+    if (in_r.1 != nil) {
+        return (0, in_r.1);
+    }
+    var out_r = syncChannelCreate(queueCapacity);
+    if (out_r.1 != nil) {
+        var _ = syncChannelClose(in_r.0 as int);
+        return (0, out_r.1);
+    }
+
+    var inbox_id: int = in_r.0;
+    var outbox_id: int = out_r.0;
+    var worker_threads: array<int> = [];
+
+    var i: int = 0;
+    while (i < workerCount) {
+        var spawn_r = syncThreadSpawn(workerFunctionName, inbox_id, outbox_id);
+        if (spawn_r.1 != nil) {
+            var spawn_shutdown_err = httpServerThreadPoolShutdown(worker_threads, inbox_id, outbox_id);
+            if (spawn_shutdown_err != nil) {
+                return (0, spawn_shutdown_err);
+            }
+            return (0, spawn_r.1);
+        }
+        push(worker_threads, spawn_r.0 as int);
+        i = i + 1;
+    }
+
+    var in_flight: map<string, any> = {};
+    var in_flight_started: map<string, any> = {};
+    var next_id: int = 1;
+    var served: int = 0;
+    var limit_enabled: bool = maxRequests > 0;
+    var listener_closed: bool = false;
+    var idle_stop: bool = false;
+    var stop_requested: bool = false;
+    var idle_timeout_streak: int = 0;
+    var max_idle_timeouts: int = 3;
+
+    while (true) {
+        if (!stop_requested && stopChannelId >= 0) {
+            var stop_poll = httpServerPollStopSignal(stopChannelId, 1);
+            if (stop_poll.1 != nil) {
+                return httpServerThreadPoolStopWithError(served,
+                                                         stop_poll.1 as Error,
+                                                         in_flight,
+                                                         worker_threads,
+                                                         inbox_id,
+                                                         outbox_id);
+            }
+            if (stop_poll.0) {
+                stop_requested = true;
+            }
+        }
+
+        if (requestDeadlineMs > 0 && mapCount(in_flight) > 0) {
+            var expired = httpServerExpireInFlightRequests(in_flight, in_flight_started, requestDeadlineMs);
+            if (expired > 0) {
+                served = served + expired;
+            }
+        }
+
+        if (limit_enabled && served >= maxRequests) {
+            break;
+        }
+
+        var in_flight_count: int = mapCount(in_flight);
+        var remaining: int = 2147483647;
+        if (limit_enabled) {
+            remaining = maxRequests - served;
+        }
+        var can_accept: bool = !stop_requested && in_flight_count < queueCapacity;
+        if (limit_enabled) {
+            can_accept = can_accept && in_flight_count < remaining;
+        }
+
+        if (can_accept && !listener_closed) {
+            // When work is already in flight, use non-blocking accept polls so the
+            // loop can prefer worker completions over coarse timeout waits.
+            var accept_timeout_ms: int = 0;
+            if (in_flight_count == 0) {
+                accept_timeout_ms = server.acceptTimeoutMs;
+            }
+            if (stopChannelId >= 0 && accept_timeout_ms > stopPollTimeoutMs) {
+                accept_timeout_ms = stopPollTimeoutMs;
+            }
+
+            var ar = tcpAccept(server.listener, accept_timeout_ms);
+            if (ar.1 == nil) {
+                var client = ar.0;
+                var request_started_ms: int = timeMonotonicMillis();
+                httpMetricsIncSilent("http.server.requests_total", 1);
+                var rr = httpReadRequest(client, server.maxRequestBytes);
+                if (rr.1 != nil) {
+                    tcpClose(client);
+                    httpMetricsIncSilent("http.server.errors_total", 1);
+                    httpMetricsObserveSinceSilent("http.server.request_latency_ms", request_started_ms);
+                    return httpServerThreadPoolStopWithError(served,
+                                                             rr.1 as Error,
+                                                             in_flight,
+                                                             worker_threads,
+                                                             inbox_id,
+                                                             outbox_id);
+                }
+
+                var request_id: int = next_id;
+                next_id = next_id + 1;
+
+                var payload: map<string, any> = {
+                    "id": request_id,
+                    "request": rr.0
+                };
+                var send_r = syncChannelSendTyped(inbox_id, payload as any, "any", 5000);
+                if (send_r.1 != nil) {
+                    tcpClose(client);
+                    httpMetricsIncSilent("http.server.errors_total", 1);
+                    httpMetricsObserveSinceSilent("http.server.request_latency_ms", request_started_ms);
+                    return httpServerThreadPoolStopWithError(served,
+                                                             send_r.1 as Error,
+                                                             in_flight,
+                                                             worker_threads,
+                                                             inbox_id,
+                                                             outbox_id);
+                }
+
+                var request_key: string = str(request_id);
+                mapSetString(in_flight, request_key, client);
+                mapSetString(in_flight_started, request_key, request_started_ms);
+                idle_timeout_streak = 0;
+                continue;
+            }
+
+            if (httpServerIsTimeout(ar.1)) {
+                if (in_flight_count == 0 && !limit_enabled) {
+                    idle_stop = true;
+                } else if (in_flight_count == 0 && limit_enabled) {
+                    idle_timeout_streak = idle_timeout_streak + 1;
+                }
+            } else if (httpServerIsClosed(ar.1)) {
+                listener_closed = true;
+            } else {
+                httpMetricsIncSilent("http.server.accept_errors_total", 1);
+                return httpServerThreadPoolStopWithError(served,
+                                                         ar.1 as Error,
+                                                         in_flight,
+                                                         worker_threads,
+                                                         inbox_id,
+                                                         outbox_id);
+            }
+        } else if (!listener_closed && !stop_requested && in_flight_count >= queueCapacity) {
+            // Queue is full: accept and reject quickly so clients get an explicit backpressure signal.
+            var backpressure_timeout_ms: int = server.acceptTimeoutMs;
+            if (backpressure_timeout_ms < 1) {
+                backpressure_timeout_ms = 1;
+            }
+            if (stopChannelId >= 0 && backpressure_timeout_ms > stopPollTimeoutMs) {
+                backpressure_timeout_ms = stopPollTimeoutMs;
+            }
+            var backpressure_accept = tcpAccept(server.listener, backpressure_timeout_ms);
+            if (backpressure_accept.1 == nil) {
+                var backpressure_client = backpressure_accept.0;
+                // Drain request bytes before writing the rejection response so clients
+                // see a clean HTTP reply instead of a reset.
+                var _backpressure_req = httpReadRequest(backpressure_client, server.maxRequestBytes);
+                var wr_busy = httpServerWriteBackpressure(backpressure_client, 503, "Server Busy");
+                tcpClose(backpressure_client);
+                if (wr_busy.1 != nil && !httpServerIsClosed(wr_busy.1)) {
+                    return httpServerThreadPoolStopWithError(served,
+                                                             wr_busy.1 as Error,
+                                                             in_flight,
+                                                             worker_threads,
+                                                             inbox_id,
+                                                             outbox_id);
+                }
+                continue;
+            }
+            if (!httpServerIsTimeout(backpressure_accept.1)) {
+                if (httpServerIsClosed(backpressure_accept.1)) {
+                    listener_closed = true;
+                } else {
+                    return httpServerThreadPoolStopWithError(served,
+                                                             backpressure_accept.1 as Error,
+                                                             in_flight,
+                                                             worker_threads,
+                                                             inbox_id,
+                                                             outbox_id);
+                }
+            }
+        }
+
+        if (mapCount(in_flight) == 0) {
+            if (limit_enabled && idle_timeout_streak >= max_idle_timeouts) {
+                break;
+            }
+            if (listener_closed || idle_stop || stop_requested) {
+                break;
+            }
+            continue;
+        }
+        idle_timeout_streak = 0;
+
+        var recv_timeout_ms: int = server.acceptTimeoutMs;
+        if (recv_timeout_ms < 1) {
+            recv_timeout_ms = 1;
+        }
+        if (stopChannelId >= 0 && recv_timeout_ms > stopPollTimeoutMs) {
+            recv_timeout_ms = stopPollTimeoutMs;
+        }
+        var recv_r = syncChannelRecvTyped(outbox_id, "any", recv_timeout_ms);
+        if (recv_r.1 != nil) {
+            if (httpServerIsTimeout(recv_r.1)) {
+                continue;
+            }
+            if (httpServerIsClosed(recv_r.1)) {
+                listener_closed = true;
+                continue;
+            }
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            return httpServerThreadPoolStopWithError(served,
+                                                     recv_r.1 as Error,
+                                                     in_flight,
+                                                     worker_threads,
+                                                     inbox_id,
+                                                     outbox_id);
+        }
+        if (recv_r.0 == nil || typeOf(recv_r.0) != "map") {
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            return httpServerThreadPoolStopWithError(served,
+                                                     httpServerError(ERR_INVALID_ARGUMENT, "worker response must be map<string, any>", typeOf(recv_r.0)),
+                                                     in_flight,
+                                                     worker_threads,
+                                                     inbox_id,
+                                                     outbox_id);
+        }
+
+        var worker_msg: map<string, any> = recv_r.0 as map<string, any>;
+        var id_any = mapGetString(worker_msg, "id");
+        if (id_any == nil || typeOf(id_any) != "int") {
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            return httpServerThreadPoolStopWithError(served,
+                                                     httpServerError(ERR_INVALID_ARGUMENT, "worker response is missing int id", id_any),
+                                                     in_flight,
+                                                     worker_threads,
+                                                     inbox_id,
+                                                     outbox_id);
+        }
+        var client_key: string = str(id_any as int);
+        var client = mapGetString(in_flight, client_key);
+        if (client == nil) {
+            continue;
+        }
+        var started_any = mapGetString(in_flight_started, client_key);
+        var started_ms: int = -1;
+        if (started_any != nil && typeOf(started_any) == "int") {
+            started_ms = started_any as int;
+        }
+        mapDeleteString(in_flight, client_key);
+        mapDeleteString(in_flight_started, client_key);
+
+        var ok_any = mapGetString(worker_msg, "ok");
+        if (ok_any != nil && typeOf(ok_any) == "bool" && (ok_any as bool)) {
+            var response_any = mapGetString(worker_msg, "response");
+            if (response_any == nil || typeOf(response_any) != "map") {
+                tcpClose(client);
+                httpMetricsIncSilent("http.server.errors_total", 1);
+                httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+                return httpServerThreadPoolStopWithError(served,
+                                                         httpServerError(ERR_INVALID_ARGUMENT, "worker response.response must be map<string, any>", response_any),
+                                                         in_flight,
+                                                         worker_threads,
+                                                         inbox_id,
+                                                         outbox_id);
+            }
+
+            var wr = httpServerWriteFromDescriptor(client, response_any as map<string, any>);
+            tcpClose(client);
+            if (wr.1 != nil) {
+                httpMetricsIncSilent("http.server.errors_total", 1);
+                httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+                return httpServerThreadPoolStopWithError(served,
+                                                         wr.1 as Error,
+                                                         in_flight,
+                                                         worker_threads,
+                                                         inbox_id,
+                                                         outbox_id);
+            }
+            httpMetricsIncSilent("http.server.responses_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        } else {
+            httpMetricsIncSilent("http.server.errors_total", 1);
+            var message: string = "Worker failed";
+            var error_any = mapGetString(worker_msg, "error");
+            if (error_any != nil && typeOf(error_any) == "map") {
+                var err_map: map<string, any> = error_any as map<string, any>;
+                var msg_any = mapGetString(err_map, "message");
+                if (msg_any != nil && typeOf(msg_any) == "string") {
+                    message = msg_any as string;
+                }
+            }
+            var headers: map<string, string> = {"Content-Type": "text/plain; charset=utf-8"};
+            var wr500 = httpWriteResponse(client, 500, message, headers);
+            tcpClose(client);
+            if (wr500.1 != nil) {
+                httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+                return httpServerThreadPoolStopWithError(served,
+                                                         wr500.1 as Error,
+                                                         in_flight,
+                                                         worker_threads,
+                                                         inbox_id,
+                                                         outbox_id);
+            }
+            httpMetricsIncSilent("http.server.responses_total", 1);
+            httpMetricsObserveSinceSilent("http.server.request_latency_ms", started_ms);
+        }
+
+        served = served + 1;
+    }
+
+    httpServerCloseInFlight(in_flight);
+    var final_shutdown_err = httpServerThreadPoolShutdown(worker_threads, inbox_id, outbox_id);
+    if (final_shutdown_err != nil) {
+        return (served, final_shutdown_err);
+    }
+    return (served, nil);
+}
+
+func httpServerServeThreadPool(server: HttpServer,
+                               workerFunctionName: string,
+                               maxRequests: int,
+                               workerCount: int,
+                               queueCapacity: int): (int, Error?) {
+    return httpServerServeThreadPoolControlledWithDeadline(server,
+                                                           workerFunctionName,
+                                                           maxRequests,
+                                                           workerCount,
+                                                           queueCapacity,
+                                                           -1,
+                                                           1,
+                                                           0);
+}
+
+func httpServerServeThreadPoolWithDeadline(server: HttpServer,
+                                           workerFunctionName: string,
+                                           maxRequests: int,
+                                           workerCount: int,
+                                           queueCapacity: int,
+                                           requestDeadlineMs: int): (int, Error?) {
+    return httpServerServeThreadPoolControlledWithDeadline(server,
+                                                           workerFunctionName,
+                                                           maxRequests,
+                                                           workerCount,
+                                                           queueCapacity,
+                                                           -1,
+                                                           1,
+                                                           requestDeadlineMs);
+}
+
+func httpServerServeThreadPoolControlled(server: HttpServer,
+                                         workerFunctionName: string,
+                                         maxRequests: int,
+                                         workerCount: int,
+                                         queueCapacity: int,
+                                         stopChannelId: int,
+                                         stopPollTimeoutMs: int): (int, Error?) {
+    return httpServerServeThreadPoolControlledWithDeadline(server,
+                                                           workerFunctionName,
+                                                           maxRequests,
+                                                           workerCount,
+                                                           queueCapacity,
+                                                           stopChannelId,
+                                                           stopPollTimeoutMs,
+                                                           0);
+}
+
+// Production-oriented long-running loop entrypoint.
+// It uses thread-pool workers and runs until idle timeout or listener shutdown.
+func httpServerServeLoop(server: HttpServer,
+                         workerFunctionName: string,
+                         workerCount: int,
+                         queueCapacity: int): (int, Error?) {
+    return httpServerServeThreadPool(server, workerFunctionName, 0, workerCount, queueCapacity);
+}
+
+func httpServerServeLoopWithDeadline(server: HttpServer,
+                                     workerFunctionName: string,
+                                     workerCount: int,
+                                     queueCapacity: int,
+                                     requestDeadlineMs: int): (int, Error?) {
+    return httpServerServeThreadPoolWithDeadline(server,
+                                                 workerFunctionName,
+                                                 0,
+                                                 workerCount,
+                                                 queueCapacity,
+                                                 requestDeadlineMs);
+}
+
+// Like httpServerServeLoop but allows message-passing based shutdown control.
+// Sending any value on stopChannelId (or closing it) requests graceful stop.
+func httpServerServeLoopControlled(server: HttpServer,
+                                   workerFunctionName: string,
+                                   workerCount: int,
+                                   queueCapacity: int,
+                                   stopChannelId: int,
+                                   stopPollTimeoutMs: int): (int, Error?) {
+    return httpServerServeLoopControlledWithDeadline(server,
+                                                     workerFunctionName,
+                                                     workerCount,
+                                                     queueCapacity,
+                                                     stopChannelId,
+                                                     stopPollTimeoutMs,
+                                                     0);
+}
+
+func httpServerServeLoopControlledWithDeadline(server: HttpServer,
+                                               workerFunctionName: string,
+                                               workerCount: int,
+                                               queueCapacity: int,
+                                               stopChannelId: int,
+                                               stopPollTimeoutMs: int,
+                                               requestDeadlineMs: int): (int, Error?) {
+    return httpServerServeThreadPoolControlledWithDeadline(server,
+                                                           workerFunctionName,
+                                                           0,
+                                                           workerCount,
+                                                           queueCapacity,
+                                                           stopChannelId,
+                                                           stopPollTimeoutMs,
+                                                           requestDeadlineMs);
+}
+
+record HttpClientResponse {
+    status: int,
+    headers: map<string, string>,
+    body: string
+}
+
+record HttpClientStreamResponse {
+    status: int,
+    headers: map<string, string>,
+    socket: any,
+    contentLength: int,
+    remainingBodyBytes: int
+}
+
+func httpClientEmptyResponse(): HttpClientResponse {
+    var out: HttpClientResponse = {
+        status: 0,
+        headers: {},
+        body: ""
+    };
+    return out;
+}
+
+func httpClientError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func httpClientCopyHeaders(headers: map<string, string>?): map<string, string> {
+    if (headers == nil) {
+        return {};
+    }
+    return headers as map<string, string>;
+}
+
+func httpClientDecodeResponseMap(responseAny: any): (HttpClientResponse, Error?) {
+    var empty = httpClientEmptyResponse();
+    if (responseAny == nil || typeOf(responseAny) != "map") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequest response must be map<string, any>", typeOf(responseAny)));
+    }
+
+    var response: map<string, any> = responseAny as map<string, any>;
+    var status_any = mapGetString(response, "status");
+    if (status_any == nil || typeOf(status_any) != "int") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequest response.status must be int", status_any));
+    }
+
+    var body_any = mapGetString(response, "body");
+    if (body_any == nil || typeOf(body_any) != "string") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequest response.body must be string", body_any));
+    }
+
+    var headers_any = mapGetString(response, "headers");
+    if (headers_any == nil || typeOf(headers_any) != "map") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequest response.headers must be map<string, string>", headers_any));
+    }
+
+    var headers: map<string, string> = headers_any as map<string, string>;
+
+    var out: HttpClientResponse = {
+        status: status_any as int,
+        headers: headers,
+        body: body_any as string
+    };
+    return (out, nil);
+}
+
+func httpClientEmptyStreamResponse(): HttpClientStreamResponse {
+    var out: HttpClientStreamResponse = {
+        status: 0,
+        headers: {},
+        socket: nil,
+        contentLength: -1,
+        remainingBodyBytes: -1
+    };
+    return out;
+}
+
+func httpClientDecodeStreamResponseMap(responseAny: any): (HttpClientStreamResponse, Error?) {
+    var empty = httpClientEmptyStreamResponse();
+    if (responseAny == nil || typeOf(responseAny) != "map") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response must be map<string, any>", typeOf(responseAny)));
+    }
+
+    var response: map<string, any> = responseAny as map<string, any>;
+    var status_any = mapGetString(response, "status");
+    if (status_any == nil || typeOf(status_any) != "int") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response.status must be int", status_any));
+    }
+
+    var headers_any = mapGetString(response, "headers");
+    if (headers_any == nil || typeOf(headers_any) != "map") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response.headers must be map<string, string>", headers_any));
+    }
+    var headers: map<string, string> = headers_any as map<string, string>;
+
+    var content_length_any = mapGetString(response, "contentLength");
+    if (content_length_any == nil || typeOf(content_length_any) != "int") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response.contentLength must be int", content_length_any));
+    }
+    var content_length: int = content_length_any as int;
+    if (content_length < -1) {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response.contentLength must be >= -1", content_length));
+    }
+
+    var socket_any = mapGetString(response, "socket");
+    if (socket_any == nil || typeOf(socket_any) != "socket") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "httpRequestHead response.socket must be socket", socket_any));
+    }
+
+    var out: HttpClientStreamResponse = {
+        status: status_any as int,
+        headers: headers,
+        socket: socket_any,
+        contentLength: content_length,
+        remainingBodyBytes: content_length
+    };
+    return (out, nil);
+}
+
+func httpClientValidateRequestOptions(requestOptions: map<string, any>?): (map<string, any>?, Error?) {
+    if (requestOptions == nil) {
+        return (nil, nil);
+    }
+
+    var options: map<string, any> = requestOptions as map<string, any>;
+    var tls_skip_any = mapGetString(options, "tlsInsecureSkipVerify");
+    if (tls_skip_any == nil) {
+        tls_skip_any = mapGetString(options, "insecureSkipVerify");
+    }
+    if (tls_skip_any != nil && typeOf(tls_skip_any) != "bool") {
+        return (nil,
+                httpClientError(ERR_INVALID_ARGUMENT,
+                                "requestOptions.tlsInsecureSkipVerify must be bool",
+                                tls_skip_any));
+    }
+
+    var keep_alive_any = mapGetString(options, "keepAlive");
+    if (keep_alive_any != nil && typeOf(keep_alive_any) != "bool") {
+        return (nil,
+                httpClientError(ERR_INVALID_ARGUMENT,
+                                "requestOptions.keepAlive must be bool",
+                                keep_alive_any));
+    }
+
+    var connection_pool_any = mapGetString(options, "connectionPool");
+    if (connection_pool_any != nil && typeOf(connection_pool_any) != "bool") {
+        return (nil,
+                httpClientError(ERR_INVALID_ARGUMENT,
+                                "requestOptions.connectionPool must be bool",
+                                connection_pool_any));
+    }
+
+    var gzip_any = mapGetString(options, "gzip");
+    if (gzip_any != nil && typeOf(gzip_any) != "bool") {
+        return (nil,
+                httpClientError(ERR_INVALID_ARGUMENT,
+                                "requestOptions.gzip must be bool",
+                                gzip_any));
+    }
+
+    if (keep_alive_any != nil &&
+        connection_pool_any != nil &&
+        (keep_alive_any as bool) != (connection_pool_any as bool)) {
+        return (nil,
+                httpClientError(ERR_INVALID_ARGUMENT,
+                                "requestOptions.keepAlive and requestOptions.connectionPool must match when both are set",
+                                options));
+    }
+
+    return (options, nil);
+}
+
+func httpClientRequestStream(method: string,
+                             url: string,
+                             body: string?,
+                             headers: map<string, string>?,
+                             timeoutMs: int): (HttpClientStreamResponse, Error?) {
+    return httpClientRequestStreamWithOptions(method, url, body, headers, timeoutMs, nil);
+}
+
+func httpClientRequestStreamWithOptions(method: string,
+                                        url: string,
+                                        body: string?,
+                                        headers: map<string, string>?,
+                                        timeoutMs: int,
+                                        requestOptions: map<string, any>?): (HttpClientStreamResponse, Error?) {
+    var empty = httpClientEmptyStreamResponse();
+    if (method == "") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "method cannot be empty", nil));
+    }
+    if (url == "") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "url cannot be empty", nil));
+    }
+    if (timeoutMs < 1 || timeoutMs > 120000) {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "timeoutMs must be between 1 and 120000", timeoutMs));
+    }
+
+    var started_ms: int = timeMonotonicMillis();
+    httpMetricsIncSilent("http.client.stream_requests_total", 1);
+
+    var options_r = httpClientValidateRequestOptions(requestOptions);
+    if (options_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return (empty, options_r.1);
+    }
+
+    var req_headers = httpClientCopyHeaders(headers);
+    var req_r = httpRequestHeadWithOptions(method, url, body, req_headers, timeoutMs, options_r.0);
+    if (req_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return (empty, req_r.1);
+    }
+
+    var decoded = httpClientDecodeStreamResponseMap(req_r.0);
+    if (decoded.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return decoded;
+    }
+
+    httpMetricsIncSilent("http.client.stream_responses_total", 1);
+    httpClientRecordStatusMetric(decoded.0.status);
+    httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+    return decoded;
+}
+
+func httpClientRequestStreamDefault(method: string,
+                                    url: string,
+                                    body: string?,
+                                    headers: map<string, string>?): (HttpClientStreamResponse, Error?) {
+    return httpClientRequestStream(method, url, body, headers, 10000);
+}
+
+func httpClientGetStream(url: string,
+                         headers: map<string, string>?,
+                         timeoutMs: int): (HttpClientStreamResponse, Error?) {
+    return httpClientGetStreamWithOptions(url, headers, timeoutMs, nil);
+}
+
+func httpClientGetStreamWithOptions(url: string,
+                                    headers: map<string, string>?,
+                                    timeoutMs: int,
+                                    requestOptions: map<string, any>?): (HttpClientStreamResponse, Error?) {
+    return httpClientRequestStreamWithOptions("GET", url, nil, headers, timeoutMs, requestOptions);
+}
+
+func httpClientGetStreamDefault(url: string,
+                                headers: map<string, string>?): (HttpClientStreamResponse, Error?) {
+    return httpClientGetStream(url, headers, 10000);
+}
+
+func httpClientPostStream(url: string,
+                          body: string,
+                          headers: map<string, string>?,
+                          timeoutMs: int): (HttpClientStreamResponse, Error?) {
+    return httpClientPostStreamWithOptions(url, body, headers, timeoutMs, nil);
+}
+
+func httpClientPostStreamWithOptions(url: string,
+                                     body: string,
+                                     headers: map<string, string>?,
+                                     timeoutMs: int,
+                                     requestOptions: map<string, any>?): (HttpClientStreamResponse, Error?) {
+    return httpClientRequestStreamWithOptions("POST", url, body, headers, timeoutMs, requestOptions);
+}
+
+func httpClientPostStreamDefault(url: string,
+                                 body: string,
+                                 headers: map<string, string>?): (HttpClientStreamResponse, Error?) {
+    return httpClientPostStream(url, body, headers, 10000);
+}
+
+func httpClientEmptyBytes(): bytes {
+    return bytesWithSize(0, 0).0;
+}
+
+func httpClientJoinByteChunks(chunks: array<bytes>): (bytes, Error?) {
+    var joined = bytesJoin(chunks);
+    if (joined.1 != nil) {
+        return (httpClientEmptyBytes(), joined.1);
+    }
+    return (joined.0, nil);
+}
+
+func httpClientStreamReadChunkBytes(stream: HttpClientStreamResponse,
+                                    maxBytes: int): (HttpClientStreamResponse, bytes, Error?) {
+    var next = stream;
+    var empty: bytes = httpClientEmptyBytes();
+    if (maxBytes < 1) {
+        return (next, empty, httpClientError(ERR_INVALID_ARGUMENT, "maxBytes must be >= 1", maxBytes));
+    }
+    if (next.socket == nil || typeOf(next.socket) != "socket") {
+        return (next, empty, httpClientError(ERR_INVALID_ARGUMENT, "stream.socket must be socket", next.socket));
+    }
+    if (next.remainingBodyBytes == 0) {
+        return (next, empty, nil);
+    }
+
+    var toRead = maxBytes;
+    if (next.remainingBodyBytes > 0 && toRead > next.remainingBodyBytes) {
+        toRead = next.remainingBodyBytes;
+    }
+
+    var recv_r = ioReadChunkBytes(next.socket, toRead);
+    if (recv_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (next, empty, recv_r.1);
+    }
+
+    var chunk: bytes = empty;
+    var chunk_len: int = 0;
+    if (recv_r.0 != nil) {
+        chunk = recv_r.0 as bytes;
+        chunk_len = len(chunk);
+    }
+
+    if (next.remainingBodyBytes > 0) {
+        if (chunk_len == 0) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (next,
+                    empty,
+                    httpClientError(ERR_NETWORK,
+                                    "connection closed before full response body was received",
+                                    {"remainingBodyBytes": next.remainingBodyBytes}));
+        }
+        if (chunk_len > next.remainingBodyBytes) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (next, empty, httpClientError(ERR_PARSE, "received chunk larger than remaining body bytes", chunk_len));
+        }
+        next.remainingBodyBytes = next.remainingBodyBytes - chunk_len;
+    }
+
+    if (chunk_len > 0) {
+        httpMetricsIncSilent("http.client.stream_body_bytes_total", chunk_len);
+    }
+    return (next, chunk, nil);
+}
+
+func httpClientStreamReadChunk(stream: HttpClientStreamResponse,
+                               maxBytes: int): (HttpClientStreamResponse, string, Error?) {
+    var next = stream;
+    if (maxBytes < 1) {
+        return (next, "", httpClientError(ERR_INVALID_ARGUMENT, "maxBytes must be >= 1", maxBytes));
+    }
+    if (next.socket == nil || typeOf(next.socket) != "socket") {
+        return (next, "", httpClientError(ERR_INVALID_ARGUMENT, "stream.socket must be socket", next.socket));
+    }
+    if (next.remainingBodyBytes == 0) {
+        return (next, "", nil);
+    }
+
+    var toRead = maxBytes;
+    if (next.remainingBodyBytes > 0 && toRead > next.remainingBodyBytes) {
+        toRead = next.remainingBodyBytes;
+    }
+
+    var recv_r = tcpReceive(next.socket, toRead);
+    if (recv_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (next, "", recv_r.1);
+    }
+
+    var chunk: string = recv_r.0;
+    var chunk_len: int = len(chunk);
+    if (next.remainingBodyBytes > 0) {
+        if (chunk_len == 0) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (next,
+                    "",
+                    httpClientError(ERR_NETWORK,
+                                    "connection closed before full response body was received",
+                                    {"remainingBodyBytes": next.remainingBodyBytes}));
+        }
+        if (chunk_len > next.remainingBodyBytes) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (next, "", httpClientError(ERR_PARSE, "received chunk larger than remaining body bytes", chunk_len));
+        }
+        next.remainingBodyBytes = next.remainingBodyBytes - chunk_len;
+    }
+
+    if (chunk_len > 0) {
+        httpMetricsIncSilent("http.client.stream_body_bytes_total", chunk_len);
+    }
+    return (next, chunk, nil);
+}
+
+func httpClientStreamReadAll(stream: HttpClientStreamResponse,
+                             chunkBytes: int): (HttpClientStreamResponse, string, Error?) {
+    var next = stream;
+    if (chunkBytes < 1) {
+        return (next, "", httpClientError(ERR_INVALID_ARGUMENT, "chunkBytes must be >= 1", chunkBytes));
+    }
+
+    var body: string = "";
+    while (true) {
+        if (next.remainingBodyBytes == 0) {
+            break;
+        }
+
+        var read_bytes: int = chunkBytes;
+        if (next.remainingBodyBytes > 0) {
+            // readAll already materializes the full body, so prefer larger reads to
+            // reduce per-chunk overhead when a concrete content length is known.
+            if (read_bytes < next.remainingBodyBytes) {
+                read_bytes = next.remainingBodyBytes;
+            }
+            if (read_bytes > 65536) {
+                read_bytes = 65536;
+            }
+        }
+
+        var chunk_r = httpClientStreamReadChunk(next, read_bytes);
+        if (chunk_r.2 != nil) {
+            return (next, body, chunk_r.2);
+        }
+
+        next = chunk_r.0;
+        var chunk = chunk_r.1;
+        if (chunk == "") {
+            break;
+        }
+        body = body + chunk;
+    }
+
+    return (next, body, nil);
+}
+
+func httpClientStreamReadAllBytes(stream: HttpClientStreamResponse,
+                                  chunkBytes: int): (HttpClientStreamResponse, bytes, Error?) {
+    var next = stream;
+    var empty: bytes = httpClientEmptyBytes();
+    if (chunkBytes < 1) {
+        return (next, empty, httpClientError(ERR_INVALID_ARGUMENT, "chunkBytes must be >= 1", chunkBytes));
+    }
+
+    if (next.remainingBodyBytes == 0) {
+        return (next, empty, nil);
+    }
+
+    if (next.remainingBodyBytes > 0) {
+        var exact_r = ioReadExactlyBytes(next.socket, next.remainingBodyBytes);
+        if (exact_r.1 != nil) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (next, empty, exact_r.1);
+        }
+        next.remainingBodyBytes = 0;
+        var body_known: bytes = exact_r.0;
+        var body_known_len: int = len(body_known);
+        if (body_known_len > 0) {
+            httpMetricsIncSilent("http.client.stream_body_bytes_total", body_known_len);
+        }
+        return (next, body_known, nil);
+    }
+
+    var chunks: array<bytes> = [];
+    var total_len: int = 0;
+    while (true) {
+        var read_bytes: int = chunkBytes;
+        if (read_bytes > 65536) {
+            read_bytes = 65536;
+        }
+
+        var chunk_r = httpClientStreamReadChunkBytes(next, read_bytes);
+        if (chunk_r.2 != nil) {
+            return (next, empty, chunk_r.2);
+        }
+
+        next = chunk_r.0;
+        var chunk: bytes = chunk_r.1;
+        var chunk_len: int = len(chunk);
+        if (chunk_len == 0) {
+            break;
+        }
+        push(chunks, chunk);
+        total_len = total_len + chunk_len;
+    }
+
+    if (total_len == 0) {
+        return (next, empty, nil);
+    }
+
+    var joined_r = httpClientJoinByteChunks(chunks);
+    if (joined_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (next, empty, joined_r.1);
+    }
+
+    return (next, joined_r.0, nil);
+}
+
+func httpClientStreamClose(stream: HttpClientStreamResponse): void {
+    if (stream.socket != nil && typeOf(stream.socket) == "socket") {
+        tcpClose(stream.socket);
+    }
+}
+
+func httpClientRequest(method: string,
+                       url: string,
+                       body: string?,
+                       headers: map<string, string>?,
+                       timeoutMs: int): (HttpClientResponse, Error?) {
+    return httpClientRequestWithOptions(method, url, body, headers, timeoutMs, nil);
+}
+
+func httpClientRequestWithOptions(method: string,
+                                  url: string,
+                                  body: string?,
+                                  headers: map<string, string>?,
+                                  timeoutMs: int,
+                                  requestOptions: map<string, any>?): (HttpClientResponse, Error?) {
+    var empty = httpClientEmptyResponse();
+    if (method == "") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "method cannot be empty", nil));
+    }
+    if (url == "") {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "url cannot be empty", nil));
+    }
+    if (timeoutMs < 1 || timeoutMs > 120000) {
+        return (empty, httpClientError(ERR_INVALID_ARGUMENT, "timeoutMs must be between 1 and 120000", timeoutMs));
+    }
+
+    var started_ms: int = timeMonotonicMillis();
+    httpMetricsIncSilent("http.client.requests_total", 1);
+
+    var options_r = httpClientValidateRequestOptions(requestOptions);
+    if (options_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return (empty, options_r.1);
+    }
+
+    // Always pass a concrete header map to keep request behavior stable across runtimes.
+    var req_headers = httpClientCopyHeaders(headers);
+    var req_r = httpRequestWithOptions(method, url, body, req_headers, timeoutMs, options_r.0);
+    if (req_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return (empty, req_r.1);
+    }
+
+    var decoded = httpClientDecodeResponseMap(req_r.0);
+    if (decoded.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+        return decoded;
+    }
+
+    httpMetricsIncSilent("http.client.responses_total", 1);
+    httpClientRecordStatusMetric(decoded.0.status);
+    httpMetricsObserveSinceSilent("http.client.request_latency_ms", started_ms);
+    return decoded;
+}
+
+func httpClientRequestDefault(method: string,
+                              url: string,
+                              body: string?,
+                              headers: map<string, string>?): (HttpClientResponse, Error?) {
+    return httpClientRequest(method, url, body, headers, 10000);
+}
+
+func httpClientGet(url: string,
+                   headers: map<string, string>?,
+                   timeoutMs: int): (HttpClientResponse, Error?) {
+    return httpClientRequest("GET", url, nil, headers, timeoutMs);
+}
+
+func httpClientGetDefault(url: string,
+                          headers: map<string, string>?): (HttpClientResponse, Error?) {
+    return httpClientGet(url, headers, 10000);
+}
+
+func httpClientPost(url: string,
+                    body: string,
+                    headers: map<string, string>?,
+                    timeoutMs: int): (HttpClientResponse, Error?) {
+    return httpClientRequest("POST", url, body, headers, timeoutMs);
+}
+
+func httpClientPostDefault(url: string,
+                           body: string,
+                           headers: map<string, string>?): (HttpClientResponse, Error?) {
+    return httpClientPost(url, body, headers, 10000);
+}
+
+func httpClientExpect2xx(response: HttpClientResponse): Error? {
+    if (response.status >= 200 && response.status <= 299) {
+        return nil;
+    }
+
+    var data: map<string, any> = {
+        "status": response.status,
+        "headers": response.headers,
+        "body": response.body
+    };
+    return httpClientError(ERR_HTTP, "HTTP error: " + str(response.status), data);
+}
+
+func httpClientRequest2xx(method: string,
+                          url: string,
+                          body: string?,
+                          headers: map<string, string>?,
+                          timeoutMs: int): (HttpClientResponse, Error?) {
+    return httpClientRequest2xxWithOptions(method, url, body, headers, timeoutMs, nil);
+}
+
+func httpClientRequest2xxWithOptions(method: string,
+                                     url: string,
+                                     body: string?,
+                                     headers: map<string, string>?,
+                                     timeoutMs: int,
+                                     requestOptions: map<string, any>?): (HttpClientResponse, Error?) {
+    var req_r = httpClientRequestWithOptions(method, url, body, headers, timeoutMs, requestOptions);
+    if (req_r.1 != nil) {
+        return (req_r.0, req_r.1);
+    }
+
+    var status_err = httpClientExpect2xx(req_r.0);
+    if (status_err != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (req_r.0, status_err);
+    }
+    return (req_r.0, nil);
+}
+
+func httpClientRequestJson(method: string,
+                           url: string,
+                           requestValue: any,
+                           responseSchema: any,
+                           headers: map<string, string>?,
+                           timeoutMs: int): (any, Error?) {
+    return httpClientRequestJsonWithOptions(method, url, requestValue, responseSchema, headers, timeoutMs, nil);
+}
+
+func httpClientRequestJsonWithOptions(method: string,
+                                      url: string,
+                                      requestValue: any,
+                                      responseSchema: any,
+                                      headers: map<string, string>?,
+                                      timeoutMs: int,
+                                      requestOptions: map<string, any>?): (any, Error?) {
+    var body: string = "";
+    if (requestValue != nil) {
+        var encode_r = jsonStringify(requestValue);
+        if (encode_r.1 != nil) {
+            httpMetricsIncSilent("http.client.errors_total", 1);
+            return (nil, httpClientError(encode_r.1.code, "httpClientRequestJson: failed to encode request JSON: " + encode_r.1.message, encode_r.1.data));
+        }
+        body = encode_r.0;
+    }
+
+    var req_headers = httpClientCopyHeaders(headers);
+    if (!mapHasString(req_headers, "Content-Type")) {
+        mapSetString(req_headers, "Content-Type", "application/json");
+    }
+    if (!mapHasString(req_headers, "Accept")) {
+        mapSetString(req_headers, "Accept", "application/json");
+    }
+
+    var req_r = httpClientRequest2xxWithOptions(method, url, body, req_headers, timeoutMs, requestOptions);
+    if (req_r.1 != nil) {
+        return (nil, req_r.1);
+    }
+
+    var parse_r = jsonParse(req_r.0.body);
+    if (parse_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (nil, httpClientError(parse_r.1.code,
+                                     "httpClientRequestJson: failed to parse response JSON: " + parse_r.1.message,
+                                     {"status": req_r.0.status, "body": req_r.0.body, "cause": parse_r.1.data}));
+    }
+
+    var decode_r = jsonDecode(parse_r.0, responseSchema);
+    if (decode_r.1 != nil) {
+        httpMetricsIncSilent("http.client.errors_total", 1);
+        return (nil, httpClientError(decode_r.1.code,
+                                     "httpClientRequestJson: failed to decode response schema: " + decode_r.1.message,
+                                     {"status": req_r.0.status, "cause": decode_r.1.data}));
+    }
+
+    return (decode_r.0, nil);
+}
+
+func httpClientGetJson(url: string,
+                       responseSchema: any,
+                       headers: map<string, string>?,
+                       timeoutMs: int): (any, Error?) {
+    return httpClientGetJsonWithOptions(url, responseSchema, headers, timeoutMs, nil);
+}
+
+func httpClientGetJsonWithOptions(url: string,
+                                  responseSchema: any,
+                                  headers: map<string, string>?,
+                                  timeoutMs: int,
+                                  requestOptions: map<string, any>?): (any, Error?) {
+    return httpClientRequestJsonWithOptions("GET", url, nil, responseSchema, headers, timeoutMs, requestOptions);
+}
+
+func httpClientPostJson(url: string,
+                        requestValue: any,
+                        responseSchema: any,
+                        headers: map<string, string>?,
+                        timeoutMs: int): (any, Error?) {
+    return httpClientPostJsonWithOptions(url, requestValue, responseSchema, headers, timeoutMs, nil);
+}
+
+func httpClientPostJsonWithOptions(url: string,
+                                   requestValue: any,
+                                   responseSchema: any,
+                                   headers: map<string, string>?,
+                                   timeoutMs: int,
+                                   requestOptions: map<string, any>?): (any, Error?) {
+    return httpClientRequestJsonWithOptions("POST", url, requestValue, responseSchema, headers, timeoutMs, requestOptions);
+}
+

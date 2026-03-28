@@ -1,0 +1,272 @@
+// Structured task-group helpers on top of TabloLang thread runtime.
+// Workers should return envelopes from taskResultOk/taskResultErr.
+
+import "concurrency.tblo";
+import "context.tblo";
+
+record TaskGroup {
+    context: Context,
+    threads: array<ConcurrencyThread>,
+    results: array<any>,
+    firstError: Error?,
+    joinTimeoutMs: int
+};
+
+func taskStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func taskError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return taskStdError(code, message, data);
+}
+
+func taskWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return taskStdError(err.code, err.message, data);
+}
+
+func taskResultSchema(): map<string, any> {
+    var schema: map<string, any> = {
+        "ok": "bool",
+        "value": "any",
+        "error": "any"
+    };
+    return schema;
+}
+
+func taskResultOk(value: any): map<string, any> {
+    var out: map<string, any> = {
+        "ok": true,
+        "value": value,
+        "error": nil
+    };
+    return out;
+}
+
+func taskResultErr(code: int, message: string, data: any): map<string, any> {
+    var err_payload: map<string, any> = {
+        "code": code,
+        "message": message,
+        "data": data
+    };
+    var out: map<string, any> = {
+        "ok": false,
+        "value": nil,
+        "error": err_payload as any
+    };
+    return out;
+}
+
+func taskResultErrFromError(err_any: any): map<string, any> {
+    var err: Error = err_any as Error;
+    return taskResultErr(err.code, err.message, err.data);
+}
+
+func taskDefaultGroup(): TaskGroup {
+    var group: TaskGroup = {
+        context: contextBackground(),
+        threads: [],
+        results: [],
+        firstError: nil,
+        joinTimeoutMs: 5000
+    };
+    return group;
+}
+
+func taskGroupNew(parent: Context): (TaskGroup, Error?) {
+    var empty: TaskGroup = taskDefaultGroup();
+    var child_ctx = contextWithCancel(parent);
+    if (child_ctx.1 != nil) {
+        return (empty,
+                taskWrapError(child_ctx.1,
+                              "task.group.new",
+                              nil));
+    }
+
+    var group: TaskGroup = {
+        context: child_ctx.0,
+        threads: [],
+        results: [],
+        firstError: nil,
+        joinTimeoutMs: 5000
+    };
+    return (group, nil);
+}
+
+func taskGroupContext(group: TaskGroup): Context {
+    return group.context;
+}
+
+func taskGroupFirstError(group: TaskGroup): Error? {
+    return group.firstError;
+}
+
+func taskGroupResults(group: TaskGroup): array<any> {
+    return group.results;
+}
+
+func taskGroupSetJoinTimeoutMs(group: TaskGroup, timeout_ms: int): (TaskGroup, Error?) {
+    var next: TaskGroup = group;
+    if (timeout_ms < 1 || timeout_ms > 120000) {
+        return (next,
+                taskError(ERR_INVALID_ARGUMENT,
+                          "join timeout must be between 1 and 120000",
+                          "task.group.joinTimeoutMs",
+                          timeout_ms));
+    }
+    next.joinTimeoutMs = timeout_ms;
+    return (next, nil);
+}
+
+func taskDecodeErrorPayload(payload: any): Error {
+    if (payload != nil && typeOf(payload) == "map") {
+        var err_map: map<string, any> = payload as map<string, any>;
+        var code_any: any = mapGetString(err_map, "code");
+        var message_any: any = mapGetString(err_map, "message");
+        var data_any: any = mapGetString(err_map, "data");
+        if (code_any != nil &&
+            message_any != nil &&
+            typeOf(code_any) == "int" &&
+            typeOf(message_any) == "string") {
+            var err: Error = {
+                code: code_any as int,
+                message: message_any as string,
+                data: data_any
+            };
+            return err;
+        }
+    }
+
+    return taskError(ERR_INTERNAL,
+                     "task reported failure without valid error payload",
+                     "task.group.decodeError",
+                     payload);
+}
+
+func taskDecodeResultPayload(payload: any): (any, Error?) {
+    if (payload == nil || typeOf(payload) != "map") {
+        return (nil,
+                taskError(ERR_PARSE,
+                          "task result must be an envelope map",
+                          "task.group.decodeResult.type",
+                          payload));
+    }
+
+    var result: map<string, any> = payload as map<string, any>;
+    var ok_any: any = mapGetString(result, "ok");
+    if (ok_any == nil || typeOf(ok_any) != "bool") {
+        return (nil,
+                taskError(ERR_PARSE,
+                          "task result envelope field 'ok' must be bool",
+                          "task.group.decodeResult.ok",
+                          result as any));
+    }
+
+    if (!(ok_any as bool)) {
+        var err_payload: any = mapGetString(result, "error");
+        return (nil, taskDecodeErrorPayload(err_payload));
+    }
+
+    return (mapGetString(result, "value"), nil);
+}
+
+func taskGroupRecordFailure(group: TaskGroup, err_any: any): TaskGroup {
+    var next: TaskGroup = group;
+    if (next.firstError == nil) {
+        next.firstError = err_any as Error;
+        contextCancel(next.context, next.firstError);
+    }
+    return next;
+}
+
+func taskGroupSpawn(group: TaskGroup,
+                    function_name: string,
+                    arg: any,
+                    arg_schema: any): (TaskGroup, Error?) {
+    var next: TaskGroup = group;
+    if (next.firstError != nil) {
+        return (next, next.firstError);
+    }
+
+    var ctx_err = contextErr(next.context);
+    if (ctx_err != nil) {
+        return (next, ctx_err);
+    }
+
+    var effective_arg_schema: any = arg_schema;
+    if (effective_arg_schema == nil) {
+        effective_arg_schema = "any" as any;
+    }
+
+    var spawned = concurrencyThreadSpawnTyped(function_name,
+                                              arg,
+                                              effective_arg_schema,
+                                              -1,
+                                              -1,
+                                              taskResultSchema() as any);
+    if (spawned.1 != nil) {
+        var spawn_err = taskWrapError(spawned.1,
+                                      "task.group.spawn",
+                                      { "functionName": function_name } as any);
+        next = taskGroupRecordFailure(next, spawn_err as any);
+        return (next, spawn_err);
+    }
+
+    push(next.threads, spawned.0);
+    return (next, nil);
+}
+
+func taskGroupWait(group: TaskGroup): (TaskGroup, Error?) {
+    var next: TaskGroup = group;
+    var i: int = 0;
+    while (i < len(next.threads)) {
+        var thread: ConcurrencyThread = next.threads[i];
+        var timeout_ms: int = contextTimeoutSliceMs(next.context, next.joinTimeoutMs);
+        if (timeout_ms < 1) {
+            timeout_ms = 1;
+        }
+
+        var joined = concurrencyThreadJoinValue(thread, timeout_ms);
+        if (joined.1 != nil) {
+            var join_err = taskWrapError(joined.1,
+                                         "task.group.wait.join",
+                                         { "threadId": thread.id } as any);
+            next = taskGroupRecordFailure(next, join_err as any);
+            i = i + 1;
+            continue;
+        }
+
+        var decoded = taskDecodeResultPayload(joined.0);
+        if (decoded.1 != nil) {
+            next = taskGroupRecordFailure(next, decoded.1 as any);
+            i = i + 1;
+            continue;
+        }
+
+        push(next.results, decoded.0);
+        i = i + 1;
+    }
+
+    if (next.firstError != nil) {
+        return (next, next.firstError);
+    }
+
+    var ctx_err = contextErr(next.context);
+    if (ctx_err != nil) {
+        return (next, ctx_err);
+    }
+
+    return (next, nil);
+}

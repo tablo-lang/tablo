@@ -1,0 +1,19 @@
+record Point {
+    x: int,
+    y: int
+};
+
+func translate(p: Point, dx: int, dy: int): Point {
+    return { x: p.x + dx, y: p.y + dy };
+}
+
+func magnitudeSquared(p: Point): int {
+    return p.x * p.x + p.y * p.y;
+}
+
+func main(): void {
+    var p: Point = { x: 3, y: 4 };
+    var moved: Point = p.translate(1, 2);
+    var mag: int = moved.magnitudeSquared();
+    println("mag=" + str(mag));
+}

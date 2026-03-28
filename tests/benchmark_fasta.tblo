@@ -1,0 +1,304 @@
+// FASTA benchmark (ported from tests/benchmark_fasta.c).
+//
+// Run (stdout):
+//   ./build/Release/tablo run tests/benchmark_fasta.tblo 25000000 > out.fasta
+//
+// NOTE (Windows PowerShell): `>` redirects as text. Use cmd.exe for raw bytes:
+//   cmd /c "build\\Release\\tablo.exe run tests\\benchmark_fasta.tblo 25000000 > out.fasta"
+//
+// Run (write file directly; avoids shell redirection):
+//   ./build/Release/tablo run tests/benchmark_fasta.tblo 25000000 out.fasta
+//
+// Input:
+//   argv[0] = N (default 1000)
+//   argv[1] (optional) = output file path (relative to sandbox root)
+//
+// Output:
+//   FASTA text (LF line endings).
+
+var IM: int = 139968;
+var IA: int = 3877;
+var IC: int = 29573;
+var LINE_LENGTH: int = 60;
+var NEWLINE: int = 10;
+
+func minInt(a: int, b: int): int {
+    if (a < b) { return a; }
+    return b;
+}
+
+func makeCumulative(probs: array<double>): array<double> {
+    var n: int = len(probs);
+    var cum: array<double> = arrayWithSize(n, 0.0).0;
+    var cp: double = 0.0;
+    var i: int = 0;
+    while (i < n) {
+        cp += probs[i];
+        cum[i] = cp;
+        i += 1;
+    }
+    return cum;
+}
+
+func selectFromCumulative(cum: array<double>, chars: array<int>, r: double): int {
+    var count: int = len(chars);
+    if (count <= 0) { return 0; }
+
+    if (r < cum[0]) {
+        return chars[0];
+    }
+
+    var lo: int = 0;
+    var hi: int = count - 1;
+    while (hi > (lo + 1)) {
+        var mid: int = (hi + lo) / 2;
+        if (r < cum[mid]) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return chars[hi];
+}
+
+func buildLookupTable(chars: array<int>, probs: array<double>): array<int> {
+    var cum: array<double> = makeCumulative(probs);
+    var table: array<int> = arrayWithSize(IM, 0).0;
+
+    var denom: double = IM as double;
+    var i: int = 0;
+    while (i < IM) {
+        var r: double = (i as double) / denom;
+        table[i] = selectFromCumulative(cum, chars, r);
+        i += 1;
+    }
+
+    return table;
+}
+
+func writeBytesOut(out_file: any, data: bytes): void {
+    if (out_file != nil) {
+        appendBytes(out_file, data);
+    } else {
+        stdoutWriteBytes(data);
+    }
+}
+
+func writeHeader(out_file: any, id: string, desc: string): void {
+    var header: string = ">" + id + " " + desc + "\n";
+    writeBytesOut(out_file, stringToBytes(header).0);
+}
+
+func flushPartial(out_file: any, buf: bytes, count: int): void {
+    if (count <= 0) {
+        return;
+    }
+    if (count == len(buf)) {
+        writeBytesOut(out_file, buf);
+        return;
+    }
+    writeBytesOut(out_file, slice(buf, 0, count));
+}
+
+func makeRepeatFasta(out_file: any, pattern: bytes, n: int): void {
+    var buf_size: int = 1000000;
+    var buf: bytes = bytesWithSize(buf_size, 0).0;
+    var pos: int = 0;
+    var col: int = 0;
+
+    var k: int = 0;
+    var kn: int = len(pattern);
+
+    var remaining: int = n;
+    while (remaining > 0) {
+        var m: int = minInt(remaining, LINE_LENGTH - col);
+        if (m <= 0) {
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            // End the current line.
+            buf[pos] = NEWLINE;
+            pos += 1;
+            col = 0;
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            continue;
+        }
+
+        var i: int = 0;
+        while (i < m) {
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            buf[pos] = pattern[k];
+            pos += 1;
+            col += 1;
+            k += 1;
+            if (k == kn) {
+                k = 0;
+            }
+
+            if (col == LINE_LENGTH) {
+                if (pos == buf_size) {
+                    writeBytesOut(out_file, buf);
+                    pos = 0;
+                }
+                buf[pos] = NEWLINE;
+                pos = pos + 1;
+                col = 0;
+            }
+
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+
+            i += 1;
+        }
+
+        remaining -= m;
+    }
+
+    if (col != 0) {
+        if (pos == buf_size) {
+            writeBytesOut(out_file, buf);
+            pos = 0;
+        }
+        buf[pos] = NEWLINE;
+        pos += 1;
+        col = 0;
+        if (pos == buf_size) {
+            writeBytesOut(out_file, buf);
+            pos = 0;
+        }
+    }
+
+    flushPartial(out_file, buf, pos);
+}
+
+func makeRandomFasta(out_file: any, table: array<int>, n: int, last: int): int {
+    var buf_size: int = 1000000;
+    var buf: bytes = bytesWithSize(buf_size, 0).0;
+    var pos: int = 0;
+    var col: int = 0;
+
+    var state: int = last;
+    var remaining: int = n;
+    while (remaining > 0) {
+        var m: int = minInt(remaining, LINE_LENGTH - col);
+        if (m <= 0) {
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            buf[pos] = NEWLINE;
+            pos += 1;
+            col = 0;
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            continue;
+        }
+
+        var i: int = 0;
+        while (i < m) {
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+            state = ((state * IA) + IC) % IM;
+            buf[pos] = table[state];
+            pos += 1;
+            col += 1;
+
+            if (col == LINE_LENGTH) {
+                if (pos == buf_size) {
+                    writeBytesOut(out_file, buf);
+                    pos = 0;
+                }
+                buf[pos] = NEWLINE;
+                pos = pos + 1;
+                col = 0;
+            }
+
+            if (pos == buf_size) {
+                writeBytesOut(out_file, buf);
+                pos = 0;
+            }
+
+            i += 1;
+        }
+
+        remaining -= m;
+    }
+
+    if (col != 0) {
+        if (pos == buf_size) {
+            writeBytesOut(out_file, buf);
+            pos = 0;
+        }
+        buf[pos] = NEWLINE;
+        pos += 1;
+        col = 0;
+        if (pos == buf_size) {
+            writeBytesOut(out_file, buf);
+            pos = 0;
+        }
+    }
+
+    flushPartial(out_file, buf, pos);
+    return state;
+}
+
+func main(): void {
+    var n: int = 1000;
+    if (len(argv) > 0) {
+        n = toInt(argv[0]);
+    }
+    if (n < 0) {
+        n = 0;
+    }
+
+    var out_file: any = nil;
+    if (len(argv) > 1) {
+        out_file = argv[1];
+        // Truncate the output file.
+        write_all(out_file, "");
+    } else {
+        // Force stdout into binary mode on Windows.
+        stdoutWriteBytes(bytesWithSize(0, 0).0);
+    }
+
+    var alu: string =
+        "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGG" +
+        "GAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGA" +
+        "CCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAAT" +
+        "ACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCA" +
+        "GCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGG" +
+        "AGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCC" +
+        "AGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA";
+
+    var iub_chars: array<int> = [97, 99, 103, 116, 66, 68, 72, 75, 77, 78, 82, 83, 86, 87, 89];
+    var iub_probs: array<double> = [0.27, 0.12, 0.12, 0.27, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02];
+
+    var hs_chars: array<int> = [97, 99, 103, 116];
+    var hs_probs: array<double> = [0.3029549426680, 0.1979883004921, 0.1975473066391, 0.3015094502008];
+
+    var iub_table: array<int> = buildLookupTable(iub_chars, iub_probs);
+    var hs_table: array<int> = buildLookupTable(hs_chars, hs_probs);
+
+    writeHeader(out_file, "ONE", "Homo sapiens alu");
+    makeRepeatFasta(out_file, stringToBytes(alu).0, n * 2);
+
+    writeHeader(out_file, "TWO", "IUB ambiguity codes");
+    var last: int = 42;
+    last = makeRandomFasta(out_file, iub_table, n * 3, last);
+
+    writeHeader(out_file, "THREE", "Homo sapiens frequency");
+    last = makeRandomFasta(out_file, hs_table, n * 5, last);
+}

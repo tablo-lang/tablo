@@ -1,0 +1,355 @@
+// IPv4/CIDR helpers for backend networking logic.
+// Provides parse/format/normalize, CIDR contains checks, and range math.
+
+record NetIpCidr {
+    network: int,
+    prefix: int,
+    mask: int,
+    broadcast: int
+}
+
+func netipStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func netipError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return netipStdError(code, message, data);
+}
+
+func netipIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func netipParseUint(text: string): (int, Error?) {
+    if (text == "") {
+        return (0,
+                netipError(ERR_PARSE,
+                           "numeric segment cannot be empty",
+                           "netipParseUint.empty",
+                           text));
+    }
+
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (!netipIsDigit(ch)) {
+            var data: map<string, any> = {
+                "text": text,
+                "index": i,
+                "char": ch
+            };
+            return (0,
+                    netipError(ERR_PARSE,
+                               "numeric segment must contain only digits",
+                               "netipParseUint.digit",
+                               data));
+        }
+        i = i + 1;
+    }
+
+    return (toInt(text), nil);
+}
+
+func netipPow2(exp: int): int {
+    var out: int = 1;
+    var i: int = 0;
+    while (i < exp) {
+        out = out * 2;
+        i = i + 1;
+    }
+    return out;
+}
+
+func netipUint32Max(): int {
+    return 4294967295;
+}
+
+func netipIsIpv4(value: string): bool {
+    var parsed = netipParseIpv4(value);
+    return parsed.1 == nil;
+}
+
+func netipParseIpv4(value: string): (int, Error?) {
+    var raw: string = trim(value);
+    var parts: array<string> = split(raw, ".");
+    if (len(parts) != 4) {
+        return (0,
+                netipError(ERR_PARSE,
+                           "ipv4 must contain exactly 4 dot-separated parts",
+                           "netipParseIpv4.parts",
+                           value));
+    }
+
+    var out: int = 0;
+    var i: int = 0;
+    while (i < 4) {
+        var part: string = parts[i];
+        var n = netipParseUint(part);
+        if (n.1 != nil) {
+            var segment_data: map<string, any> = {
+                "value": value,
+                "segmentIndex": i,
+                "segment": part,
+                "cause": n.1.data
+            };
+            return (0,
+                    netipError(ERR_PARSE,
+                               "invalid ipv4 segment",
+                               "netipParseIpv4.segment",
+                               segment_data));
+        }
+        if (n.0 < 0 || n.0 > 255) {
+            var range_data: map<string, any> = {
+                "value": value,
+                "segmentIndex": i,
+                "segment": part,
+                "parsed": n.0
+            };
+            return (0,
+                    netipError(ERR_PARSE,
+                               "ipv4 segment must be in range 0..255",
+                               "netipParseIpv4.range",
+                               range_data));
+        }
+        out = out * 256 + n.0;
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func netipFormatIpv4(value: int): (string, Error?) {
+    if (value < 0 || value > netipUint32Max()) {
+        return ("",
+                netipError(ERR_INVALID_ARGUMENT,
+                           "ipv4 integer must be in range 0..4294967295",
+                           "netipFormatIpv4.range",
+                           value));
+    }
+
+    var rem: int = value;
+    var d: int = rem % 256;
+    rem = rem / 256;
+    var c: int = rem % 256;
+    rem = rem / 256;
+    var b: int = rem % 256;
+    rem = rem / 256;
+    var a: int = rem % 256;
+
+    return (str(a) + "." + str(b) + "." + str(c) + "." + str(d), nil);
+}
+
+func netipNormalizeIpv4(value: string): (string, Error?) {
+    var parsed = netipParseIpv4(value);
+    if (parsed.1 != nil) {
+        return ("", parsed.1);
+    }
+    return netipFormatIpv4(parsed.0);
+}
+
+func netipMaskFromPrefix(prefix: int): (int, Error?) {
+    if (prefix < 0 || prefix > 32) {
+        return (0,
+                netipError(ERR_INVALID_ARGUMENT,
+                           "prefix must be in range 0..32",
+                           "netipMaskFromPrefix.prefix",
+                           prefix));
+    }
+    if (prefix == 0) {
+        return (0, nil);
+    }
+
+    var host_bits: int = 32 - prefix;
+    var host_mask: int = netipPow2(host_bits) - 1;
+    var mask: int = netipUint32Max() - host_mask;
+    return (mask, nil);
+}
+
+func netipPrefixFromMask(mask: int): (int, Error?) {
+    if (mask < 0 || mask > netipUint32Max()) {
+        return (0,
+                netipError(ERR_INVALID_ARGUMENT,
+                           "mask must be in range 0..4294967295",
+                           "netipPrefixFromMask.range",
+                           mask));
+    }
+
+    var prefix: int = 0;
+    var bit: int = 31;
+    var seen_zero: bool = false;
+    while (bit >= 0) {
+        var bit_value: int = netipPow2(bit);
+        var on: bool = (mask & bit_value) != 0;
+        if (on) {
+            if (seen_zero) {
+                return (0,
+                        netipError(ERR_PARSE,
+                                   "mask is not contiguous",
+                                   "netipPrefixFromMask.contiguous",
+                                   mask));
+            }
+            prefix = prefix + 1;
+        } else {
+            seen_zero = true;
+        }
+        bit = bit - 1;
+    }
+    return (prefix, nil);
+}
+
+func netipPrefixToMask(prefix: int): (string, Error?) {
+    var mask_r = netipMaskFromPrefix(prefix);
+    if (mask_r.1 != nil) {
+        return ("", mask_r.1);
+    }
+    return netipFormatIpv4(mask_r.0);
+}
+
+func netipMaskToPrefix(mask: string): (int, Error?) {
+    var mask_i = netipParseIpv4(mask);
+    if (mask_i.1 != nil) {
+        return (0,
+                netipError(ERR_PARSE,
+                           "invalid mask ipv4",
+                           "netipMaskToPrefix.mask",
+                           mask));
+    }
+    return netipPrefixFromMask(mask_i.0);
+}
+
+func netipParseCidr(value: string): (NetIpCidr, Error?) {
+    var empty: NetIpCidr = {
+        network: 0,
+        prefix: 0,
+        mask: 0,
+        broadcast: 0
+    };
+
+    var raw: string = trim(value);
+    var slash: int = find(raw, "/");
+    if (slash <= 0 || slash >= len(raw) - 1) {
+        return (empty,
+                netipError(ERR_PARSE,
+                           "cidr must be in form <ipv4>/<prefix>",
+                           "netipParseCidr.format",
+                           value));
+    }
+    if (find(substring(raw, slash + 1, len(raw) - (slash + 1)), "/") >= 0) {
+        return (empty,
+                netipError(ERR_PARSE,
+                           "cidr must contain a single '/'",
+                           "netipParseCidr.slash",
+                           value));
+    }
+
+    var ip_text: string = substring(raw, 0, slash);
+    var prefix_text: string = substring(raw, slash + 1, len(raw) - (slash + 1));
+
+    var ip = netipParseIpv4(ip_text);
+    if (ip.1 != nil) {
+        return (empty,
+                netipError(ERR_PARSE,
+                           "invalid cidr ip",
+                           "netipParseCidr.ip",
+                           value));
+    }
+
+    var prefix_n = netipParseUint(prefix_text);
+    if (prefix_n.1 != nil) {
+        return (empty,
+                netipError(ERR_PARSE,
+                           "invalid cidr prefix",
+                           "netipParseCidr.prefix",
+                           value));
+    }
+    if (prefix_n.0 < 0 || prefix_n.0 > 32) {
+        return (empty,
+                netipError(ERR_PARSE,
+                           "cidr prefix must be in range 0..32",
+                           "netipParseCidr.prefixRange",
+                           prefix_n.0));
+    }
+
+    var mask_r = netipMaskFromPrefix(prefix_n.0);
+    if (mask_r.1 != nil) {
+        return (empty, mask_r.1);
+    }
+    var host_bits: int = 32 - prefix_n.0;
+    var host_mask: int = netipPow2(host_bits) - 1;
+    var network: int = ip.0 & mask_r.0;
+    var broadcast: int = network + host_mask;
+
+    var out: NetIpCidr = {
+        network: network,
+        prefix: prefix_n.0,
+        mask: mask_r.0,
+        broadcast: broadcast
+    };
+    return (out, nil);
+}
+
+func netipCidrContainsInt(cidr: NetIpCidr, ip: int): (bool, Error?) {
+    if (ip < 0 || ip > netipUint32Max()) {
+        return (false,
+                netipError(ERR_INVALID_ARGUMENT,
+                           "ip integer must be in range 0..4294967295",
+                           "netipCidrContainsInt.range",
+                           ip));
+    }
+    if (cidr.prefix < 0 || cidr.prefix > 32) {
+        return (false,
+                netipError(ERR_INVALID_ARGUMENT,
+                           "cidr prefix must be in range 0..32",
+                           "netipCidrContainsInt.prefix",
+                           cidr.prefix));
+    }
+    return (ip >= cidr.network && ip <= cidr.broadcast, nil);
+}
+
+func netipCidrContains(cidr: NetIpCidr, ip: string): (bool, Error?) {
+    var parsed = netipParseIpv4(ip);
+    if (parsed.1 != nil) {
+        return (false,
+                netipError(ERR_PARSE,
+                           "invalid ipv4 in netipCidrContains",
+                           "netipCidrContains.ip",
+                           ip));
+    }
+    return netipCidrContainsInt(cidr, parsed.0);
+}
+
+func netipCidrHostCount(cidr: NetIpCidr): (int, Error?) {
+    if (cidr.prefix < 0 || cidr.prefix > 32) {
+        return (0,
+                netipError(ERR_INVALID_ARGUMENT,
+                           "cidr prefix must be in range 0..32",
+                           "netipCidrHostCount.prefix",
+                           cidr.prefix));
+    }
+    return (netipPow2(32 - cidr.prefix), nil);
+}
+
+func netipCidrNetworkText(cidr: NetIpCidr): (string, Error?) {
+    return netipFormatIpv4(cidr.network);
+}
+
+func netipCidrBroadcastText(cidr: NetIpCidr): (string, Error?) {
+    return netipFormatIpv4(cidr.broadcast);
+}
+
+func netipCidrRangeText(cidr: NetIpCidr): (string, string, Error?) {
+    var n = netipCidrNetworkText(cidr);
+    if (n.1 != nil) {
+        return ("", "", n.1);
+    }
+    var b = netipCidrBroadcastText(cidr);
+    if (b.1 != nil) {
+        return ("", "", b.1);
+    }
+    return (n.0, b.0, nil);
+}

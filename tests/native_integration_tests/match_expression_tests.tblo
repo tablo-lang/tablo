@@ -1,0 +1,38 @@
+enum Result[T, E] { Ok(T), Err(E) };
+
+func classifyNumber(value: int): string {
+    return match (value) {
+        1 if false: "never",
+        1: "one",
+        2: "two",
+        else: "other"
+    };
+}
+
+func classifyResult(result: Result[int, string]): string {
+    return match (result) {
+        Result.Ok(payload) if payload > 0: "positive",
+        Result.Ok(payload) if payload == 0: "zero",
+        Result.Ok(_): "negative",
+        Result.Err(message): message
+    };
+}
+
+func pick(flag: bool): int {
+    return match (flag) {
+        true: 7,
+        false: 9
+    };
+}
+
+func main(): void {
+    println(classifyNumber(1));
+    println(classifyNumber(2));
+    println(classifyNumber(9));
+    println(classifyResult(Result.Ok<int, string>(5)));
+    println(classifyResult(Result.Ok<int, string>(0)));
+    println(classifyResult(Result.Ok<int, string>(-3)));
+    println(classifyResult(Result.Err<int, string>("fatal")));
+    println(pick(true));
+    println(pick(false));
+}

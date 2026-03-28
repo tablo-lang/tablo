@@ -1,0 +1,78 @@
+func main(): void {
+    randomSeed(123456789);
+    println(random());
+    println(random());
+    println(randomInt(-5, 5));
+    println(randomInt(10, 20));
+    println(randomDouble(1.0, 2.0));
+    println(randomBigIntBits(16));
+    println(randomBigIntRange(1000n, 5000n));
+
+    var iarr: array<int> = [0, 0, 0, 0];
+    randomFillInt(iarr, -3, 3);
+    println(iarr);
+
+    var darr: array<double> = [0.0, 0.0, 0.0];
+    randomFillDouble(darr, 1.0, 2.0);
+    println(darr);
+
+    var barr: array<bigint> = [0n, 0n];
+    randomFillBigIntBits(barr, 12);
+    println(barr);
+
+    var brarr: array<bigint> = [0n, 0n, 0n];
+    randomFillBigIntRange(brarr, 100n, 200n);
+    println(brarr);
+
+    var ok: int = 1;
+    var sr = secureRandom();
+    if (sr.1 != nil) { ok = 0; }
+    var s: double = sr.0;
+    if (s < 0.0 || s >= 1.0) { ok = 0; }
+    var sir = secureRandomInt(-10, 10);
+    if (sir.1 != nil) { ok = 0; }
+    var si: int = sir.0;
+    if (si < -10 || si > 10) { ok = 0; }
+    var sdr = secureRandomDouble(5.0, 6.0);
+    if (sdr.1 != nil) { ok = 0; }
+    var sd: double = sdr.0;
+    if (sd < 5.0 || sd > 6.0) { ok = 0; }
+    var sbr = secureRandomBigIntBits(8);
+    if (sbr.1 != nil) { ok = 0; }
+    var sb: bigint = sbr.0;
+    if (sb < 0n || sb > 255n) { ok = 0; }
+    var srr = secureRandomBigIntRange(100n, 150n);
+    if (srr.1 != nil) { ok = 0; }
+    var srb: bigint = srr.0;
+    if (srb < 100n || srb > 150n) { ok = 0; }
+
+    var iarr2: array<int> = [0, 0, 0];
+    var fill_i = secureRandomFillInt(iarr2, 1, 3);
+    if (fill_i.1 != nil) { ok = 0; }
+    foreach (x in iarr2) {
+        if (x < 1 || x > 3) { ok = 0; }
+    }
+
+    var darr2: array<double> = [0.0, 0.0];
+    var fill_d = secureRandomFillDouble(darr2, -1.0, 1.0);
+    if (fill_d.1 != nil) { ok = 0; }
+    foreach (x in darr2) {
+        if (x < -1.0 || x > 1.0) { ok = 0; }
+    }
+
+    var barr2: array<bigint> = [0n, 0n];
+    var fill_bb = secureRandomFillBigIntBits(barr2, 10);
+    if (fill_bb.1 != nil) { ok = 0; }
+    foreach (x in barr2) {
+        if (x < 0n || x > 1023n) { ok = 0; }
+    }
+
+    var brarr2: array<bigint> = [0n, 0n];
+    var fill_br = secureRandomFillBigIntRange(brarr2, 10n, 20n);
+    if (fill_br.1 != nil) { ok = 0; }
+    foreach (x in brarr2) {
+        if (x < 10n || x > 20n) { ok = 0; }
+    }
+
+    println(ok);
+}

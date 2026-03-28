@@ -1,0 +1,567 @@
+// Directed graph helpers for traversal and DAG scheduling.
+// State is explicit and immutable-style: operations return updated GraphStore.
+
+record GraphStore {
+    adjacency: map<string, any>,
+    edgeCount: int
+};
+
+record GraphStats {
+    nodeCount: int,
+    edgeCount: int,
+    isolatedCount: int
+};
+
+func graphStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func graphError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return graphStdError(code, message, data);
+}
+
+func graphValidateNodeName(name: string, context: string): Error? {
+    var n: int = len(name);
+    if (n == 0 || n > 256) {
+        return graphError(ERR_INVALID_ARGUMENT,
+                          "node name must be between 1 and 256 chars",
+                          context,
+                          n);
+    }
+    return nil;
+}
+
+func graphValidateMaxNodes(max_nodes: int, context: string): Error? {
+    if (max_nodes < 1 || max_nodes > 1000000) {
+        return graphError(ERR_INVALID_ARGUMENT,
+                          "maxNodes must be between 1 and 1000000",
+                          context,
+                          max_nodes);
+    }
+    return nil;
+}
+
+func graphDefaultStore(): GraphStore {
+    var store: GraphStore = {
+        adjacency: {},
+        edgeCount: 0
+    };
+    return store;
+}
+
+func graphNew(): GraphStore {
+    return graphDefaultStore();
+}
+
+func graphNodeCount(store: GraphStore): int {
+    return mapCount(store.adjacency);
+}
+
+func graphHasNode(store: GraphStore, node: string): bool {
+    return mapHasString(store.adjacency, node);
+}
+
+func graphEnsureNode(store: GraphStore, node: string): GraphStore {
+    var next: GraphStore = store;
+    if (!mapHasString(next.adjacency, node)) {
+        var empty: array<string> = [];
+        mapSetString(next.adjacency, node, empty as any);
+    }
+    return next;
+}
+
+func graphNodeNames(store: GraphStore): array<string> {
+    var out: array<string> = [];
+    var key_items: array<any> = keys(store.adjacency);
+    foreach (key_any in key_items) {
+        push(out, key_any as string);
+    }
+    return out;
+}
+
+func graphAddNode(store: GraphStore, node: string): (GraphStore, bool, Error?) {
+    var next: GraphStore = store;
+    var name_err = graphValidateNodeName(node, "graph.addNode.node");
+    if (name_err != nil) {
+        return (next, false, name_err);
+    }
+
+    if (mapHasString(next.adjacency, node)) {
+        return (next, false, nil);
+    }
+
+    var empty: array<string> = [];
+    mapSetString(next.adjacency, node, empty as any);
+    return (next, true, nil);
+}
+
+func graphNeighborIndex(neighbors: array<string>, target: string): (int, bool) {
+    var i: int = 0;
+    while (i < len(neighbors)) {
+        if (neighbors[i] == target) {
+            return (i, true);
+        }
+        i = i + 1;
+    }
+    return (-1, false);
+}
+
+func graphRemoveNeighbor(neighbors: array<string>, target: string): (array<string>, bool) {
+    var out: array<string> = [];
+    var removed: bool = false;
+    foreach (item in neighbors) {
+        if (!removed && item == target) {
+            removed = true;
+        } else {
+            push(out, item);
+        }
+    }
+    return (out, removed);
+}
+
+func graphAddEdge(store: GraphStore,
+                  from_node: string,
+                  to_node: string): (GraphStore, bool, Error?) {
+    var next: GraphStore = store;
+    var from_err = graphValidateNodeName(from_node, "graph.addEdge.fromNode");
+    if (from_err != nil) {
+        return (next, false, from_err);
+    }
+
+    var to_err = graphValidateNodeName(to_node, "graph.addEdge.toNode");
+    if (to_err != nil) {
+        return (next, false, to_err);
+    }
+
+    next = graphEnsureNode(next, from_node);
+    next = graphEnsureNode(next, to_node);
+
+    var neighbors: array<string> = mapGetString(next.adjacency, from_node) as array<string>;
+    var existing = graphNeighborIndex(neighbors, to_node);
+    if (existing.1) {
+        return (next, false, nil);
+    }
+
+    push(neighbors, to_node);
+    mapSetString(next.adjacency, from_node, neighbors as any);
+    next.edgeCount = next.edgeCount + 1;
+    return (next, true, nil);
+}
+
+func graphRemoveEdge(store: GraphStore,
+                     from_node: string,
+                     to_node: string): (GraphStore, bool, Error?) {
+    var next: GraphStore = store;
+    var from_err = graphValidateNodeName(from_node, "graph.removeEdge.fromNode");
+    if (from_err != nil) {
+        return (next, false, from_err);
+    }
+
+    var to_err = graphValidateNodeName(to_node, "graph.removeEdge.toNode");
+    if (to_err != nil) {
+        return (next, false, to_err);
+    }
+
+    if (!mapHasString(next.adjacency, from_node)) {
+        return (next, false, nil);
+    }
+
+    var neighbors: array<string> = mapGetString(next.adjacency, from_node) as array<string>;
+    var filtered = graphRemoveNeighbor(neighbors, to_node);
+    if (!filtered.1) {
+        return (next, false, nil);
+    }
+
+    mapSetString(next.adjacency, from_node, filtered.0 as any);
+    next.edgeCount = next.edgeCount - 1;
+    if (next.edgeCount < 0) {
+        next.edgeCount = 0;
+    }
+    return (next, true, nil);
+}
+
+func graphRemoveNode(store: GraphStore, node: string): (GraphStore, bool, Error?) {
+    var next: GraphStore = store;
+    var name_err = graphValidateNodeName(node, "graph.removeNode.node");
+    if (name_err != nil) {
+        return (next, false, name_err);
+    }
+
+    if (!mapHasString(next.adjacency, node)) {
+        return (next, false, nil);
+    }
+
+    var removed_edges: int = 0;
+    var outgoing: array<string> = mapGetString(next.adjacency, node) as array<string>;
+    removed_edges = removed_edges + len(outgoing);
+    mapDeleteString(next.adjacency, node);
+
+    var key_items: array<any> = keys(next.adjacency);
+    foreach (key_any in key_items) {
+        var key: string = key_any as string;
+        var neighbors: array<string> = mapGetString(next.adjacency, key) as array<string>;
+        var filtered = graphRemoveNeighbor(neighbors, node);
+        if (filtered.1) {
+            removed_edges = removed_edges + 1;
+            mapSetString(next.adjacency, key, filtered.0 as any);
+        }
+    }
+
+    next.edgeCount = next.edgeCount - removed_edges;
+    if (next.edgeCount < 0) {
+        next.edgeCount = 0;
+    }
+
+    return (next, true, nil);
+}
+
+func graphHasEdge(store: GraphStore, from_node: string, to_node: string): (bool, Error?) {
+    var from_err = graphValidateNodeName(from_node, "graph.hasEdge.fromNode");
+    if (from_err != nil) {
+        return (false, from_err);
+    }
+
+    var to_err = graphValidateNodeName(to_node, "graph.hasEdge.toNode");
+    if (to_err != nil) {
+        return (false, to_err);
+    }
+
+    if (!mapHasString(store.adjacency, from_node)) {
+        return (false, nil);
+    }
+
+    var neighbors: array<string> = mapGetString(store.adjacency, from_node) as array<string>;
+    var found = graphNeighborIndex(neighbors, to_node);
+    return (found.1, nil);
+}
+
+func graphNeighbors(store: GraphStore, node: string): (array<string>, Error?) {
+    var out: array<string> = [];
+    var name_err = graphValidateNodeName(node, "graph.neighbors.node");
+    if (name_err != nil) {
+        return (out, name_err);
+    }
+
+    if (!mapHasString(store.adjacency, node)) {
+        return (out,
+                graphError(ERR_INVALID_ARGUMENT,
+                           "unknown graph node",
+                           "graph.neighbors.node",
+                           node));
+    }
+
+    var neighbors: array<string> = mapGetString(store.adjacency, node) as array<string>;
+    foreach (item in neighbors) {
+        push(out, item);
+    }
+    return (out, nil);
+}
+
+func graphOutDegree(store: GraphStore, node: string): (int, Error?) {
+    var neighbors = graphNeighbors(store, node);
+    if (neighbors.1 != nil) {
+        return (0, neighbors.1);
+    }
+    return (len(neighbors.0), nil);
+}
+
+func graphInDegree(store: GraphStore, node: string): (int, Error?) {
+    var name_err = graphValidateNodeName(node, "graph.inDegree.node");
+    if (name_err != nil) {
+        return (0, name_err);
+    }
+
+    if (!mapHasString(store.adjacency, node)) {
+        return (0,
+                graphError(ERR_INVALID_ARGUMENT,
+                           "unknown graph node",
+                           "graph.inDegree.node",
+                           node));
+    }
+
+    var count: int = 0;
+    var key_items: array<any> = keys(store.adjacency);
+    foreach (key_any in key_items) {
+        var key: string = key_any as string;
+        var neighbors: array<string> = mapGetString(store.adjacency, key) as array<string>;
+        foreach (neighbor in neighbors) {
+            if (neighbor == node) {
+                count = count + 1;
+            }
+        }
+    }
+
+    return (count, nil);
+}
+
+func graphBfsOrder(store: GraphStore,
+                   start_node: string,
+                   max_nodes: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    var name_err = graphValidateNodeName(start_node, "graph.bfs.startNode");
+    if (name_err != nil) {
+        return (out, name_err);
+    }
+
+    var limit_err = graphValidateMaxNodes(max_nodes, "graph.bfs.maxNodes");
+    if (limit_err != nil) {
+        return (out, limit_err);
+    }
+
+    if (!mapHasString(store.adjacency, start_node)) {
+        return (out,
+                graphError(ERR_INVALID_ARGUMENT,
+                           "unknown start node",
+                           "graph.bfs.startNode",
+                           start_node));
+    }
+
+    var visited: map<string, any> = {};
+    var queue: array<string> = [];
+    var head: int = 0;
+    mapSetString(visited, start_node, true as any);
+    push(queue, start_node);
+
+    while (head < len(queue) && len(out) < max_nodes) {
+        var current: string = queue[head];
+        head = head + 1;
+        push(out, current);
+
+        var neighbors: array<string> = mapGetString(store.adjacency, current) as array<string>;
+        foreach (neighbor in neighbors) {
+            if (!mapHasString(visited, neighbor)) {
+                mapSetString(visited, neighbor, true as any);
+                push(queue, neighbor);
+            }
+        }
+    }
+
+    return (out, nil);
+}
+
+func graphShortestPath(store: GraphStore,
+                       start_node: string,
+                       goal_node: string,
+                       max_nodes: int): (array<string>, bool, Error?) {
+    var path: array<string> = [];
+    var start_err = graphValidateNodeName(start_node, "graph.shortestPath.startNode");
+    if (start_err != nil) {
+        return (path, false, start_err);
+    }
+
+    var goal_err = graphValidateNodeName(goal_node, "graph.shortestPath.goalNode");
+    if (goal_err != nil) {
+        return (path, false, goal_err);
+    }
+
+    var limit_err = graphValidateMaxNodes(max_nodes, "graph.shortestPath.maxNodes");
+    if (limit_err != nil) {
+        return (path, false, limit_err);
+    }
+
+    if (!mapHasString(store.adjacency, start_node)) {
+        return (path,
+                false,
+                graphError(ERR_INVALID_ARGUMENT,
+                           "unknown start node",
+                           "graph.shortestPath.startNode",
+                           start_node));
+    }
+
+    if (!mapHasString(store.adjacency, goal_node)) {
+        return (path,
+                false,
+                graphError(ERR_INVALID_ARGUMENT,
+                           "unknown goal node",
+                           "graph.shortestPath.goalNode",
+                           goal_node));
+    }
+
+    if (start_node == goal_node) {
+        push(path, start_node);
+        return (path, true, nil);
+    }
+
+    var visited: map<string, any> = {};
+    var parent: map<string, any> = {};
+    var queue: array<string> = [];
+    var head: int = 0;
+    var explored: int = 0;
+    var found: bool = false;
+
+    mapSetString(visited, start_node, true as any);
+    push(queue, start_node);
+
+    while (head < len(queue)) {
+        var current: string = queue[head];
+        head = head + 1;
+        explored = explored + 1;
+        if (explored > max_nodes) {
+            return (path,
+                    false,
+                    graphError(ERR_LIMIT,
+                               "shortest-path search exceeded maxNodes",
+                               "graph.shortestPath.maxNodes",
+                               max_nodes));
+        }
+
+        var neighbors: array<string> = mapGetString(store.adjacency, current) as array<string>;
+        foreach (neighbor in neighbors) {
+            if (!mapHasString(visited, neighbor)) {
+                mapSetString(visited, neighbor, true as any);
+                mapSetString(parent, neighbor, current as any);
+                push(queue, neighbor);
+                if (neighbor == goal_node) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (found) {
+            break;
+        }
+    }
+
+    if (!found) {
+        return (path, false, nil);
+    }
+
+    var reverse_path: array<string> = [];
+    var cursor: string = goal_node;
+    while (true) {
+        push(reverse_path, cursor);
+        if (cursor == start_node) {
+            break;
+        }
+        if (!mapHasString(parent, cursor)) {
+            return (path,
+                    false,
+                    graphError(ERR_INTERNAL,
+                               "parent reconstruction failed",
+                               "graph.shortestPath.parent",
+                               cursor));
+        }
+        cursor = mapGetString(parent, cursor) as string;
+    }
+
+    var i: int = len(reverse_path) - 1;
+    while (i >= 0) {
+        push(path, reverse_path[i]);
+        i = i - 1;
+    }
+    return (path, true, nil);
+}
+
+func graphTopologicalSort(store: GraphStore,
+                          max_nodes: int): (array<string>, bool, Error?) {
+    var out: array<string> = [];
+    var limit_err = graphValidateMaxNodes(max_nodes, "graph.topologicalSort.maxNodes");
+    if (limit_err != nil) {
+        return (out, false, limit_err);
+    }
+
+    if (mapCount(store.adjacency) == 0) {
+        return (out, true, nil);
+    }
+
+    var indegree: map<string, any> = {};
+    var node_items: array<any> = keys(store.adjacency);
+    foreach (node_any in node_items) {
+        mapSetString(indegree, node_any as string, 0 as any);
+    }
+
+    foreach (node_any in node_items) {
+        var node: string = node_any as string;
+        var neighbors: array<string> = mapGetString(store.adjacency, node) as array<string>;
+        foreach (neighbor in neighbors) {
+            if (!mapHasString(indegree, neighbor)) {
+                mapSetString(indegree, neighbor, 0 as any);
+            }
+            var d: int = (mapGetString(indegree, neighbor) as int) + 1;
+            mapSetString(indegree, neighbor, d as any);
+        }
+    }
+
+    var queue: array<string> = [];
+    var head: int = 0;
+    var indegree_nodes: array<any> = keys(indegree);
+    foreach (node_any in indegree_nodes) {
+        var node: string = node_any as string;
+        if ((mapGetString(indegree, node) as int) == 0) {
+            push(queue, node);
+        }
+    }
+
+    while (head < len(queue)) {
+        var node: string = queue[head];
+        head = head + 1;
+        push(out, node);
+        if (len(out) > max_nodes) {
+            return (out,
+                    false,
+                    graphError(ERR_LIMIT,
+                               "topological sort exceeded maxNodes",
+                               "graph.topologicalSort.maxNodes",
+                               max_nodes));
+        }
+
+        if (!mapHasString(store.adjacency, node)) {
+            continue;
+        }
+
+        var neighbors: array<string> = mapGetString(store.adjacency, node) as array<string>;
+        foreach (neighbor in neighbors) {
+            var d: int = (mapGetString(indegree, neighbor) as int) - 1;
+            mapSetString(indegree, neighbor, d as any);
+            if (d == 0) {
+                push(queue, neighbor);
+            }
+        }
+    }
+
+    var is_acyclic: bool = len(out) == mapCount(indegree);
+    return (out, is_acyclic, nil);
+}
+
+func graphStats(store: GraphStore): GraphStats {
+    var indegree: map<string, any> = {};
+    var node_items: array<any> = keys(store.adjacency);
+    foreach (node_any in node_items) {
+        mapSetString(indegree, node_any as string, 0 as any);
+    }
+
+    foreach (node_any in node_items) {
+        var node: string = node_any as string;
+        var neighbors: array<string> = mapGetString(store.adjacency, node) as array<string>;
+        foreach (neighbor in neighbors) {
+            if (!mapHasString(indegree, neighbor)) {
+                mapSetString(indegree, neighbor, 0 as any);
+            }
+            var d: int = (mapGetString(indegree, neighbor) as int) + 1;
+            mapSetString(indegree, neighbor, d as any);
+        }
+    }
+
+    var isolated: int = 0;
+    foreach (node_any in node_items) {
+        var node: string = node_any as string;
+        var out_deg: int = len(mapGetString(store.adjacency, node) as array<string>);
+        var in_deg: int = mapGetString(indegree, node) as int;
+        if (out_deg == 0 && in_deg == 0) {
+            isolated = isolated + 1;
+        }
+    }
+
+    var stats: GraphStats = {
+        nodeCount: mapCount(store.adjacency),
+        edgeCount: store.edgeCount,
+        isolatedCount: isolated
+    };
+    return stats;
+}

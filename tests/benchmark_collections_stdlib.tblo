@@ -1,0 +1,125 @@
+// Collections stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_collections_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_collections_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/collections.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchCollectionsUniqueStrings(iters: int): void {
+    var items: array<string> = [
+        "go", "rust", "tablo", "go", "zig", "rust", "tablo", "go",
+        "lua", "go", "tablo", "c", "cpp", "c", "go", "rust"
+    ];
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w = collectionsUniqueStrings(items);
+        sink = sink + len(out_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out = collectionsUniqueStrings(items);
+        sink = sink + len(out);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf collectionsUniqueStrings", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchCollectionsCountStrings(iters: int): void {
+    var items: array<string> = [
+        "GET", "POST", "GET", "PUT", "GET", "POST", "DELETE", "GET",
+        "PATCH", "GET", "POST", "GET", "PUT", "GET", "POST", "GET"
+    ];
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var counts_w = collectionsCountStrings(items);
+        sink = sink + (mapGetString(counts_w, "GET") as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var counts = collectionsCountStrings(items);
+        sink = sink + (mapGetString(counts, "POST") as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf collectionsCountStrings", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchCollectionsIntersectUniqueStrings(iters: int): void {
+    var left: array<string> = [
+        "a", "b", "c", "d", "e", "f", "g", "h", "a", "c", "e", "i"
+    ];
+    var right: array<string> = [
+        "c", "e", "g", "i", "k", "m", "a", "a"
+    ];
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w = collectionsIntersectUniqueStrings(left, right);
+        sink = sink + len(out_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out = collectionsIntersectUniqueStrings(left, right);
+        sink = sink + len(out);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf collectionsIntersectUniqueStrings", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Collections Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchCollectionsUniqueStrings(200000 * scale);
+    benchCollectionsCountStrings(180000 * scale);
+    benchCollectionsIntersectUniqueStrings(180000 * scale);
+
+    println("Collections stdlib benchmark complete!");
+}

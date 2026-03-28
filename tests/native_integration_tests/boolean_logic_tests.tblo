@@ -1,0 +1,23 @@
+func main() {
+    // Equality / inequality
+    println(1 == 1);
+    println(1 == 2);
+    println(1 != 2);
+    println(nil == nil);
+    println(nil != nil);
+    println(1 == "1");
+
+    // Boolean operators (bool)
+    println((1 < 2) && (2 < 3));
+    println((1 < 2) && (2 > 3));
+    println((1 < 2) || (2 > 3));
+
+    // Unary not
+    println(!(1 < 2));
+    println(!false);
+    println(!true);
+
+    // Precedence (&& before ||)
+    println((1 < 2) || (2 > 3) && (0 == 1));
+    println((1 < 2) && (2 > 3) || (1 == 1));
+}

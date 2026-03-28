@@ -1,0 +1,30 @@
+// Leibniz Pi benchmark (speed-comparison).
+// Run:
+//   ./build/Debug/tablo run tests/benchmark_leibniz.tblo
+// Expects rounds.txt in the working directory.
+
+func main(): void {
+    var r = read_line("rounds.txt");
+    if (r.1 != nil) {
+        println("error");
+        return;
+    }
+
+    var rounds: int = toInt(r.0);
+    rounds += 2;
+
+    var pi: double = 1.0;
+    var sign: double = -1.0;
+    var denom: double = 3.0;
+    var i: int = 2;
+
+    while (i < rounds) {
+        pi += sign / denom;
+        sign = -sign;
+        denom += 2.0;
+        i += 1;
+    }
+
+    pi *= 4.0;
+    println(formatDouble(pi, 16));
+}

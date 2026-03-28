@@ -1,0 +1,118 @@
+// CLI stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_cli_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_cli_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/cli.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchCliParse(iters: int): void {
+    var args: array<string> = [
+        "--host=localhost",
+        "--port", "8080",
+        "-abc",
+        "-t", "1500",
+        "--debug", "true",
+        "input.csv",
+        "--",
+        "--literal",
+        "-x"
+    ];
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = cliParse(args);
+        if (r_w.1 != nil) panic("cliParse warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0.positionals);
+        if (cliHas(r_w.0, "debug")) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = cliParse(args);
+        if (r.1 != nil) panic("cliParse failed: " + r.1.message);
+        sink = sink + len(cliGet(r.0, "host", ""));
+        if (cliHas(r.0, "a")) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf cliParse", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchCliTypedGets(iters: int): void {
+    var args: array<string> = ["--port", "8080", "--debug", "true", "--timeout", "1500", "input.csv"];
+    var parsed_r = cliParse(args);
+    if (parsed_r.1 != nil) panic("cliParse seed failed: " + parsed_r.1.message);
+    var parsed: CliArgs = parsed_r.0;
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var p_w = cliGetInt(parsed, "port", 80);
+        var d_w = cliGetBool(parsed, "debug", false);
+        var t_w = cliGetInt(parsed, "timeout", 0);
+        if (p_w.1 != nil || d_w.1 != nil || t_w.1 != nil) {
+            panic("cli typed warmup failed");
+        }
+        sink = sink + p_w.0 + t_w.0;
+        if (d_w.0) sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p = cliGetInt(parsed, "port", 80);
+        var d = cliGetBool(parsed, "debug", false);
+        var t = cliGetInt(parsed, "timeout", 0);
+        if (p.1 != nil || d.1 != nil || t.1 != nil) {
+            panic("cli typed failed");
+        }
+        sink = sink + p.0 + t.0;
+        if (d.0) sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf cliTypedGets", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang CLI Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchCliParse(140000 * scale);
+    benchCliTypedGets(240000 * scale);
+
+    println("CLI stdlib benchmark complete!");
+}

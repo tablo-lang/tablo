@@ -1,0 +1,17 @@
+func main() {
+    var name: string = "Ada";
+    var year: int = 2026;
+
+    var msg: string = "name=" + name + ",year=" + str(year);
+    println(msg);
+    println(len(msg));
+
+    println("a" + "b" + "c");
+
+    var empty: string = "";
+    println(empty + "x");
+    println("x" + empty);
+
+    println(replace("city", "+", " "));
+    println(replace("city", "", "_"));
+}

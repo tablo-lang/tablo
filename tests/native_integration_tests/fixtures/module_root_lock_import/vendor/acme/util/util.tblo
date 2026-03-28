@@ -1,0 +1,3 @@
+func utilHello(): string {
+    return "lock-import-ok";
+}

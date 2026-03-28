@@ -1,0 +1,75 @@
+import "fixtures/collections.tblo";
+
+func main(): void {
+    var words: array<string> = ["go", "rust", "go", "tablo", "rust", "go"];
+
+    var unique = collectionsUniqueStrings(words);
+    println(len(unique) == 3);
+    println(unique[0] == "go");
+    println(unique[1] == "rust");
+    println(unique[2] == "tablo");
+
+    var counts = collectionsCountStrings(words);
+    println((mapGetString(counts, "go") as int) == 3);
+    println((mapGetString(counts, "rust") as int) == 2);
+    println((mapGetString(counts, "tablo") as int) == 1);
+
+    var most = collectionsMostFrequentString(words);
+    println(most.0 != nil);
+    if (most.0 != nil) {
+        println((most.0 as string) == "go");
+    }
+    println(most.1 == 3);
+
+    var tie = collectionsMostFrequentString(["a", "b", "a", "b"]);
+    println(tie.0 != nil);
+    if (tie.0 != nil) {
+        println((tie.0 as string) == "a");
+    }
+    println(tie.1 == 2);
+
+    var empty_most = collectionsMostFrequentString([]);
+    println(empty_most.0 == nil);
+    println(empty_most.1 == 0);
+
+    var chunk2 = collectionsChunkStrings(["a", "b", "c", "d", "e"], 2);
+    println(chunk2.1 == nil);
+    if (chunk2.1 == nil) {
+        println(len(chunk2.0) == 3);
+        println(len(chunk2.0[0]) == 2);
+        println(len(chunk2.0[1]) == 2);
+        println(len(chunk2.0[2]) == 1);
+        println(chunk2.0[2][0] == "e");
+    }
+
+    var chunk_big = collectionsChunkStrings(["x", "y"], 8);
+    println(chunk_big.1 == nil);
+    if (chunk_big.1 == nil) {
+        println(len(chunk_big.0) == 1);
+        println(len(chunk_big.0[0]) == 2);
+    }
+
+    var chunk_bad = collectionsChunkStrings(["x"], 0);
+    println(chunk_bad.1 != nil);
+    if (chunk_bad.1 != nil) {
+        println(chunk_bad.1.code == ERR_INVALID_ARGUMENT);
+        var bad_data: map<string, any> = chunk_bad.1.data as map<string, any>;
+        println(mapGetString(bad_data, "context") == "collectionsChunkStrings.size");
+    }
+
+    var left: array<string> = ["a", "b", "c", "a", "d"];
+    var right: array<string> = ["c", "a", "x", "a"];
+
+    var inter = collectionsIntersectUniqueStrings(left, right);
+    println(len(inter) == 2);
+    println(inter[0] == "a");
+    println(inter[1] == "c");
+
+    var diff = collectionsDifferenceUniqueStrings(left, right);
+    println(len(diff) == 2);
+    println(diff[0] == "b");
+    println(diff[1] == "d");
+
+    println(collectionsJoinNonEmpty(["", "alpha", "", "beta"], ",") == "alpha,beta");
+    println(collectionsJoinNonEmpty(["", "", ""], ",") == "");
+}

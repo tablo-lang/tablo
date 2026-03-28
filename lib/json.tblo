@@ -1,0 +1,429 @@
+// JSON stdlib wrappers for common backend payload shapes.
+// These helpers layer typed records over jsonDecode schemas.
+
+record JsonHttpRequestPayload {
+    method: string,
+    path: string,
+    headers: map<string, string>,
+    query: map<string, string>,
+    body: string?
+}
+
+record JsonHttpResponsePayload {
+    status: int,
+    headers: map<string, string>,
+    body: string?
+}
+
+record JsonApiErrorPayload {
+    code: int,
+    message: string,
+    detail: string?,
+    data: any
+}
+
+record JsonApiEnvelope {
+    ok: bool,
+    requestId: string?,
+    data: any,
+    error: JsonApiErrorPayload?
+}
+
+func jsonDecodeStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func jsonDecodeJoinPath(base: string, child: string): string {
+    var root: string = base;
+    if (root == "") {
+        root = "$";
+    }
+
+    if (child == "" || child == "$") {
+        return root;
+    }
+
+    if (startsWith(child, "$")) {
+        if (len(child) <= 1) {
+            return root;
+        }
+        return root + substring(child, 1, len(child) - 1);
+    }
+
+    if (startsWith(child, "[")) {
+        return root + child;
+    }
+
+    if (root == "$") {
+        return "$." + child;
+    }
+    return root + "." + child;
+}
+
+func jsonDecodeWrapError(err: Error?, context: string, wrapperPath: string): Error? {
+    if (err == nil) {
+        return nil;
+    }
+
+    var msg: string = context;
+    if (err.message != "") {
+        msg = context + ": " + err.message;
+    }
+
+    var out_data: map<string, any> = {
+        "context": context,
+        "path": wrapperPath
+    };
+    if (err.data != nil) {
+        mapSetString(out_data, "cause", err.data);
+    }
+
+    if (err.data != nil && typeOf(err.data) == "map") {
+        var cause: map<string, any> = err.data as map<string, any>;
+
+        var cause_path_any: any = mapGetString(cause, "path");
+        if (cause_path_any != nil && typeOf(cause_path_any) == "string") {
+            var cause_path: string = cause_path_any as string;
+            mapSetString(out_data, "innerPath", cause_path);
+            mapSetString(out_data, "path", jsonDecodeJoinPath(wrapperPath, cause_path));
+        }
+
+        var schema_path_any: any = mapGetString(cause, "schemaPath");
+        if (schema_path_any != nil) {
+            mapSetString(out_data, "schemaPath", schema_path_any);
+        }
+
+        var expected_any: any = mapGetString(cause, "expectedType");
+        if (expected_any == nil) {
+            expected_any = mapGetString(cause, "expected");
+        }
+        if (expected_any != nil) {
+            mapSetString(out_data, "expectedType", expected_any);
+            mapSetString(out_data, "expected", expected_any);
+        }
+
+        var actual_any: any = mapGetString(cause, "actualType");
+        if (actual_any == nil) {
+            actual_any = mapGetString(cause, "actual");
+        }
+        if (actual_any != nil) {
+            mapSetString(out_data, "actualType", actual_any);
+            mapSetString(out_data, "actual", actual_any);
+        }
+
+        var kind_any: any = mapGetString(cause, "kind");
+        if (kind_any != nil) {
+            mapSetString(out_data, "kind", kind_any);
+        }
+
+        var detail_any: any = mapGetString(cause, "detail");
+        if (detail_any != nil) {
+            mapSetString(out_data, "detail", detail_any);
+        }
+
+        var line_any: any = mapGetString(cause, "line");
+        if (line_any != nil) {
+            mapSetString(out_data, "line", line_any);
+        }
+
+        var column_any: any = mapGetString(cause, "column");
+        if (column_any != nil) {
+            mapSetString(out_data, "column", column_any);
+        }
+
+        var offset_any: any = mapGetString(cause, "offset");
+        if (offset_any != nil) {
+            mapSetString(out_data, "offset", offset_any);
+        }
+
+        var near_any: any = mapGetString(cause, "near");
+        if (near_any != nil) {
+            mapSetString(out_data, "near", near_any);
+        }
+
+        var span_any: any = mapGetString(cause, "span");
+        if (span_any != nil) {
+            mapSetString(out_data, "span", span_any);
+        }
+    }
+
+    return jsonDecodeStdError(err.code, msg, out_data);
+}
+
+func jsonEmptyHttpRequestPayload(): JsonHttpRequestPayload {
+    var req: JsonHttpRequestPayload = {
+        method: "",
+        path: "",
+        headers: {},
+        query: {},
+        body: nil
+    };
+    return req;
+}
+
+func jsonEmptyHttpResponsePayload(): JsonHttpResponsePayload {
+    var resp: JsonHttpResponsePayload = {
+        status: 0,
+        headers: {},
+        body: nil
+    };
+    return resp;
+}
+
+func jsonEmptyApiErrorPayload(): JsonApiErrorPayload {
+    var api_err: JsonApiErrorPayload = {
+        code: 0,
+        message: "",
+        detail: nil,
+        data: nil
+    };
+    return api_err;
+}
+
+func jsonEmptyApiEnvelope(): JsonApiEnvelope {
+    var env: JsonApiEnvelope = {
+        ok: false,
+        requestId: nil,
+        data: nil,
+        error: nil
+    };
+    return env;
+}
+
+func jsonDecodeAsHttpHeaders(value: any): (map<string, string>, Error?) {
+    var schema: map<string, any> = {
+        "type": "map",
+        "keys": "string",
+        "values": "string"
+    };
+
+    var r = jsonDecode(value, schema);
+    if (r.1 != nil) {
+        return ({}, jsonDecodeWrapError(r.1, "jsonDecodeAsHttpHeaders", "$"));
+    }
+
+    return (r.0 as map<string, string>, nil);
+}
+
+func jsonDecodeAsHttpRequest(value: any): (JsonHttpRequestPayload, Error?) {
+    var empty = jsonEmptyHttpRequestPayload();
+    var base_schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "method": "string",
+            "path": "string",
+            "headers": {
+                "type": "map",
+                "keys": "string",
+                "values": "string"
+            }
+        },
+        "allowExtra": true
+    };
+
+    var base = jsonDecode(value, base_schema);
+    if (base.1 != nil) {
+        return (empty, jsonDecodeWrapError(base.1, "jsonDecodeAsHttpRequest", "$"));
+    }
+
+    var validated: map<string, any> = base.0 as map<string, any>;
+    var src: map<string, any> = value as map<string, any>;
+    var method: string = mapGetString(validated, "method") as string;
+    var path: string = mapGetString(validated, "path") as string;
+
+    var headers_r = jsonDecodeAsHttpHeaders(mapGetString(validated, "headers"));
+    if (headers_r.1 != nil) {
+        return (empty, jsonDecodeWrapError(headers_r.1, "jsonDecodeAsHttpRequest.headers", "$.headers"));
+    }
+
+    var query: map<string, string> = {};
+    var query_any: any = mapGetString(src, "query");
+    if (query_any != nil) {
+        var query_r = jsonDecodeAsHttpHeaders(query_any);
+        if (query_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(query_r.1, "jsonDecodeAsHttpRequest.query", "$.query"));
+        }
+        query = query_r.0;
+    }
+
+    var body: string? = nil;
+    var body_any: any = mapGetString(src, "body");
+    if (body_any != nil) {
+        var body_r = jsonDecode(body_any, "string");
+        if (body_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(body_r.1, "jsonDecodeAsHttpRequest.body", "$.body"));
+        }
+        body = body_r.0 as string;
+    }
+
+    var req: JsonHttpRequestPayload = {
+        method: method,
+        path: path,
+        headers: headers_r.0,
+        query: query,
+        body: body
+    };
+    return (req, nil);
+}
+
+func jsonDecodeAsHttpResponse(value: any): (JsonHttpResponsePayload, Error?) {
+    var empty = jsonEmptyHttpResponsePayload();
+    var base_schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "status": "int"
+        },
+        "allowExtra": true
+    };
+
+    var base = jsonDecode(value, base_schema);
+    if (base.1 != nil) {
+        return (empty, jsonDecodeWrapError(base.1, "jsonDecodeAsHttpResponse", "$"));
+    }
+
+    var validated: map<string, any> = base.0 as map<string, any>;
+    var src: map<string, any> = value as map<string, any>;
+    var status: int = mapGetString(validated, "status") as int;
+
+    var headers: map<string, string> = {};
+    var headers_any: any = mapGetString(src, "headers");
+    if (headers_any != nil) {
+        var headers_r = jsonDecodeAsHttpHeaders(headers_any);
+        if (headers_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(headers_r.1, "jsonDecodeAsHttpResponse.headers", "$.headers"));
+        }
+        headers = headers_r.0;
+    }
+
+    var body: string? = nil;
+    var body_any: any = mapGetString(src, "body");
+    if (body_any != nil) {
+        var body_r = jsonDecode(body_any, "string");
+        if (body_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(body_r.1, "jsonDecodeAsHttpResponse.body", "$.body"));
+        }
+        body = body_r.0 as string;
+    }
+
+    var resp: JsonHttpResponsePayload = {
+        status: status,
+        headers: headers,
+        body: body
+    };
+    return (resp, nil);
+}
+
+func jsonDecodeAsApiError(value: any): (JsonApiErrorPayload, Error?) {
+    var empty = jsonEmptyApiErrorPayload();
+    var base_schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "code": "int",
+            "message": "string"
+        },
+        "allowExtra": true
+    };
+
+    var base = jsonDecode(value, base_schema);
+    if (base.1 != nil) {
+        return (empty, jsonDecodeWrapError(base.1, "jsonDecodeAsApiError", "$"));
+    }
+
+    var validated: map<string, any> = base.0 as map<string, any>;
+    var src: map<string, any> = value as map<string, any>;
+    var code: int = mapGetString(validated, "code") as int;
+    var message: string = mapGetString(validated, "message") as string;
+    var data: any = mapGetString(src, "data");
+
+    var detail: string? = nil;
+    var detail_any: any = mapGetString(src, "detail");
+    if (detail_any != nil) {
+        var detail_r = jsonDecode(detail_any, "string");
+        if (detail_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(detail_r.1, "jsonDecodeAsApiError.detail", "$.detail"));
+        }
+        detail = detail_r.0 as string;
+    }
+
+    var out: JsonApiErrorPayload = {
+        code: code,
+        message: message,
+        detail: detail,
+        data: data
+    };
+    return (out, nil);
+}
+
+func jsonDecodeAsApiEnvelope(value: any): (JsonApiEnvelope, Error?) {
+    var empty = jsonEmptyApiEnvelope();
+    var base_schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "ok": "bool"
+        },
+        "allowExtra": true
+    };
+
+    var base = jsonDecode(value, base_schema);
+    if (base.1 != nil) {
+        return (empty, jsonDecodeWrapError(base.1, "jsonDecodeAsApiEnvelope", "$"));
+    }
+
+    var validated: map<string, any> = base.0 as map<string, any>;
+    var src: map<string, any> = value as map<string, any>;
+    var ok: bool = mapGetString(validated, "ok") as bool;
+    var data: any = mapGetString(src, "data");
+
+    var request_id: string? = nil;
+    var request_id_any: any = mapGetString(src, "requestId");
+    if (request_id_any != nil) {
+        var request_id_r = jsonDecode(request_id_any, "string");
+        if (request_id_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(request_id_r.1, "jsonDecodeAsApiEnvelope.requestId", "$.requestId"));
+        }
+        request_id = request_id_r.0 as string;
+    }
+
+    var error_out: JsonApiErrorPayload? = nil;
+    var error_any: any = mapGetString(src, "error");
+    if (error_any != nil) {
+        var error_r = jsonDecodeAsApiError(error_any);
+        if (error_r.1 != nil) {
+            return (empty, jsonDecodeWrapError(error_r.1, "jsonDecodeAsApiEnvelope.error", "$.error"));
+        }
+        error_out = error_r.0;
+    }
+
+    if (ok && error_out != nil) {
+        var state_data_ok: map<string, any> = {
+            "context": "jsonDecodeAsApiEnvelope",
+            "path": "$.error",
+            "kind": "invalid_envelope_state",
+            "expectedType": "nil",
+            "actualType": typeOf(error_any),
+            "detail": "ok=true requires error=nil"
+        };
+        return (empty, jsonDecodeStdError(ERR_PARSE, "jsonDecodeAsApiEnvelope expects error=nil when ok=true", state_data_ok));
+    }
+    if (!ok && error_out == nil) {
+        var state_data_err: map<string, any> = {
+            "context": "jsonDecodeAsApiEnvelope",
+            "path": "$.error",
+            "kind": "invalid_envelope_state",
+            "expectedType": "map",
+            "actualType": "nil",
+            "detail": "ok=false requires error payload"
+        };
+        return (empty, jsonDecodeStdError(ERR_PARSE, "jsonDecodeAsApiEnvelope expects error when ok=false", state_data_err));
+    }
+
+    var env: JsonApiEnvelope = {
+        ok: ok,
+        requestId: request_id,
+        data: data,
+        error: error_out
+    };
+    return (env, nil);
+}
+

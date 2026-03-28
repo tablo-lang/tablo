@@ -1,0 +1,293 @@
+// Filesystem convenience helpers for backend/CLI workflows.
+// Wraps builtins with contextual errors and common JSON/line/copy operations.
+
+func fsStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func fsError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return fsStdError(code, message, data);
+}
+
+func fsCopyErrorField(dst: map<string, any>, src: map<string, any>, key: string): void {
+    var value: any = mapGetString(src, key);
+    if (value != nil) {
+        mapSetString(dst, key, value);
+    }
+}
+
+func fsWrapError(err: Error?, context: string, filePath: string, detail: any): Error? {
+    if (err == nil) {
+        return nil;
+    }
+
+    var data: map<string, any> = {
+        "context": context,
+        "filePath": filePath
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    if (err.data != nil) {
+        mapSetString(data, "cause", err.data);
+        if (typeOf(err.data) == "map") {
+            var cause: map<string, any> = err.data as map<string, any>;
+            fsCopyErrorField(data, cause, "path");
+            fsCopyErrorField(data, cause, "line");
+            fsCopyErrorField(data, cause, "column");
+            fsCopyErrorField(data, cause, "offset");
+            fsCopyErrorField(data, cause, "near");
+            fsCopyErrorField(data, cause, "span");
+            fsCopyErrorField(data, cause, "schemaPath");
+            fsCopyErrorField(data, cause, "kind");
+            fsCopyErrorField(data, cause, "expectedType");
+            fsCopyErrorField(data, cause, "actualType");
+            fsCopyErrorField(data, cause, "expected");
+            fsCopyErrorField(data, cause, "actual");
+        }
+    }
+
+    var message: string = context;
+    if (err.message != "") {
+        message = context + ": " + err.message;
+    }
+    return fsStdError(err.code, message, data);
+}
+
+func fsReadText(path: string): (string, Error?) {
+    var r = read_all(path);
+    if (r.1 != nil) {
+        return ("", fsWrapError(r.1, "fsReadText", path, nil));
+    }
+    return (r.0, nil);
+}
+
+func fsWriteText(path: string, text: string): (bool, Error?) {
+    var r = write_all(path, text);
+    if (r.1 != nil) {
+        return (false, fsWrapError(r.1, "fsWriteText", path, nil));
+    }
+    if (!r.0) {
+        return (false, fsError(ERR_IO, "fsWriteText failed", "fsWriteText", path));
+    }
+    return (true, nil);
+}
+
+func fsAppendText(path: string, text: string): (bool, Error?) {
+    var to_bytes = stringToBytes(text);
+    if (to_bytes.1 != nil) {
+        return (false, fsWrapError(to_bytes.1, "fsAppendText.stringToBytes", path, nil));
+    }
+
+    var r = appendBytes(path, to_bytes.0);
+    if (r.1 != nil) {
+        return (false, fsWrapError(r.1, "fsAppendText.appendBytes", path, nil));
+    }
+    if (!r.0) {
+        return (false, fsError(ERR_IO, "fsAppendText failed", "fsAppendText", path));
+    }
+    return (true, nil);
+}
+
+func fsReadBytes(path: string): (bytes, Error?) {
+    var r = readBytes(path);
+    if (r.1 != nil) {
+        return (bytesWithSize(0, 0).0, fsWrapError(r.1, "fsReadBytes", path, nil));
+    }
+    return (r.0, nil);
+}
+
+func fsWriteBytes(path: string, data: bytes): (bool, Error?) {
+    var r = writeBytes(path, data);
+    if (r.1 != nil) {
+        return (false, fsWrapError(r.1, "fsWriteBytes", path, nil));
+    }
+    if (!r.0) {
+        return (false, fsError(ERR_IO, "fsWriteBytes failed", "fsWriteBytes", path));
+    }
+    return (true, nil);
+}
+
+func fsAppendBytes(path: string, data: bytes): (bool, Error?) {
+    var r = appendBytes(path, data);
+    if (r.1 != nil) {
+        return (false, fsWrapError(r.1, "fsAppendBytes", path, nil));
+    }
+    if (!r.0) {
+        return (false, fsError(ERR_IO, "fsAppendBytes failed", "fsAppendBytes", path));
+    }
+    return (true, nil);
+}
+
+func fsFileExists(path: string): (bool, Error?) {
+    var r = exists(path);
+    if (r.1 != nil) {
+        return (false, fsWrapError(r.1, "fsFileExists", path, nil));
+    }
+    return (r.0, nil);
+}
+
+func fsEnsureDeleted(path: string): Error? {
+    var ex = fsFileExists(path);
+    if (ex.1 != nil) {
+        return ex.1;
+    }
+    if (!ex.0) {
+        return nil;
+    }
+
+    var del = delete(path);
+    if (del.1 != nil) {
+        return fsWrapError(del.1, "fsEnsureDeleted.delete", path, nil);
+    }
+    if (!del.0) {
+        return fsError(ERR_IO, "fsEnsureDeleted delete returned false", "fsEnsureDeleted", path);
+    }
+    return nil;
+}
+
+// maxLines > 0 limits output length. maxLines <= 0 reads until EOF.
+func fsReadLines(path: string, maxLines: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    var opened = file_open(path, "rb");
+    if (opened.1 != nil) {
+        return (out, fsWrapError(opened.1, "fsReadLines.file_open", path, nil));
+    }
+
+    var handle: any = opened.0;
+    var count: int = 0;
+    while (true) {
+        if (maxLines > 0 && count >= maxLines) {
+            break;
+        }
+
+        var line_r = file_read_line(handle);
+        if (line_r.1 != nil) {
+            file_close(handle);
+            return (out, fsWrapError(line_r.1, "fsReadLines.file_read_line", path, nil));
+        }
+        if (line_r.0 == nil) {
+            break;
+        }
+
+        push(out, line_r.0 as string);
+        count = count + 1;
+    }
+
+    file_close(handle);
+    return (out, nil);
+}
+
+func fsWriteLines(path: string, lines: array<string>, trailingNewline: bool): (bool, Error?) {
+    var body: string = join(lines, "\n");
+    if (trailingNewline && len(lines) > 0) {
+        body = body + "\n";
+    }
+    return fsWriteText(path, body);
+}
+
+func fsReadJson(path: string): (any, Error?) {
+    var text_r = fsReadText(path);
+    if (text_r.1 != nil) {
+        return (nil, text_r.1);
+    }
+
+    var parsed = jsonParse(text_r.0);
+    if (parsed.1 != nil) {
+        return (nil, fsWrapError(parsed.1, "fsReadJson.jsonParse", path, nil));
+    }
+    return (parsed.0, nil);
+}
+
+func fsReadJsonAs(path: string, schema: any): (any, Error?) {
+    var parsed = fsReadJson(path);
+    if (parsed.1 != nil) {
+        return (nil, parsed.1);
+    }
+
+    var decoded = jsonDecode(parsed.0, schema);
+    if (decoded.1 != nil) {
+        return (nil, fsWrapError(decoded.1, "fsReadJsonAs.jsonDecode", path, nil));
+    }
+    return (decoded.0, nil);
+}
+
+func fsWriteJson(path: string, value: any): (bool, Error?) {
+    var encoded = jsonStringify(value);
+    if (encoded.1 != nil) {
+        return (false, fsWrapError(encoded.1, "fsWriteJson.jsonStringify", path, nil));
+    }
+    return fsWriteText(path, encoded.0);
+}
+
+func fsWriteJsonPretty(path: string, value: any): (bool, Error?) {
+    var encoded = jsonStringifyPretty(value);
+    if (encoded.1 != nil) {
+        return (false, fsWrapError(encoded.1, "fsWriteJsonPretty.jsonStringifyPretty", path, nil));
+    }
+    return fsWriteText(path, encoded.0);
+}
+
+func fsCopyFile(srcPath: string, dstPath: string, chunkBytes: int): (int, Error?) {
+    var copy_data: map<string, any> = {
+        "srcPath": srcPath,
+        "dstPath": dstPath,
+        "chunkBytes": chunkBytes
+    };
+
+    if (chunkBytes < 1 || chunkBytes > 1048576) {
+        return (0,
+                fsError(ERR_INVALID_ARGUMENT,
+                        "chunkBytes must be between 1 and 1048576",
+                        "fsCopyFile",
+                        copy_data));
+    }
+
+    var src = file_open(srcPath, "rb");
+    if (src.1 != nil) {
+        return (0, fsWrapError(src.1, "fsCopyFile.openSource", srcPath, copy_data));
+    }
+
+    var dst = file_open(dstPath, "wb");
+    if (dst.1 != nil) {
+        file_close(src.0);
+        return (0, fsWrapError(dst.1, "fsCopyFile.openDestination", dstPath, copy_data));
+    }
+
+    var copied = ioCopy(src.0, dst.0, chunkBytes);
+    file_close(src.0);
+    file_close(dst.0);
+    if (copied.1 != nil) {
+        return (copied.0, fsWrapError(copied.1, "fsCopyFile.ioCopy", dstPath, copy_data));
+    }
+    return (copied.0, nil);
+}
+
+func fsMoveReplace(srcPath: string, dstPath: string, chunkBytes: int): (int, Error?) {
+    var moved = fsCopyFile(srcPath, dstPath, chunkBytes);
+    if (moved.1 != nil) {
+        return moved;
+    }
+
+    var delete_data: map<string, any> = {
+        "srcPath": srcPath,
+        "dstPath": dstPath
+    };
+    var del = delete(srcPath);
+    if (del.1 != nil) {
+        return (moved.0, fsWrapError(del.1, "fsMoveReplace.deleteSource", srcPath, delete_data));
+    }
+    if (!del.0) {
+        return (moved.0,
+                fsError(ERR_IO,
+                        "fsMoveReplace delete source returned false",
+                        "fsMoveReplace",
+                        delete_data));
+    }
+    return (moved.0, nil);
+}

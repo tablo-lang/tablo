@@ -1,0 +1,163 @@
+import "fixtures/http.tblo";
+
+func printWorkerBool(outboxId: int, timeoutMs: int): void {
+    var recv_r = syncChannelRecv(outboxId, timeoutMs);
+    println(recv_r.1 == nil);
+    if (recv_r.1 != nil) {
+        return;
+    }
+    println(recv_r.0 as bool);
+}
+
+func streamClientWorker(): bool {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var outbox: int = syncThreadOutbox();
+    var port: int = arg_r.0 as int;
+    var url: string = "http://127.0.0.1:" + str(port) + "/stream";
+
+    var req_r = httpClientRequestStream("GET", url, nil, nil, 5000);
+    if (req_r.1 != nil) {
+        if (outbox >= 0) {
+            var _send_err = syncChannelSend(outbox, false as any, 5000);
+        }
+        return false;
+    }
+
+    var stream: HttpClientStreamResponse = req_r.0;
+    var ok_status: bool = stream.status == 200;
+    var ok_header: bool = mapGet(stream.headers, "X-Test") == "stream";
+    var ok_length: bool = stream.contentLength == 11;
+
+    if (outbox >= 0) {
+        var _send_status = syncChannelSend(outbox, ok_status as any, 5000);
+        var _send_header = syncChannelSend(outbox, ok_header as any, 5000);
+        var _send_length = syncChannelSend(outbox, ok_length as any, 5000);
+    }
+
+    var chunk_r = httpClientStreamReadChunkBytes(stream, 5);
+    if (chunk_r.2 != nil) {
+        if (outbox >= 0) {
+            var _send_chunk_err_1 = syncChannelSend(outbox, false as any, 5000);
+            var _send_chunk_err_2 = syncChannelSend(outbox, false as any, 5000);
+            var _send_chunk_err_3 = syncChannelSend(outbox, false as any, 5000);
+        }
+        return false;
+    }
+
+    var stream_after_chunk: HttpClientStreamResponse = chunk_r.0;
+    var first_chunk: bytes = chunk_r.1;
+
+    var rest_r = httpClientStreamReadAllBytes(stream_after_chunk, 3);
+    if (rest_r.2 != nil) {
+        if (outbox >= 0) {
+            var _send_rest_err_1 = syncChannelSend(outbox, false as any, 5000);
+            var _send_rest_err_2 = syncChannelSend(outbox, false as any, 5000);
+            var _send_rest_err_3 = syncChannelSend(outbox, false as any, 5000);
+        }
+        return false;
+    }
+
+    var stream_after_all: HttpClientStreamResponse = rest_r.0;
+    var rest: bytes = rest_r.1;
+
+    var ok_first_chunk: bool = bytesToHex(first_chunk).0 == "68656c6c6f";
+    var ok_rest: bool = bytesToHex(rest).0 == "20776f726c64";
+    var ok_remaining: bool = stream_after_all.remainingBodyBytes == 0;
+
+    if (outbox >= 0) {
+        var _send_first_chunk = syncChannelSend(outbox, ok_first_chunk as any, 5000);
+        var _send_rest = syncChannelSend(outbox, ok_rest as any, 5000);
+        var _send_remaining = syncChannelSend(outbox, ok_remaining as any, 5000);
+    }
+
+    httpClientStreamClose(stream_after_all);
+    return ok_status && ok_header && ok_length && ok_first_chunk && ok_rest && ok_remaining;
+}
+
+func main(): void {
+    var ports: array<int> = [19221, 19222, 19223, 19224];
+    var listener: any = nil;
+    var selected_port: int = 0;
+
+    foreach (p in ports) {
+        var lr = tcpListen("127.0.0.1", p);
+        if (lr.1 == nil) {
+            listener = lr.0;
+            selected_port = p;
+            break;
+        }
+    }
+
+    println(listener != nil);
+    if (listener == nil) {
+        return;
+    }
+
+    var outbox_r = syncChannelCreate(16);
+    println(outbox_r.1 == nil);
+    if (outbox_r.1 != nil) {
+        tcpClose(listener);
+        return;
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var spawn_r = syncThreadSpawnTyped("streamClientWorker", selected_port as any, "int", -1, outbox_id);
+    println(spawn_r.1 == nil);
+    if (spawn_r.1 != nil) {
+        tcpClose(listener);
+        var _close_outbox = syncChannelClose(outbox_id);
+        return;
+    }
+    var thread_id: int = spawn_r.0;
+
+    var accept_r = tcpAccept(listener, 5000);
+    println(accept_r.1 == nil);
+    if (accept_r.1 != nil) {
+        var join_fail = syncThreadJoinTyped(thread_id, "bool", 5000);
+        println(join_fail.1 == nil);
+        if (join_fail.1 == nil) {
+            println(join_fail.0 as bool);
+        }
+        tcpClose(listener);
+        var _close_outbox_2 = syncChannelClose(outbox_id);
+        return;
+    }
+    var server_client: any = accept_r.0;
+
+    var read_r = httpReadRequest(server_client, 4096);
+    println(read_r.1 == nil);
+    if (read_r.1 == nil) {
+        var req: map<string, any> = read_r.0 as map<string, any>;
+        println(mapGet(req, "method") == "GET");
+        println(mapGet(req, "path") == "/stream");
+    }
+
+    var response_part_1: string = "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Test: stream\r\n\r\nhello";
+    var response_part_2: string = " world";
+    var send_1 = tcpSend(server_client, response_part_1);
+    println(send_1.1 == nil);
+    var send_2 = tcpSend(server_client, response_part_2);
+    println(send_2.1 == nil);
+
+    tcpClose(server_client);
+    tcpClose(listener);
+
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+    printWorkerBool(outbox_id, 5000);
+
+    var join_r = syncThreadJoinTyped(thread_id, "bool", 5000);
+    println(join_r.1 == nil);
+    if (join_r.1 == nil) {
+        println(join_r.0 as bool);
+    }
+
+    var _close_outbox_final = syncChannelClose(outbox_id);
+}

@@ -1,0 +1,131 @@
+import "fixtures/config.tblo";
+
+func main(): void {
+    var parsed = configParseDotEnv("PORT=8080\nHOST=localhost\nDEBUG=true\n");
+    println(parsed.1 == nil);
+    if (parsed.1 == nil) {
+        println(mapGetString(parsed.0, "PORT") == "8080");
+        println(mapGetString(parsed.0, "HOST") == "localhost");
+        println(mapGetString(parsed.0, "DEBUG") == "true");
+    }
+
+    var parsed_quotes = configParseDotEnv("NAME=\"Alice Doe\"\nTOKEN='a=b,c'\nESCAPED=\"line1\\nline2\"\n");
+    println(parsed_quotes.1 == nil);
+    if (parsed_quotes.1 == nil) {
+        println(mapGetString(parsed_quotes.0, "NAME") == "Alice Doe");
+        println(mapGetString(parsed_quotes.0, "TOKEN") == "a=b,c");
+        println(mapGetString(parsed_quotes.0, "ESCAPED") == "line1\nline2");
+    }
+
+    var parsed_comments = configParseDotEnv("# comment\nexport APP_ENV=prod\nA=1 # inline comment\n");
+    println(parsed_comments.1 == nil);
+    if (parsed_comments.1 == nil) {
+        println(mapGetString(parsed_comments.0, "APP_ENV") == "prod");
+        println(mapGetString(parsed_comments.0, "A") == "1");
+    }
+
+    var bad_key = configParseDotEnv("1BAD=value");
+    println(bad_key.1 != nil);
+    if (bad_key.1 != nil) {
+        println(bad_key.1.code == ERR_PARSE);
+    }
+
+    var bad_quote = configParseDotEnv("X=\"abc");
+    println(bad_quote.1 != nil);
+    if (bad_quote.1 != nil) {
+        println(bad_quote.1.code == ERR_PARSE);
+    }
+
+    var cfg: map<string, string> = {
+        "PORT": "9090",
+        "DEBUG": "on",
+        "NAME": "tablo",
+        "BADINT": "12x",
+        "BADBOOL": "maybe"
+    };
+
+    println(configGetString(cfg, "NAME", "fallback") == "tablo");
+    println(configGetString(cfg, "MISSING", "fallback") == "fallback");
+
+    var req_name = configGetRequiredString(cfg, "NAME");
+    println(req_name.1 == nil);
+    if (req_name.1 == nil) {
+        println(req_name.0 == "tablo");
+    }
+
+    var req_missing = configGetRequiredString(cfg, "NOPE");
+    println(req_missing.1 != nil);
+    if (req_missing.1 != nil) {
+        println(req_missing.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var port = configGetInt(cfg, "PORT", 80);
+    println(port.1 == nil);
+    if (port.1 == nil) {
+        println(port.0 == 9090);
+    }
+
+    var port_default = configGetInt(cfg, "PORT_MISSING", 80);
+    println(port_default.1 == nil);
+    if (port_default.1 == nil) {
+        println(port_default.0 == 80);
+    }
+
+    var bad_int = configGetInt(cfg, "BADINT", 7);
+    println(bad_int.1 != nil);
+    if (bad_int.1 != nil) {
+        println(bad_int.0 == 7);
+    }
+
+    var debug = configGetBool(cfg, "DEBUG", false);
+    println(debug.1 == nil);
+    if (debug.1 == nil) {
+        println(debug.0 == true);
+    }
+
+    var bad_bool = configGetBool(cfg, "BADBOOL", false);
+    println(bad_bool.1 != nil);
+    if (bad_bool.1 != nil) {
+        println(bad_bool.0 == false);
+    }
+
+    var env_missing = configFromEnv(["TABLO_SHOULD_NOT_EXIST_20260216"]);
+    println(env_missing.1 == nil);
+    if (env_missing.1 == nil) {
+        println(mapCount(env_missing.0) == 0);
+    }
+
+    var env_bad = configFromEnv(["BAD-NAME"]);
+    println(env_bad.1 != nil);
+    if (env_bad.1 != nil) {
+        println(env_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var base_cfg: map<string, string> = { "A": "1", "B": "2" };
+    var overlay_cfg: map<string, string> = { "B": "3", "C": "4" };
+    var merged = configMerge(base_cfg, overlay_cfg);
+    println(mapGetString(merged, "A") == "1");
+    println(mapGetString(merged, "B") == "3");
+    println(mapGetString(merged, "C") == "4");
+
+    var tmp_path: string = "tmp_config_stdlib.env";
+    var write_env = write_all(tmp_path, "PORT=7000\nDEBUG=false\nNAME=local\n");
+    println(write_env.1 == nil);
+    if (write_env.1 == nil) {
+        var loaded = configLoadDotEnv(tmp_path);
+        println(loaded.1 == nil);
+        if (loaded.1 == nil) {
+            println(mapGetString(loaded.0, "PORT") == "7000");
+            println(mapGetString(loaded.0, "DEBUG") == "false");
+        }
+
+        var applied = configApplyDotEnv({ "PORT": "80", "X": "1" }, tmp_path);
+        println(applied.1 == nil);
+        if (applied.1 == nil) {
+            println(mapGetString(applied.0, "PORT") == "7000");
+            println(mapGetString(applied.0, "X") == "1");
+        }
+    }
+
+    var _ = delete(tmp_path);
+}

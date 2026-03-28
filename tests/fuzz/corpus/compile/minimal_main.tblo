@@ -1,0 +1,4 @@
+func main(): void {
+    var a: int = 1 + 2;
+    println(str(a));
+}

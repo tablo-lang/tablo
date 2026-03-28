@@ -1,0 +1,260 @@
+func workerMain(): void {
+    var inbox: int = syncThreadInbox();
+    var outbox: int = syncThreadOutbox();
+
+    var cell_msg = syncChannelRecv(inbox, 5000);
+    if (cell_msg.1 != nil) {
+        return;
+    }
+    var cell_id: int = cell_msg.0 as int;
+
+    var value_msg = syncChannelRecv(inbox, 5000);
+    if (value_msg.1 != nil) {
+        return;
+    }
+    var n: int = value_msg.0 as int;
+
+    var current = syncSharedGet(cell_id);
+    if (current.1 != nil) {
+        return;
+    }
+    var next_total: int = (current.0 as int) + n;
+    var set_r = syncSharedSet(cell_id, next_total as any);
+    if (set_r.1 != nil) {
+        return;
+    }
+
+    var send_r = syncChannelSend(outbox, (n + 1) as any, 5000);
+    if (send_r.1 != nil) {
+        return;
+    }
+}
+
+func workerTyped(): int {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return -1000;
+    }
+
+    var n: int = arg_r.0 as int;
+    var outbox: int = syncThreadOutbox();
+    if (outbox >= 0) {
+        var send_r = syncChannelSendTyped(outbox, {"v": n} as any, {"v": "int"} as any, 5000);
+        if (send_r.1 != nil) {
+            return -1001;
+        }
+    }
+
+    return n + 1;
+}
+
+func workerGuardReleaseProbe(): bool {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return false;
+    }
+
+    var guard_id: int = arg_r.0 as int;
+    var rel = syncArcGuardRelease(guard_id);
+    return rel.1 != nil;
+}
+
+func main(): void {
+    var in_r = syncChannelCreate(8);
+    var out_r = syncChannelCreate(8);
+    var shared_r = syncSharedCreate(1 as any);
+    println(in_r.1 == nil);
+    println(out_r.1 == nil);
+    println(shared_r.1 == nil);
+    if (in_r.1 != nil || out_r.1 != nil || shared_r.1 != nil) {
+        return;
+    }
+
+    var in_id: int = in_r.0;
+    var out_id: int = out_r.0;
+    var shared_id: int = shared_r.0;
+
+    var spawn_r = syncThreadSpawn("workerMain", in_id, out_id);
+    println(spawn_r.1 == nil);
+    if (spawn_r.1 != nil) {
+        return;
+    }
+    var thread_id: int = spawn_r.0;
+
+    var send_cell = syncChannelSend(in_id, shared_id as any, 5000);
+    var send_val = syncChannelSend(in_id, 41 as any, 5000);
+    println(send_cell.1 == nil);
+    println(send_val.1 == nil);
+
+    var recv_r = syncChannelRecv(out_id, 5000);
+    println(recv_r.1 == nil);
+    if (recv_r.1 == nil) {
+        println((recv_r.0 as int) == 42);
+    }
+
+    var join_r = syncThreadJoin(thread_id, 5000);
+    println(join_r.1 == nil);
+    if (join_r.1 == nil) {
+        println(join_r.0);
+    }
+
+    var total_r = syncSharedGet(shared_id);
+    println(total_r.1 == nil);
+    if (total_r.1 == nil) {
+        println((total_r.0 as int) == 42);
+    }
+
+    var bad: array<int> = [1, 2, 3];
+    var bad_shared = syncSharedCreate(bad as any);
+    println(bad_shared.1 != nil);
+
+    var bad_send = syncChannelSend(in_id, bad as any, 1000);
+    println(bad_send.1 != nil);
+
+    var close_out = syncChannelClose(out_id);
+    println(close_out.1 == nil);
+    if (close_out.1 == nil) {
+        println(close_out.0);
+    }
+
+    var recv_closed = syncChannelRecv(out_id, 1000);
+    println(recv_closed.1 != nil);
+
+    var schema: map<string, any> = {"kind": "string", "n": "int"};
+    var typed_channel_r = syncChannelCreate(4);
+    println(typed_channel_r.1 == nil);
+    if (typed_channel_r.1 == nil) {
+        var typed_channel_id: int = typed_channel_r.0;
+        var typed_payload: map<string, any> = {"kind": "evt", "n": 7};
+
+        var typed_send = syncChannelSendTyped(typed_channel_id, typed_payload as any, schema as any, 5000);
+        println(typed_send.1 == nil);
+
+        var typed_recv = syncChannelRecvTyped(typed_channel_id, schema as any, 5000);
+        println(typed_recv.1 == nil);
+        if (typed_recv.1 == nil) {
+            var recv_map: map<string, any> = typed_recv.0 as map<string, any>;
+            println((mapGet(recv_map, "kind") as string) == "evt");
+            println((mapGet(recv_map, "n") as int) == 7);
+        }
+
+        var typed_send_2 = syncChannelSendTyped(typed_channel_id, typed_payload as any, schema as any, 5000);
+        println(typed_send_2.1 == nil);
+        var typed_recv_bad = syncChannelRecvTyped(typed_channel_id, {"kind": "int", "n": "int"} as any, 5000);
+        println(typed_recv_bad.1 != nil);
+
+        var typed_close = syncChannelClose(typed_channel_id);
+        println(typed_close.1 == nil);
+    }
+
+    var shared_schema: map<string, any> = {"count": "int"};
+    var typed_shared_r = syncSharedCreateTyped({"count": 1} as any, shared_schema as any);
+    println(typed_shared_r.1 == nil);
+    if (typed_shared_r.1 == nil) {
+        var typed_shared_id: int = typed_shared_r.0;
+        var typed_shared_get = syncSharedGetTyped(typed_shared_id, shared_schema as any);
+        println(typed_shared_get.1 == nil);
+        if (typed_shared_get.1 == nil) {
+            var typed_shared_map: map<string, any> = typed_shared_get.0 as map<string, any>;
+            println((mapGet(typed_shared_map, "count") as int) == 1);
+        }
+
+        var typed_shared_set_ok = syncSharedSetTyped(typed_shared_id, {"count": 2} as any, shared_schema as any);
+        println(typed_shared_set_ok.1 == nil);
+        var typed_shared_get_2 = syncSharedGetTyped(typed_shared_id, shared_schema as any);
+        println(typed_shared_get_2.1 == nil);
+        if (typed_shared_get_2.1 == nil) {
+            var typed_shared_map_2: map<string, any> = typed_shared_get_2.0 as map<string, any>;
+            println((mapGet(typed_shared_map_2, "count") as int) == 2);
+        }
+
+        var typed_shared_set_bad = syncSharedSetTyped(typed_shared_id, {"count": "oops"} as any, shared_schema as any);
+        println(typed_shared_set_bad.1 != nil);
+    }
+
+    var typed_outbox_r = syncChannelCreate(4);
+    println(typed_outbox_r.1 == nil);
+    if (typed_outbox_r.1 == nil) {
+        var typed_outbox_id: int = typed_outbox_r.0;
+        var typed_spawn_r = syncThreadSpawnTyped("workerTyped", 7 as any, "int", -1, typed_outbox_id);
+        println(typed_spawn_r.1 == nil);
+        if (typed_spawn_r.1 == nil) {
+            var typed_thread_id: int = typed_spawn_r.0;
+            var typed_msg_r = syncChannelRecvTyped(typed_outbox_id, {"v": "int"} as any, 5000);
+            println(typed_msg_r.1 == nil);
+            if (typed_msg_r.1 == nil) {
+                var typed_msg_map: map<string, any> = typed_msg_r.0 as map<string, any>;
+                println((mapGet(typed_msg_map, "v") as int) == 7);
+            }
+
+            var typed_join_r = syncThreadJoinTyped(typed_thread_id, "int", 5000);
+            println(typed_join_r.1 == nil);
+            if (typed_join_r.1 == nil) {
+                println((typed_join_r.0 as int) == 8);
+            }
+        }
+
+        var typed_spawn_bad_r = syncThreadSpawnTyped("workerTyped", 3 as any, "int", -1, -1);
+        println(typed_spawn_bad_r.1 == nil);
+        if (typed_spawn_bad_r.1 == nil) {
+            var typed_join_bad = syncThreadJoinTyped(typed_spawn_bad_r.0 as int, "string", 5000);
+            println(typed_join_bad.1 != nil);
+        }
+    }
+
+    var arc_r = syncArcCreate(5 as any);
+    println(arc_r.1 == nil);
+    if (arc_r.1 == nil) {
+        var arc_id: int = arc_r.0;
+        var arc_clone_r = syncArcClone(arc_id);
+        println(arc_clone_r.1 == nil);
+
+        var guard_r = syncArcGuardAcquire(arc_clone_r.0 as int);
+        println(guard_r.1 == nil);
+        if (guard_r.1 == nil) {
+            var guard_id: int = guard_r.0;
+            var guard_read = syncArcGuardRead(guard_id);
+            println(guard_read.1 == nil);
+            if (guard_read.1 == nil) {
+                println((guard_read.0 as int) == 5);
+            }
+
+            var guard_write = syncArcGuardWrite(guard_id, 9 as any);
+            println(guard_write.1 == nil);
+
+            var probe_spawn = syncThreadSpawnTyped("workerGuardReleaseProbe", guard_id as any, "int", -1, -1);
+            println(probe_spawn.1 == nil);
+            if (probe_spawn.1 == nil) {
+                var probe_join = syncThreadJoinTyped(probe_spawn.0 as int, "bool", 5000);
+                println(probe_join.1 == nil);
+                if (probe_join.1 == nil) {
+                    println(probe_join.0 as bool);
+                }
+            }
+
+            var guard_release = syncArcGuardRelease(guard_id);
+            println(guard_release.1 == nil);
+        }
+
+        var guard_r_2 = syncArcGuardAcquire(arc_id);
+        println(guard_r_2.1 == nil);
+        if (guard_r_2.1 == nil) {
+            var guard_id_2: int = guard_r_2.0;
+            var guard_read_2 = syncArcGuardRead(guard_id_2);
+            println(guard_read_2.1 == nil);
+            if (guard_read_2.1 == nil) {
+                println((guard_read_2.0 as int) == 9);
+            }
+
+            var guard_release_2 = syncArcGuardRelease(guard_id_2);
+            println(guard_release_2.1 == nil);
+            if (guard_release_2.1 == nil) {
+                var guard_release_2_again = syncArcGuardRelease(guard_id_2);
+                println(guard_release_2_again.1 != nil);
+            }
+        }
+    }
+
+    println(syncThreadInbox() == -1);
+    println(syncThreadOutbox() == -1);
+}

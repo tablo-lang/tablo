@@ -1,0 +1,4 @@
+func main() {
+    import "fixtures/import_utils.tblo";
+    println(1);
+}

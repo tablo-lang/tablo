@@ -1,0 +1,197 @@
+// RSA Library Tests
+// Tests all RSA functionality: key generation, encryption, decryption, signing, verification, export/import
+
+import "fixtures/rsa.tblo";
+
+func main(): void {
+    var allPassed: int = 1;
+
+    println("=== RSA Library Tests ===");
+    println("");
+
+    // Test 1: Key Generation with small key (for fast testing)
+    println("Test 1: Key Generation (2048-bit)");
+    var keyPair: RSAKeyPair = rsaGenerateKeyPair(2048);
+
+    if (keyPair.public.n > 0n && keyPair.public.e == 65537n) {
+        println("  PASS: Key pair generated successfully");
+    } else {
+        println("  FAIL: Key generation failed");
+        allPassed = 0;
+    }
+
+    // Test 2: Key Validation
+    println("Test 2: Key Validation");
+    if (rsaValidateKeyPair(keyPair) == 1) {
+        println("  PASS: Key pair is valid");
+    } else {
+        println("  FAIL: Key pair validation failed");
+        allPassed = 0;
+    }
+
+    // Test 3: Basic Encryption/Decryption
+    println("Test 3: Basic Encryption/Decryption");
+    var message: bigint = 123456789n;
+    var ciphertext: bigint = rsaEncrypt(message, keyPair.public);
+    var decrypted: bigint = rsaDecrypt(ciphertext, keyPair.private);
+
+    if (decrypted == message) {
+        println("  PASS: Message encrypted and decrypted correctly");
+    } else {
+        println("  FAIL: Decryption did not return original message");
+        allPassed = 0;
+    }
+
+    // Test 4: Large Message Encryption
+    println("Test 4: Large Message Encryption");
+    var largeMessage: bigint = 123456789012345678901234567890123456789n;
+    if (rsaCanEncrypt(largeMessage, keyPair.public) == 1) {
+        var largeCiphertext: bigint = rsaEncrypt(largeMessage, keyPair.public);
+        var largeDecrypted: bigint = rsaDecrypt(largeCiphertext, keyPair.private);
+        if (largeDecrypted == largeMessage) {
+            println("  PASS: Large message encrypted and decrypted correctly");
+        } else {
+            println("  FAIL: Large message decryption failed");
+            allPassed = 0;
+        }
+    } else {
+        println("  SKIP: Message too large for 512-bit key");
+    }
+
+    // Test 5: Digital Signature
+    println("Test 5: Digital Signature");
+    var messageHash: bigint = 987654321n;
+    var signature: bigint = rsaSign(messageHash, keyPair.private);
+    var verified: int = rsaVerify(messageHash, signature, keyPair.public);
+
+    if (verified == 1) {
+        println("  PASS: Signature verified correctly");
+    } else {
+        println("  FAIL: Signature verification failed");
+        allPassed = 0;
+    }
+
+    // Test 6: Hash Recovery from Signature
+    println("Test 6: Hash Recovery");
+    var recoveredHash: bigint = rsaRecoverHash(signature, keyPair.public);
+    if (recoveredHash == messageHash) {
+        println("  PASS: Hash recovered correctly from signature");
+    } else {
+        println("  FAIL: Hash recovery failed");
+        allPassed = 0;
+    }
+
+    // Test 7: Invalid Signature Detection
+    println("Test 7: Invalid Signature Detection");
+    var wrongHash: bigint = 111111111n;
+    var wrongVerified: int = rsaVerify(wrongHash, signature, keyPair.public);
+
+    if (wrongVerified == 0) {
+        println("  PASS: Invalid signature correctly rejected");
+    } else {
+        println("  FAIL: Invalid signature incorrectly accepted");
+        allPassed = 0;
+    }
+
+    // Test 8: Public Key Export
+    println("Test 8: Public Key Export");
+    var pubKeyStr: string = rsaExportPublicKey(keyPair.public);
+    if (len(pubKeyStr) > 10) {
+        println("  PASS: Public key exported successfully");
+    } else {
+        println("  FAIL: Public key export failed");
+        allPassed = 0;
+    }
+
+    // Test 9: Private Key Export
+    println("Test 9: Private Key Export");
+    var privKeyStr: string = rsaExportPrivateKey(keyPair.private);
+    if (len(privKeyStr) > 10) {
+        println("  PASS: Private key exported successfully");
+    } else {
+        println("  FAIL: Private key export failed");
+        allPassed = 0;
+    }
+
+    // Test 10: Key Creation from Values
+    println("Test 10: Key Creation from Values");
+    var createdPubKey: RSAPublicKey = rsaCreatePublicKey(keyPair.public.n, keyPair.public.e);
+    var createdPrivKey: RSAPrivateKey = rsaCreatePrivateKey(
+        keyPair.private.n, keyPair.private.d, keyPair.private.p, keyPair.private.q
+    );
+    var createdPair: RSAKeyPair = { public: createdPubKey, private: createdPrivKey };
+
+    if (rsaValidateKeyPair(createdPair) == 1) {
+        println("  PASS: Key pair created from values is valid");
+    } else {
+        println("  FAIL: Key pair created from values is invalid");
+        allPassed = 0;
+    }
+
+    // Test 11: Cross-key Encryption/Decryption (using created keys)
+    println("Test 11: Cross-key Operations");
+    var testMessage: bigint = 42424242n;
+    var testCipher: bigint = rsaEncrypt(testMessage, createdPair.public);
+    var testDecrypted: bigint = rsaDecrypt(testCipher, createdPair.private);
+
+    if (testDecrypted == testMessage) {
+        println("  PASS: Created keys work for encryption/decryption");
+    } else {
+        println("  FAIL: Created keys don't work correctly");
+        allPassed = 0;
+    }
+
+    // Test 12: Derive Public Key from Private
+    println("Test 12: Derive Public Key from Private");
+    var derivedPubKey: RSAPublicKey = rsaPublicKeyFromPrivate(keyPair.private);
+    if (derivedPubKey.n == keyPair.public.n && derivedPubKey.e == keyPair.public.e) {
+        println("  PASS: Public key derived correctly from private key");
+    } else {
+        println("  FAIL: Derived public key doesn't match");
+        allPassed = 0;
+    }
+
+    // Test 13: Custom Exponent Key Generation
+    println("Test 13: Custom Exponent Key Generation");
+    var customKeyPair: RSAKeyPair = rsaGenerateKeyPairWithExponent(512, 3n);
+    if (customKeyPair.public.e == 3n && rsaValidateKeyPair(customKeyPair) == 1) {
+        println("  PASS: Custom exponent (e=3) key pair generated and valid");
+    } else {
+        println("  FAIL: Custom exponent key generation failed");
+        allPassed = 0;
+    }
+
+    // Test 14: rsaCanEncrypt Boundary Check
+    println("Test 14: rsaCanEncrypt Boundary Check");
+    var smallMsg: bigint = 100n;
+    var hugeMsg: bigint = keyPair.public.n + 1n;
+
+    if (rsaCanEncrypt(smallMsg, keyPair.public) == 1 && rsaCanEncrypt(hugeMsg, keyPair.public) == 0) {
+        println("  PASS: Boundary checks work correctly");
+    } else {
+        println("  FAIL: Boundary check failed");
+        allPassed = 0;
+    }
+
+    // Test 15: rsaCreateKeyPair helper
+    println("Test 15: rsaCreateKeyPair Helper");
+    var helperPair: RSAKeyPair = rsaCreateKeyPair(
+        keyPair.public.n, keyPair.public.e,
+        keyPair.private.d, keyPair.private.p, keyPair.private.q
+    );
+    if (rsaValidateKeyPair(helperPair) == 1) {
+        println("  PASS: rsaCreateKeyPair works correctly");
+    } else {
+        println("  FAIL: rsaCreateKeyPair failed");
+        allPassed = 0;
+    }
+
+    // Summary
+    println("");
+    println("=== Test Summary ===");
+    if (allPassed == 1) {
+        println("All tests PASSED!");
+    } else {
+        println("Some tests FAILED!");
+    }
+}

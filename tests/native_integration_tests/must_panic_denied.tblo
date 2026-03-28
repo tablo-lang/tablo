@@ -1,0 +1,7 @@
+// must() should abort (panic) when err != nil.
+
+func main(): void {
+    must(toBigInt("12x"));
+    println("unreachable");
+}
+

@@ -1,0 +1,17 @@
+func main() {
+    // Ensure a clean slate even if a previous run failed.
+    delete("line_tmp.txt");
+
+    var missing = read_line("line_tmp.txt");
+    println(missing.1.message);
+
+    // Append a couple of lines.
+    write_line("line_tmp.txt", "first");
+    write_line("line_tmp.txt", "second");
+
+    println(read_line("line_tmp.txt").0);
+    println(read_all("line_tmp.txt").0);
+
+    println(delete("line_tmp.txt").0);
+    println(exists("line_tmp.txt").0);
+}

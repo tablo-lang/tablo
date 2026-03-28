@@ -1,0 +1,165 @@
+// Mathx stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_mathx_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_mathx_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/mathx.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func buildSeries(size: int): array<double> {
+    var out: array<double> = [];
+    var i: int = 0;
+    while (i < size) {
+        var value: double = (((i % 97) as double) * 0.125) + ((i / 97) as double);
+        push(out, value);
+        i = i + 1;
+    }
+    return out;
+}
+
+func benchMathxSummary(iters: int): void {
+    var series: array<double> = buildSeries(512);
+    var sink: double = 0.0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var s_w = mathxSummary(series);
+        if (s_w.1 != nil) {
+            println("perf mathxSummary: warm run failed");
+            return;
+        }
+        sink = sink + s_w.0.mean;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s_i = mathxSummary(series);
+        if (s_i.1 != nil) {
+            println("perf mathxSummary: run failed");
+            return;
+        }
+        sink = sink + s_i.0.mean;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf mathxSummary", iters, start, end);
+
+    if (sink == -1.0) {
+        println("error");
+    }
+}
+
+func benchMathxPercentileP95(iters: int): void {
+    var series: array<double> = buildSeries(256);
+    var sink: double = 0.0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var p_w = mathxPercentile(series, 95.0);
+        if (p_w.1 != nil) {
+            println("perf mathxPercentileP95: warm run failed");
+            return;
+        }
+        sink = sink + p_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p_i = mathxPercentile(series, 95.0);
+        if (p_i.1 != nil) {
+            println("perf mathxPercentileP95: run failed");
+            return;
+        }
+        sink = sink + p_i.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf mathxPercentileP95", iters, start, end);
+
+    if (sink == -1.0) {
+        println("error");
+    }
+}
+
+func benchMathxRollingPushMean(iters: int): void {
+    var opened = mathxRollingNew(256);
+    if (opened.1 != nil) {
+        println("perf mathxRollingPushMean: setup failed");
+        return;
+    }
+    var window: MathxRollingWindow = opened.0;
+    var sink: double = 0.0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        window = mathxRollingPush(window, (w % 100) as double);
+        var m_w = mathxRollingMean(window);
+        if (m_w.1 != nil) {
+            println("perf mathxRollingPushMean: warm mean failed");
+            return;
+        }
+        sink = sink + m_w.0;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        window = mathxRollingPush(window, (i % 100) as double);
+        var m_i = mathxRollingMean(window);
+        if (m_i.1 != nil) {
+            println("perf mathxRollingPushMean: mean failed");
+            return;
+        }
+        sink = sink + m_i.0;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf mathxRollingPushMean", iters, start, end);
+
+    if (sink == -1.0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Mathx Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchMathxSummary(180000 * scale);
+    benchMathxPercentileP95(25000 * scale);
+    benchMathxRollingPushMean(220000 * scale);
+
+    println("Mathx stdlib benchmark complete!");
+}

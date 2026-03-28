@@ -1,0 +1,175 @@
+from pathlib import Path
+
+a512 = int("20683933304168370455845888199423184913065902865418847777579583388107446748984301367057531643348161366707210878327722623156679249082293555084675232652653720")
+b512 = int("73308878442923045059976294952255587999123263358420094990610382528634504583670384642226159738983164471491540131922673939258587560940691215067502770621913422")
+
+a1024 = int("725154716879527538388007013137210621227362917574153281262703057865890620101608944898393945941320415278452308955385925956184467987129367634509508056530546818308432083591839144768631134667355932506742546570130115066730742513580663701509455452614096576690092208947740346738528980949408710050614641597374084706201")
+b1024 = int("252393167246274174410321171765544651098934523405264653483111130269251208648579777659098126897680436324306600591334448017003541096703344234338863546224142821185561478708920367923909487265142305987739473720377499717507420255661548919442665788864259737021821715872957036593273149131281099752085981691722213475777")
+
+a2048 = int("67268358341359507713921447762429837540087680631529370723682058682251105662524080614315810486892809848932360710959243437733171887061423278294419043665847211475148364842696523321403712112421189205605529006831388096232524132151721871698361528113218207208038795510951630896109601883342467365067601716267741000933680127858337572849788562659035732237658485782026815014412856772369424419139287063221962872589171341259230697422488345149765293996894570309137435910082620248494669152880893690223937281326432290446837202028902902556647773545760215439562525242443063480806465726768646208411153019269683553319689947370686506865335")
+b2048 = int("20993193488124261316052854525261231537235941224530427946713857822698363417100162909484438481338802953516600973565195744725988107930820938277345592624206812763840203364415746648949657363300827542704212721855017471319293006369810393473683551728334513341020645203572309863663127702429795135204735725692474977889384377387627465883849210095572734682046733897500818494916327281588387384710541349465334967571845220822252467436598872514431071386531152620396642007396271538027018090544525212888997499026051459228855156386005875913061806458307699493373011392117543626604870797940548264995951333176306278849331434257937963165354")
+
+
+def trunc_div_mod(a: int, b: int):
+    if b == 0:
+        raise ZeroDivisionError
+    q = abs(a) // abs(b)
+    if (a < 0) ^ (b < 0):
+        q = -q
+    r = a - q * b
+    return q, r
+
+lines = []
+
+# 512-bit set
+lines.append(str(a512 + b512))
+lines.append(str(a512 - b512))
+lines.append(str(b512 - a512))
+lines.append(str(a512 * b512))
+q, r = trunc_div_mod(a512, b512)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(b512, a512)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(-a512, b512)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(a512, -b512)
+lines.append(str(q))
+lines.append(str(r))
+lines.append(str((-a512) * b512))
+lines.append(str((-a512) + b512))
+lines.append(str(a512 + (-b512)))
+
+# 1024-bit set
+lines.append(str(a1024 + b1024))
+lines.append(str(a1024 - b1024))
+lines.append(str(b1024 - a1024))
+lines.append(str(a1024 * b1024))
+q, r = trunc_div_mod(a1024, b1024)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(-a1024, b1024)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(a1024, -b1024)
+lines.append(str(q))
+lines.append(str(r))
+lines.append(str((-a1024) * b1024))
+
+# 2048-bit add/sub
+lines.append(str(a2048 + b2048))
+lines.append(str(a2048 - b2048))
+lines.append(str(b2048 - a2048))
+
+# mixed-size (512/1024)
+lines.append(str(a512 + a1024))
+lines.append(str(a1024 - a512))
+lines.append(str(a512 - a1024))
+lines.append(str(a512 * a1024))
+q, r = trunc_div_mod(a1024, a512)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(a512, a1024)
+lines.append(str(q))
+lines.append(str(r))
+
+# mixed-size (512/2048)
+lines.append(str(a512 + a2048))
+lines.append(str(a2048 - a512))
+lines.append(str(a512 - a2048))
+lines.append(str(a512 * a2048))
+q, r = trunc_div_mod(a2048, a512)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(a512, a2048)
+lines.append(str(q))
+lines.append(str(r))
+
+# mixed-size (1024/2048)
+lines.append(str(a1024 + a2048))
+lines.append(str(a2048 - a1024))
+lines.append(str(a1024 - a2048))
+lines.append(str(a1024 * a2048))
+q, r = trunc_div_mod(a2048, a1024)
+lines.append(str(q))
+lines.append(str(r))
+q, r = trunc_div_mod(a1024, a2048)
+lines.append(str(q))
+lines.append(str(r))
+
+expected = "\n".join(lines) + "\n"
+
+tblo_source = f"""func main(): void {{
+    var a512: bigint = {a512}n;
+    var b512: bigint = {b512}n;
+    var a1024: bigint = {a1024}n;
+    var b1024: bigint = {b1024}n;
+    var a2048: bigint = {a2048}n;
+    var b2048: bigint = {b2048}n;
+
+    println(a512 + b512);
+    println(a512 - b512);
+    println(b512 - a512);
+    println(a512 * b512);
+    println(a512 / b512);
+    println(a512 % b512);
+    println(b512 / a512);
+    println(b512 % a512);
+    println(-a512 / b512);
+    println(-a512 % b512);
+    println(a512 / -b512);
+    println(a512 % -b512);
+    println(-a512 * b512);
+    println(-a512 + b512);
+    println(a512 + -b512);
+
+    println(a1024 + b1024);
+    println(a1024 - b1024);
+    println(b1024 - a1024);
+    println(a1024 * b1024);
+    println(a1024 / b1024);
+    println(a1024 % b1024);
+    println(-a1024 / b1024);
+    println(-a1024 % b1024);
+    println(a1024 / -b1024);
+    println(a1024 % -b1024);
+    println(-a1024 * b1024);
+
+    println(a2048 + b2048);
+    println(a2048 - b2048);
+    println(b2048 - a2048);
+
+    println(a512 + a1024);
+    println(a1024 - a512);
+    println(a512 - a1024);
+    println(a512 * a1024);
+    println(a1024 / a512);
+    println(a1024 % a512);
+    println(a512 / a1024);
+    println(a512 % a1024);
+
+    println(a512 + a2048);
+    println(a2048 - a512);
+    println(a512 - a2048);
+    println(a512 * a2048);
+    println(a2048 / a512);
+    println(a2048 % a512);
+    println(a512 / a2048);
+    println(a512 % a2048);
+
+    println(a1024 + a2048);
+    println(a2048 - a1024);
+    println(a1024 - a2048);
+    println(a1024 * a2048);
+    println(a2048 / a1024);
+    println(a2048 % a1024);
+    println(a1024 / a2048);
+    println(a1024 % a2048);
+}}
+"""
+
+Path("tests/native_integration_tests/bigint_large_tests.tblo").write_text(tblo_source, encoding="ascii")
+Path("tests/native_integration_tests/expected_output/bigint_large_tests.expected").write_text(expected, encoding="ascii")
+print("wrote bigint_large_tests")

@@ -1,0 +1,73 @@
+// Record Array Tests - Tests arrays of records
+
+record Point {
+    x: int;
+    y: int
+}
+
+record Student {
+    name: string;
+    grade: int
+}
+
+func main() {
+    // Test 1: Array of records declaration
+    var points: array<Point> = [
+        { x: 1, y: 2 },
+        { x: 3, y: 4 },
+        { x: 5, y: 6 }
+    ];
+    println(len(points));
+
+    // Test 2: Access record in array
+    var p: Point = points[0];
+    println(p.x);
+    println(p.y);
+
+    // Test 3: Direct field access from array
+    println(points[1].x);
+    println(points[1].y);
+
+    // Test 4: Modify record in array
+    points[0].x = 10;
+    points[0].y = 20;
+    // Compound assignment on record fields in arrays (net zero)
+    points[0].x += 1;
+    points[0].x -= 1;
+    points[0].y *= 2;
+    points[0].y /= 2;
+    println(points[0].x);
+    println(points[0].y);
+
+    // Test 5: Push record to array
+    var newPoint: Point = { x: 7, y: 8 };
+    push(points, newPoint);
+    println(len(points));
+    println(points[3].x);
+
+    // Test 6: Pop record from array
+    var popped: Point = pop(points);
+    println(popped.y);
+    println(len(points));
+
+    // Test 7: Array of records with string fields
+    var students: array<Student> = [
+        { name: "Alice", grade: 95 },
+        { name: "Bob", grade: 87 },
+        { name: "Charlie", grade: 92 }
+    ];
+    println(students[0].name);
+    println(students[1].grade);
+    println(students[2].name);
+
+    // Test 8: Iterate over array of records
+    var sum: int = 0;
+    foreach (var point in points) {
+        sum = sum + point.x;
+    }
+    println(sum);
+
+    // Test 9: Empty array of records
+    var empty: array<Point> = [];
+    println(len(empty));
+}

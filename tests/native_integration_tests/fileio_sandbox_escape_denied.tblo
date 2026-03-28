@@ -1,0 +1,7 @@
+func main() {
+    var r = write_all("../escape.txt", "nope");
+    println(r.1.message);
+
+    var o = file_open("../escape.txt", "r");
+    println(o.1.message);
+}

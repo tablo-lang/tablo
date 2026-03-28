@@ -1,0 +1,48 @@
+async func unwrap(task: Future[int]): int {
+    return await task;
+}
+
+async func addBase(task: Future[int]): int {
+    var base: int = 5;
+    return base + await task;
+}
+
+async func pairText(task: Future[(int, string)]): string {
+    var pair: (int, string) = await task;
+    return str(pair.0) + pair.1;
+}
+
+async func sumTwo(first: Future[int], second: Future[int]): int {
+    var left: int = await first;
+    var right: int = await second;
+    return left + right;
+}
+
+func main(): void {
+    var pending = futurePending<int>();
+    var unwrapped = unwrap(pending);
+    println(str(!futureIsReady(unwrapped)));
+    println(str(futureComplete(pending, 7)));
+    println(str(futureIsReady(unwrapped)));
+    println(str(futureGet(unwrapped)));
+
+    var pendingAdd = futurePending<int>();
+    var added = addBase(pendingAdd);
+    println(str(!futureIsReady(added)));
+    println(str(futureComplete(pendingAdd, 9)));
+    println(str(futureGet(added)));
+
+    var text = pairText(futureResolved((3, "z")));
+    println(str(futureIsReady(text)));
+    println(futureGet(text));
+
+    var first = futurePending<int>();
+    var second = futurePending<int>();
+    var total = sumTwo(first, second);
+    println(str(!futureIsReady(total)));
+    println(str(futureComplete(first, 4)));
+    println(str(!futureIsReady(total)));
+    println(str(futureComplete(second, 6)));
+    println(str(futureIsReady(total)));
+    println(str(futureGet(total)));
+}

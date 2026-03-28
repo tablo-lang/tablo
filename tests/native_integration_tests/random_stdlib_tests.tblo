@@ -1,0 +1,132 @@
+import "fixtures/random.tblo";
+
+func intsUnique(items: array<int>): bool {
+    var seen: map<int, bool> = {};
+    var i: int = 0;
+    while (i < len(items)) {
+        var value: int = items[i];
+        if (mapHas(seen, value)) {
+            return false;
+        }
+        mapSet(seen, value, true);
+        i = i + 1;
+    }
+    return true;
+}
+
+func intsWithin(items: array<int>, min_value: int, max_value: int): bool {
+    var i: int = 0;
+    while (i < len(items)) {
+        if (items[i] < min_value || items[i] > max_value) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func stringsUnique(items: array<string>): bool {
+    var seen: map<string, bool> = {};
+    var i: int = 0;
+    while (i < len(items)) {
+        var value: string = items[i];
+        if (mapHasString(seen, value)) {
+            return false;
+        }
+        mapSetString(seen, value, true);
+        i = i + 1;
+    }
+    return true;
+}
+
+func main(): void {
+    randomSeed(123456);
+
+    var pseudo = randomPseudoBytes(8);
+    println(pseudo.1 == nil);
+    if (pseudo.1 == nil) {
+        println(len(pseudo.0) == 8);
+        var pseudo_hex = bytesToHex(pseudo.0);
+        println(pseudo_hex.1 == nil);
+        if (pseudo_hex.1 == nil) {
+            println(len(pseudo_hex.0) == 16);
+        }
+    }
+
+    var pseudo_bad = randomPseudoBytes(-1);
+    println(pseudo_bad.1 != nil);
+    if (pseudo_bad.1 != nil) {
+        println(pseudo_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var secure = randomSecureBytes(8);
+    println(secure.1 == nil || secure.1.code == ERR_CRYPTO);
+    var secure_len_ok: bool = true;
+    if (secure.1 == nil) {
+        secure_len_ok = len(secure.0) == 8;
+    }
+    println(secure_len_ok);
+
+    var token = randomTokenHex(8);
+    println(token.1 == nil || token.1.code == ERR_CRYPTO);
+    var token_len_ok: bool = true;
+    if (token.1 == nil) {
+        token_len_ok = len(token.0) == 16;
+    }
+    println(token_len_ok);
+
+    randomSeed(42);
+    var shuffled_i: array<int> = randomShuffleInts([1, 2, 3, 4, 5, 6, 7, 8]);
+    println(len(shuffled_i) == 8);
+    println(intsUnique(shuffled_i));
+    println(intsWithin(shuffled_i, 1, 8));
+
+    randomSeed(7);
+    var pick_i = randomPickInt([10, 20, 30, 40]);
+    println(pick_i.1);
+    if (pick_i.1) {
+        println((pick_i.0 % 10) == 0 && pick_i.0 >= 10 && pick_i.0 <= 40);
+    }
+
+    var pick_i_empty = randomPickInt([]);
+    println(!pick_i_empty.1);
+
+    randomSeed(99);
+    var sample_i = randomSampleDistinctInts([1, 2, 3, 4, 5], 3);
+    println(sample_i.1 == nil);
+    if (sample_i.1 == nil) {
+        println(len(sample_i.0) == 3);
+        println(intsUnique(sample_i.0));
+        println(intsWithin(sample_i.0, 1, 5));
+    }
+
+    var sample_i_bad = randomSampleDistinctInts([1, 2], 3);
+    println(sample_i_bad.1 != nil);
+    if (sample_i_bad.1 != nil) {
+        println(sample_i_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    randomSeed(100);
+    var shuffled_s: array<string> = randomShuffleStrings(["a", "b", "c", "d"]);
+    println(len(shuffled_s) == 4);
+    println(stringsUnique(shuffled_s));
+
+    var sample_s = randomSampleDistinctStrings(["aa", "bb", "cc", "dd"], 2);
+    println(sample_s.1 == nil);
+    if (sample_s.1 == nil) {
+        println(len(sample_s.0) == 2);
+        println(stringsUnique(sample_s.0));
+    }
+
+    var sample_s_bad = randomSampleDistinctStrings(["x"], 2);
+    println(sample_s_bad.1 != nil);
+    if (sample_s_bad.1 != nil) {
+        println(sample_s_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var pseudo_token = randomTokenHexPseudo(4);
+    println(pseudo_token.1 == nil);
+    if (pseudo_token.1 == nil) {
+        println(len(pseudo_token.0) == 8);
+    }
+}

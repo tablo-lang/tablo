@@ -1,0 +1,42 @@
+func main(): void {
+    var ints: array<int> = [5, 1, 4, 2, 3];
+    var sorted_any = sort(ints);
+    println(ints[0] == 1);
+    println(ints[4] == 5);
+    println(len(sorted_any) == 5);
+
+    var reversed_any = reverse(ints);
+    println(ints[0] == 5);
+    println(ints[4] == 1);
+    println(len(reversed_any) == 5);
+
+    var words: array<string> = ["beta", "alpha", "gamma"];
+    sort(words);
+    println(words[0] == "alpha");
+    println(words[2] == "gamma");
+    reverse(words);
+    println(words[0] == "gamma");
+    println(words[2] == "alpha");
+
+    var flags: array<bool> = [true, false, true, false];
+    sort(flags);
+    println(!flags[0]);
+    println(!flags[1]);
+    println(flags[2]);
+    println(flags[3]);
+    reverse(flags);
+    println(flags[0]);
+    println(flags[1]);
+    println(!flags[2]);
+    println(!flags[3]);
+
+    var mixed: array<any> = [3 as any, "a" as any, 2 as any];
+    sort(mixed);
+    println((mixed[0] as int) == 3);
+    println((mixed[1] as string) == "a");
+    println((mixed[2] as int) == 2);
+    reverse(mixed);
+    println((mixed[0] as int) == 2);
+    println((mixed[1] as string) == "a");
+    println((mixed[2] as int) == 3);
+}

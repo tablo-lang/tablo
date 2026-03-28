@@ -1,0 +1,8 @@
+func main() {
+    // Call a function declared later in the file.
+    println(add1(41));
+}
+
+func add1(x: int): int {
+    return x + 1;
+}

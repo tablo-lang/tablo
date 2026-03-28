@@ -1,0 +1,61 @@
+func main() {
+    // len tests
+    var arr: array<int> = [1, 2, 3];
+    println(len(arr));
+
+    var s: string = "hello";
+    println(len(s));
+
+    var empty_arr: array<int> = [];
+    println(len(empty_arr));
+
+    var empty_str: string = "";
+    println(len(empty_str));
+
+    // typeOf tests
+    println(typeOf(42));
+    println(typeOf(3.14));
+    println(typeOf("hello"));
+    println(typeOf([1, 2]));
+    println(typeOf(nil));
+
+    // toInt tests
+    println(toInt(3.14));
+    println(toInt("42"));
+    println(toInt("-10"));
+    println(0x2a);
+    println(toInt("0x2a"));
+    println("0x2a" as int);
+
+    // toDouble tests
+    println(toDouble(3));
+    println(toDouble("3.14"));
+
+    // Reciprocal cast hot-path: 1.0 / (int as double)
+    var denom: int = 2;
+    println(1.0 / (denom as double));
+
+    // toBigInt / hex helpers
+    println(toBigInt("0x2a").0);
+    println(toHexBigInt(0x2an));
+    println(bytesToHex(hexToBytes("0xdeadbeef").0).0);
+    var b1 = hexToBytes("0xdeadbeef");
+    println(bytesToHex(b1.0).0);
+    var b2 = hexToBytes("de ad be ef");
+    println(bytesToHex(b2.0).0);
+    println(typeOf(b1.0));
+    println(len(b1.0));
+
+    // str tests
+    println(str(42));
+    println(str(3.14));
+    println(str("hello"));
+    println(str(nil));
+
+    // formatDouble tests
+    println(formatDouble(3.5, 2));
+    println(formatDouble(3.75, 0));
+    println(formatDouble(1.125, 3));
+    println(formatDouble(-2.5, 1));
+    println(formatDouble(42, 3));
+}

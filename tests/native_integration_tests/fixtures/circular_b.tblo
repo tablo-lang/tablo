@@ -1,0 +1,5 @@
+import "circular_a.tblo";
+
+func helper(): int {
+    return 42;
+}

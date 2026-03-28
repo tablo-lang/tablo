@@ -1,0 +1,41 @@
+func main(): void {
+    // Ensure a clean slate even if a previous run failed.
+    delete("stream_tmp.txt");
+
+    // Create a file with multiple lines, including an empty line.
+    write_line("stream_tmp.txt", "first");
+    write_line("stream_tmp.txt", "");
+    write_line("stream_tmp.txt", "third");
+
+    var f: any = must(file_open("stream_tmp.txt", "r"));
+    println(typeOf(f));
+
+    var count = 0;
+    while (true) {
+        var r = file_read_line(f);
+        if (r.1 != nil) {
+            println(r.1.message);
+            break;
+        }
+        if (r.0 == nil) {
+            break;
+        }
+        println(r.0);
+        count = count + 1;
+    }
+
+    var eof = file_read_line(f);
+    println(eof.0 == nil && eof.1 == nil);
+    println(count);
+
+    // Close is idempotent.
+    file_close(f);
+    file_close(f);
+
+    // Reads after close return an error.
+    var after = file_read_line(f);
+    println(after.1.message);
+
+    println(delete("stream_tmp.txt").0);
+    println(exists("stream_tmp.txt").0);
+}

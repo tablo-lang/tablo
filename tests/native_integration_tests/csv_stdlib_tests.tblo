@@ -1,0 +1,125 @@
+import "fixtures/csv.tblo";
+
+func main(): void {
+    var p1 = csvParseLine("a,b,c");
+    println(p1.1 == nil);
+    if (p1.1 == nil) {
+        println(len(p1.0) == 3);
+        println(p1.0[0] == "a");
+        println(p1.0[1] == "b");
+        println(p1.0[2] == "c");
+    }
+
+    var p2 = csvParseLine("\"a,b\",c");
+    println(p2.1 == nil);
+    if (p2.1 == nil) {
+        println(len(p2.0) == 2);
+        println(p2.0[0] == "a,b");
+        println(p2.0[1] == "c");
+    }
+
+    var p3 = csvParseLine("\"a\"\"b\",z");
+    println(p3.1 == nil);
+    if (p3.1 == nil) {
+        println(p3.0[0] == "a\"b");
+        println(p3.0[1] == "z");
+    }
+
+    var pbad1 = csvParseLine("\"a\"x");
+    println(pbad1.1 != nil);
+    if (pbad1.1 != nil) {
+        println(pbad1.1.code == ERR_PARSE);
+        var pbad1_data: map<string, any> = pbad1.1.data as map<string, any>;
+        println(mapGetString(pbad1_data, "context") == "csvParseLine.afterQuote");
+    }
+
+    var pbad2 = csvParseLine("\"a,b");
+    println(pbad2.1 != nil);
+    if (pbad2.1 != nil) {
+        println(pbad2.1.code == ERR_PARSE);
+        var pbad2_data: map<string, any> = pbad2.1.data as map<string, any>;
+        println(mapGetString(pbad2_data, "context") == "csvParseLine.unterminatedQuote");
+    }
+
+    var text: string = "id,name,note\n1,Alice,\"hello,world\"\n2,Bob,ok";
+    var parsed = csvParse(text);
+    println(parsed.1 == nil);
+    if (parsed.1 == nil) {
+        println(len(parsed.0) == 3);
+        println(parsed.0[0][0] == "id");
+        println(parsed.0[1][1] == "Alice");
+        println(parsed.0[1][2] == "hello,world");
+        println(parsed.0[2][2] == "ok");
+    }
+
+    var parsed_multiline = csvParse("id,note\n1,\"line1\nline2\"");
+    println(parsed_multiline.1 != nil);
+    if (parsed_multiline.1 != nil) {
+        println(parsed_multiline.1.code == ERR_PARSE);
+        var parsed_multiline_data: map<string, any> = parsed_multiline.1.data as map<string, any>;
+        println(mapGetString(parsed_multiline_data, "context") == "csvParse.multiline");
+    }
+
+    var rows: array<array<string>> = [
+        ["name", "note"],
+        ["Alice", "a,b"],
+        ["Bob", "x\"y"]
+    ];
+    var text_r = csvStringify(rows);
+    println(text_r.1 == nil);
+    if (text_r.1 == nil) {
+        var parsed_back = csvParse(text_r.0);
+        println(parsed_back.1 == nil);
+        if (parsed_back.1 == nil) {
+            println(parsed_back.0[1][1] == "a,b");
+            println(parsed_back.0[2][1] == "x\"y");
+        }
+    }
+
+    var stringify_multiline = csvStringifyLine(["id", "line1\nline2"]);
+    println(stringify_multiline.1 != nil);
+    if (stringify_multiline.1 != nil) {
+        println(stringify_multiline.1.code == ERR_INVALID_ARGUMENT);
+        var stringify_multiline_data: map<string, any> = stringify_multiline.1.data as map<string, any>;
+        println(mapGetString(stringify_multiline_data, "context") == "csvStringifyLine.multiline");
+    }
+
+    var with_header = csvParseWithHeader("id,name\n1,Alice\n2,Bob");
+    println(with_header.1 == nil);
+    if (with_header.1 == nil) {
+        println(len(with_header.0) == 2);
+        println(mapGetString(with_header.0[0], "id") == "1");
+        println(mapGetString(with_header.0[1], "name") == "Bob");
+    }
+
+    var dup_header = csvParseWithHeader("id,id\n1,2");
+    println(dup_header.1 != nil);
+    if (dup_header.1 != nil) {
+        println(dup_header.1.code == ERR_PARSE);
+        var dup_data: map<string, any> = dup_header.1.data as map<string, any>;
+        println(mapGetString(dup_data, "context") == "csvParseWithHeader.header");
+    }
+
+    var row_mismatch = csvParseWithHeader("id,name\n1");
+    println(row_mismatch.1 != nil);
+    if (row_mismatch.1 != nil) {
+        println(row_mismatch.1.code == ERR_PARSE);
+        var row_data: map<string, any> = row_mismatch.1.data as map<string, any>;
+        println(mapGetString(row_data, "context") == "csvParseWithHeader.row");
+    }
+
+    var tmp_path: string = "tmp_csv_stdlib_test.csv";
+    var write_r = csvWriteAll(tmp_path, rows);
+    println(write_r.1 == nil);
+    if (write_r.1 == nil) {
+        var read_r = csvReadWithHeader(tmp_path);
+        println(read_r.1 == nil);
+        if (read_r.1 == nil) {
+            println(len(read_r.0) == 2);
+            println(mapGetString(read_r.0[0], "name") == "Alice");
+            println(mapGetString(read_r.0[1], "note") == "x\"y");
+        }
+    }
+
+    var _ = delete(tmp_path);
+}

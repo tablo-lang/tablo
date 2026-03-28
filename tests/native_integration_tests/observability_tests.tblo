@@ -1,0 +1,201 @@
+import "fixtures/observability.tblo";
+import "fixtures/http.tblo";
+
+func obsCounterAtLeast(counters: map<string, any>, key: string, minValue: int): bool {
+    if (!mapHas(counters, key)) {
+        return false;
+    }
+    var value_any: any = mapGet(counters, key);
+    if (value_any == nil || typeOf(value_any) != "int") {
+        return false;
+    }
+    return (value_any as int) >= minValue;
+}
+
+func obsRouteOk(_req: map<string, any>): map<string, any> {
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain"
+    };
+    return httpServerResponse(200, "ok", headers);
+}
+
+func obsDelay(ms: int): void {
+    var start: int = timeMonotonicMillis();
+    while (timeSinceMillis(start) < ms) {
+    }
+}
+
+func obsRouteSlow(_req: map<string, any>): map<string, any> {
+    obsDelay(200);
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain"
+    };
+    return httpServerResponse(200, "slow", headers);
+}
+
+func obsDeadlineWorker(): void {
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/slow", obsRouteSlow as any);
+    var middleware: array<any> = [];
+    var _ = httpServerWorkerServeLoop(routes, middleware, 50);
+}
+
+func main(): void {
+    var ok = logJson("info", "startup", {"service": "tablo", "attempt": 1});
+    println(ok.0);
+    println(ok.1 == nil);
+
+    var bad_fields: map<string, any> = {"fn": main};
+    var bad = logJson("info", "bad", bad_fields);
+    println(bad.0);
+    println(bad.1 != nil);
+    if (bad.1 != nil) {
+        println(bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var reset_base = metricsReset();
+    println(reset_base.0);
+    println(reset_base.1 == nil);
+
+    var inc = metricsInc("jobs.completed_total", 2);
+    println(inc.0);
+    println(inc.1 == nil);
+
+    var started_ms: int = timeMonotonicMillis();
+    while (timeSinceMillis(started_ms) < 2) {
+    }
+    var observe_since = metricsObserveSinceMs("jobs.latency_ms", started_ms);
+    println(observe_since.0);
+    println(observe_since.1 == nil);
+
+    var observe_direct = metricsObserveMs("jobs.latency_ms", 7);
+    println(observe_direct.0);
+    println(observe_direct.1 == nil);
+
+    var snapshot = metricsSnapshot();
+    println(snapshot.1 == nil);
+    if (snapshot.1 == nil) {
+        var counters: map<string, any> = mapGet(snapshot.0, "counters") as map<string, any>;
+        println(obsCounterAtLeast(counters, "jobs.completed_total", 2));
+
+        var timers: map<string, any> = mapGet(snapshot.0, "timers") as map<string, any>;
+        println(mapHas(timers, "jobs.latency_ms"));
+        if (mapHas(timers, "jobs.latency_ms")) {
+            var bucket_any: any = mapGet(timers, "jobs.latency_ms");
+            if (bucket_any != nil && typeOf(bucket_any) == "map") {
+                var bucket: map<string, any> = bucket_any as map<string, any>;
+                println(obsCounterAtLeast(bucket, "count", 2));
+                println(obsCounterAtLeast(bucket, "totalMs", 7));
+                var min_ms: int = mapGet(bucket, "minMs") as int;
+                var max_ms: int = mapGet(bucket, "maxMs") as int;
+                println(max_ms >= min_ms);
+            }
+        }
+    }
+
+    var snapshot_json = metricsSnapshotJson(false);
+    println(snapshot_json.1 == nil);
+    if (snapshot_json.1 == nil) {
+        println(find(snapshot_json.0, "jobs.completed_total") >= 0);
+        println(find(snapshot_json.0, "jobs.latency_ms") >= 0);
+    }
+
+    var reset_http = metricsReset();
+    println(reset_http.0);
+    println(reset_http.1 == nil);
+
+    var ports: array<int> = [19131, 19132, 19133, 19134, 19135];
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+    foreach (p in ports) {
+        var start_r = httpServerStart("127.0.0.1", p, 120, 4096);
+        if (start_r.1 == nil) {
+            server = start_r.0;
+            started = true;
+            break;
+        }
+    }
+    println(started);
+    if (!started) {
+        return;
+    }
+
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/obs", obsRouteOk as any);
+    var middleware: array<any> = [];
+
+    var c = tcpConnect("127.0.0.1", server.port);
+    println(c.1 == nil);
+    if (c.1 == nil) {
+        var client = c.0;
+        var send_r = tcpSend(client, "GET /obs HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send_r.1 == nil);
+
+        var served = httpServerServeOne(server, routes, middleware);
+        println(served.1 == nil);
+        if (served.1 == nil) {
+            println(served.0);
+        }
+
+        var recv_r = tcpReceive(client, 4096);
+        println(recv_r.1 == nil);
+        if (recv_r.1 == nil) {
+            println(startsWith(recv_r.0, "HTTP/1.1 200"));
+        }
+        tcpClose(client);
+    }
+
+    var client_fail = httpClientRequest("GET", "http://127.0.0.1:1/metrics", nil, nil, 200);
+    println(client_fail.1 != nil);
+
+    var http_snapshot = metricsSnapshot();
+    println(http_snapshot.1 == nil);
+    if (http_snapshot.1 == nil) {
+        var counters_http: map<string, any> = mapGet(http_snapshot.0, "counters") as map<string, any>;
+        println(obsCounterAtLeast(counters_http, "http.server.requests_total", 1));
+        println(obsCounterAtLeast(counters_http, "http.server.responses_total", 1));
+        println(obsCounterAtLeast(counters_http, "http.client.requests_total", 1));
+        println(obsCounterAtLeast(counters_http, "http.client.errors_total", 1));
+
+        var timers_http: map<string, any> = mapGet(http_snapshot.0, "timers") as map<string, any>;
+        println(mapHas(timers_http, "http.server.request_latency_ms"));
+        println(mapHas(timers_http, "http.client.request_latency_ms"));
+    }
+
+    var reset_deadline = metricsReset();
+    println(reset_deadline.0);
+    println(reset_deadline.1 == nil);
+
+    var c_deadline = tcpConnect("127.0.0.1", server.port);
+    println(c_deadline.1 == nil);
+    if (c_deadline.1 == nil) {
+        var client_deadline = c_deadline.0;
+        var send_deadline = tcpSend(client_deadline, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send_deadline.1 == nil);
+
+        var served_deadline = httpServerServeThreadPoolWithDeadline(server, "obsDeadlineWorker", 1, 1, 2, 60);
+        println(served_deadline.1 == nil);
+        if (served_deadline.1 == nil) {
+            println(served_deadline.0 == 1);
+        }
+
+        var recv_deadline = tcpReceive(client_deadline, 4096);
+        println(recv_deadline.1 == nil);
+        if (recv_deadline.1 == nil) {
+            println(startsWith(recv_deadline.0, "HTTP/1.1 504"));
+            println(find(recv_deadline.0, "Gateway Timeout") >= 0);
+        }
+        tcpClose(client_deadline);
+    }
+
+    var deadline_snapshot = metricsSnapshot();
+    println(deadline_snapshot.1 == nil);
+    if (deadline_snapshot.1 == nil) {
+        var counters_deadline: map<string, any> = mapGet(deadline_snapshot.0, "counters") as map<string, any>;
+        println(obsCounterAtLeast(counters_deadline, "http.server.deadline_timeouts_total", 1));
+        println(obsCounterAtLeast(counters_deadline, "http.server.requests_total", 1));
+        println(obsCounterAtLeast(counters_deadline, "http.server.responses_total", 1));
+    }
+
+    httpServerClose(server);
+}

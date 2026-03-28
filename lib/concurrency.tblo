@@ -1,0 +1,632 @@
+// Ergonomic wrappers for TabloLang concurrency runtime primitives.
+// Focuses on typed message passing, explicit shared state, and arc guards.
+
+import "context.tblo";
+
+record ConcurrencyChannel {
+    id: int,
+    schema: any
+};
+
+record ConcurrencyShared {
+    id: int,
+    schema: any
+};
+
+record ConcurrencyThread {
+    id: int,
+    resultSchema: any
+};
+
+record ConcurrencyArc {
+    id: int
+};
+
+record ConcurrencyGuard {
+    id: int
+};
+
+record ConcurrencyMailbox {
+    inboxChannelId: int,
+    outboxChannelId: int
+};
+
+func concurrencyStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func concurrencyError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return concurrencyStdError(code, message, data);
+}
+
+func concurrencyWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return concurrencyStdError(err.code, err.message, data);
+}
+
+func concurrencyDefaultChannel(): ConcurrencyChannel {
+    var channel: ConcurrencyChannel = {
+        id: -1,
+        schema: nil
+    };
+    return channel;
+}
+
+func concurrencyDefaultShared(): ConcurrencyShared {
+    var shared: ConcurrencyShared = {
+        id: -1,
+        schema: nil
+    };
+    return shared;
+}
+
+func concurrencyDefaultThread(): ConcurrencyThread {
+    var thread: ConcurrencyThread = {
+        id: -1,
+        resultSchema: nil
+    };
+    return thread;
+}
+
+func concurrencyDefaultArc(): ConcurrencyArc {
+    var arc: ConcurrencyArc = { id: -1 };
+    return arc;
+}
+
+func concurrencyDefaultGuard(): ConcurrencyGuard {
+    var guard: ConcurrencyGuard = { id: -1 };
+    return guard;
+}
+
+func concurrencyDefaultMailbox(): ConcurrencyMailbox {
+    var mailbox: ConcurrencyMailbox = {
+        inboxChannelId: -1,
+        outboxChannelId: -1
+    };
+    return mailbox;
+}
+
+func concurrencyValidateTimeout(timeout_ms: int, context: string): Error? {
+    if (timeout_ms < 0) {
+        return concurrencyError(ERR_INVALID_ARGUMENT,
+                                "timeout must be >= 0",
+                                context,
+                                { "timeoutMs": timeout_ms } as any);
+    }
+    return nil;
+}
+
+func concurrencyContextSliceTimeoutMs(ctx: Context, fallback_ms: int): (int, Error?) {
+    var slice_ms: int = contextTimeoutSliceMs(ctx, fallback_ms);
+    if (slice_ms > 0) {
+        return (slice_ms, nil);
+    }
+
+    var ctx_err = contextErr(ctx);
+    if (ctx_err != nil) {
+        return (0, ctx_err);
+    }
+    return (1, nil);
+}
+
+func concurrencyChannelOpen(capacity: int): (ConcurrencyChannel, Error?) {
+    var empty: ConcurrencyChannel = concurrencyDefaultChannel();
+    if (capacity < 1 || capacity > 65536) {
+        return (empty,
+                concurrencyError(ERR_INVALID_ARGUMENT,
+                                 "channel capacity must be between 1 and 65536",
+                                 "concurrency.channel.open",
+                                 { "capacity": capacity } as any));
+    }
+
+    var created = syncChannelCreate(capacity);
+    if (created.1 != nil) {
+        return (empty,
+                concurrencyWrapError(created.1,
+                                     "concurrency.channel.open",
+                                     { "capacity": capacity } as any));
+    }
+
+    var channel: ConcurrencyChannel = {
+        id: created.0 as int,
+        schema: nil
+    };
+    return (channel, nil);
+}
+
+func concurrencyChannelOpenTyped(capacity: int, schema: any): (ConcurrencyChannel, Error?) {
+    var opened = concurrencyChannelOpen(capacity);
+    if (opened.1 != nil) {
+        return (opened.0, opened.1);
+    }
+
+    var raw: ConcurrencyChannel = opened.0;
+    var channel: ConcurrencyChannel = {
+        id: raw.id,
+        schema: schema
+    };
+    return (channel, nil);
+}
+
+func concurrencyChannelSend(channel: ConcurrencyChannel, value: any, timeout_ms: int): Error? {
+    var timeout_err = concurrencyValidateTimeout(timeout_ms, "concurrency.channel.send");
+    if (timeout_err != nil) {
+        return timeout_err;
+    }
+
+    if (channel.schema == nil) {
+        var sent = syncChannelSend(channel.id, value, timeout_ms);
+        if (sent.1 != nil) {
+            return concurrencyWrapError(sent.1,
+                                        "concurrency.channel.send",
+                                        {
+                                            "channelId": channel.id,
+                                            "timeoutMs": timeout_ms
+                                        } as any);
+        }
+        return nil;
+    }
+
+    var sent_typed = syncChannelSendTyped(channel.id, value, channel.schema, timeout_ms);
+    if (sent_typed.1 != nil) {
+        return concurrencyWrapError(sent_typed.1,
+                                    "concurrency.channel.sendTyped",
+                                    {
+                                        "channelId": channel.id,
+                                        "timeoutMs": timeout_ms
+                                    } as any);
+    }
+    return nil;
+}
+
+func concurrencyChannelRecv(channel: ConcurrencyChannel, timeout_ms: int): (any, Error?) {
+    var timeout_err = concurrencyValidateTimeout(timeout_ms, "concurrency.channel.recv");
+    if (timeout_err != nil) {
+        return (nil, timeout_err);
+    }
+
+    if (channel.schema == nil) {
+        var recv = syncChannelRecv(channel.id, timeout_ms);
+        if (recv.1 != nil) {
+            return (nil,
+                    concurrencyWrapError(recv.1,
+                                         "concurrency.channel.recv",
+                                         {
+                                             "channelId": channel.id,
+                                             "timeoutMs": timeout_ms
+                                         } as any));
+        }
+        return (recv.0, nil);
+    }
+
+    var recv_typed = syncChannelRecvTyped(channel.id, channel.schema, timeout_ms);
+    if (recv_typed.1 != nil) {
+        return (nil,
+                concurrencyWrapError(recv_typed.1,
+                                     "concurrency.channel.recvTyped",
+                                     {
+                                         "channelId": channel.id,
+                                         "timeoutMs": timeout_ms
+                                     } as any));
+    }
+    return (recv_typed.0, nil);
+}
+
+func concurrencyChannelClose(channel: ConcurrencyChannel): (bool, Error?) {
+    var closed = syncChannelClose(channel.id);
+    if (closed.1 != nil) {
+        return (false,
+                concurrencyWrapError(closed.1,
+                                     "concurrency.channel.close",
+                                     { "channelId": channel.id } as any));
+    }
+    return (closed.0 as bool, nil);
+}
+
+func concurrencySharedCreate(initial: any): (ConcurrencyShared, Error?) {
+    var empty: ConcurrencyShared = concurrencyDefaultShared();
+    var created = syncSharedCreate(initial);
+    if (created.1 != nil) {
+        return (empty,
+                concurrencyWrapError(created.1,
+                                     "concurrency.shared.create",
+                                     nil));
+    }
+
+    var shared: ConcurrencyShared = {
+        id: created.0 as int,
+        schema: nil
+    };
+    return (shared, nil);
+}
+
+func concurrencySharedCreateTyped(initial: any, schema: any): (ConcurrencyShared, Error?) {
+    var empty: ConcurrencyShared = concurrencyDefaultShared();
+    var created = syncSharedCreateTyped(initial, schema);
+    if (created.1 != nil) {
+        return (empty,
+                concurrencyWrapError(created.1,
+                                     "concurrency.shared.createTyped",
+                                     nil));
+    }
+
+    var shared: ConcurrencyShared = {
+        id: created.0 as int,
+        schema: schema
+    };
+    return (shared, nil);
+}
+
+func concurrencySharedGet(shared: ConcurrencyShared): (any, Error?) {
+    if (shared.schema == nil) {
+        var got = syncSharedGet(shared.id);
+        if (got.1 != nil) {
+            return (nil,
+                    concurrencyWrapError(got.1,
+                                         "concurrency.shared.get",
+                                         { "sharedId": shared.id } as any));
+        }
+        return (got.0, nil);
+    }
+
+    var got_typed = syncSharedGetTyped(shared.id, shared.schema);
+    if (got_typed.1 != nil) {
+        return (nil,
+                concurrencyWrapError(got_typed.1,
+                                     "concurrency.shared.getTyped",
+                                     { "sharedId": shared.id } as any));
+    }
+    return (got_typed.0, nil);
+}
+
+func concurrencySharedSet(shared: ConcurrencyShared, value: any): (bool, Error?) {
+    if (shared.schema == nil) {
+        var set_r = syncSharedSet(shared.id, value);
+        if (set_r.1 != nil) {
+            return (false,
+                    concurrencyWrapError(set_r.1,
+                                         "concurrency.shared.set",
+                                         { "sharedId": shared.id } as any));
+        }
+        return (set_r.0 as bool, nil);
+    }
+
+    var set_typed = syncSharedSetTyped(shared.id, value, shared.schema);
+    if (set_typed.1 != nil) {
+        return (false,
+                concurrencyWrapError(set_typed.1,
+                                     "concurrency.shared.setTyped",
+                                     { "sharedId": shared.id } as any));
+    }
+    return (set_typed.0 as bool, nil);
+}
+
+func concurrencyThreadSpawn(function_name: string,
+                            inbox_channel_id: int,
+                            outbox_channel_id: int): (ConcurrencyThread, Error?) {
+    var empty: ConcurrencyThread = concurrencyDefaultThread();
+    var spawned = syncThreadSpawn(function_name, inbox_channel_id, outbox_channel_id);
+    if (spawned.1 != nil) {
+        return (empty,
+                concurrencyWrapError(spawned.1,
+                                     "concurrency.thread.spawn",
+                                     {
+                                         "functionName": function_name,
+                                         "inboxChannelId": inbox_channel_id,
+                                         "outboxChannelId": outbox_channel_id
+                                     } as any));
+    }
+
+    var thread: ConcurrencyThread = {
+        id: spawned.0 as int,
+        resultSchema: nil
+    };
+    return (thread, nil);
+}
+
+func concurrencyThreadSpawnDetached(function_name: string): (ConcurrencyThread, Error?) {
+    return concurrencyThreadSpawn(function_name, -1, -1);
+}
+
+func concurrencyThreadSpawnTyped(function_name: string,
+                                 arg: any,
+                                 arg_schema: any,
+                                 inbox_channel_id: int,
+                                 outbox_channel_id: int,
+                                 result_schema: any): (ConcurrencyThread, Error?) {
+    var empty: ConcurrencyThread = concurrencyDefaultThread();
+    if (result_schema == nil) {
+        return (empty,
+                concurrencyError(ERR_INVALID_ARGUMENT,
+                                 "typed thread requires a result schema",
+                                 "concurrency.thread.spawnTyped",
+                                 { "functionName": function_name } as any));
+    }
+
+    var spawned = syncThreadSpawnTyped(function_name,
+                                       arg,
+                                       arg_schema,
+                                       inbox_channel_id,
+                                       outbox_channel_id);
+    if (spawned.1 != nil) {
+        return (empty,
+                concurrencyWrapError(spawned.1,
+                                     "concurrency.thread.spawnTyped",
+                                     {
+                                         "functionName": function_name,
+                                         "inboxChannelId": inbox_channel_id,
+                                         "outboxChannelId": outbox_channel_id
+                                     } as any));
+    }
+
+    var thread: ConcurrencyThread = {
+        id: spawned.0 as int,
+        resultSchema: result_schema
+    };
+    return (thread, nil);
+}
+
+func concurrencyThreadJoinDone(thread: ConcurrencyThread, timeout_ms: int): (bool, Error?) {
+    if (thread.resultSchema != nil) {
+        return (false,
+                concurrencyError(ERR_INVALID_ARGUMENT,
+                                 "typed thread requires concurrencyThreadJoinValue",
+                                 "concurrency.thread.joinDone",
+                                 { "threadId": thread.id } as any));
+    }
+
+    var timeout_err = concurrencyValidateTimeout(timeout_ms, "concurrency.thread.joinDone");
+    if (timeout_err != nil) {
+        return (false, timeout_err);
+    }
+
+    var joined = syncThreadJoin(thread.id, timeout_ms);
+    if (joined.1 != nil) {
+        return (false,
+                concurrencyWrapError(joined.1,
+                                     "concurrency.thread.joinDone",
+                                     {
+                                         "threadId": thread.id,
+                                         "timeoutMs": timeout_ms
+                                     } as any));
+    }
+    return (joined.0 as bool, nil);
+}
+
+func concurrencyThreadJoinValue(thread: ConcurrencyThread, timeout_ms: int): (any, Error?) {
+    var timeout_err = concurrencyValidateTimeout(timeout_ms, "concurrency.thread.joinValue");
+    if (timeout_err != nil) {
+        return (nil, timeout_err);
+    }
+
+    if (thread.resultSchema == nil) {
+        var joined_untyped = syncThreadJoin(thread.id, timeout_ms);
+        if (joined_untyped.1 != nil) {
+            return (nil,
+                    concurrencyWrapError(joined_untyped.1,
+                                         "concurrency.thread.joinValue",
+                                         {
+                                             "threadId": thread.id,
+                                             "timeoutMs": timeout_ms
+                                         } as any));
+        }
+        return (joined_untyped.0 as any, nil);
+    }
+
+    var joined_typed = syncThreadJoinTyped(thread.id, thread.resultSchema, timeout_ms);
+    if (joined_typed.1 != nil) {
+        return (nil,
+                concurrencyWrapError(joined_typed.1,
+                                     "concurrency.thread.joinValueTyped",
+                                     {
+                                         "threadId": thread.id,
+                                         "timeoutMs": timeout_ms
+                                     } as any));
+    }
+    return (joined_typed.0, nil);
+}
+
+func concurrencyThreadInboxId(): int {
+    return syncThreadInbox();
+}
+
+func concurrencyThreadOutboxId(): int {
+    return syncThreadOutbox();
+}
+
+func concurrencyArcCreate(initial: any): (ConcurrencyArc, Error?) {
+    var empty: ConcurrencyArc = concurrencyDefaultArc();
+    var created = syncArcCreate(initial);
+    if (created.1 != nil) {
+        return (empty,
+                concurrencyWrapError(created.1,
+                                     "concurrency.arc.create",
+                                     nil));
+    }
+
+    var arc: ConcurrencyArc = { id: created.0 as int };
+    return (arc, nil);
+}
+
+func concurrencyArcClone(arc: ConcurrencyArc): (ConcurrencyArc, Error?) {
+    var empty: ConcurrencyArc = concurrencyDefaultArc();
+    var cloned = syncArcClone(arc.id);
+    if (cloned.1 != nil) {
+        return (empty,
+                concurrencyWrapError(cloned.1,
+                                     "concurrency.arc.clone",
+                                     { "arcId": arc.id } as any));
+    }
+
+    var out: ConcurrencyArc = { id: cloned.0 as int };
+    return (out, nil);
+}
+
+func concurrencyArcAcquire(arc: ConcurrencyArc): (ConcurrencyGuard, Error?) {
+    var empty: ConcurrencyGuard = concurrencyDefaultGuard();
+    var acquired = syncArcGuardAcquire(arc.id);
+    if (acquired.1 != nil) {
+        return (empty,
+                concurrencyWrapError(acquired.1,
+                                     "concurrency.arc.acquire",
+                                     { "arcId": arc.id } as any));
+    }
+
+    var guard: ConcurrencyGuard = { id: acquired.0 as int };
+    return (guard, nil);
+}
+
+func concurrencyArcRead(guard: ConcurrencyGuard): (any, Error?) {
+    var read_r = syncArcGuardRead(guard.id);
+    if (read_r.1 != nil) {
+        return (nil,
+                concurrencyWrapError(read_r.1,
+                                     "concurrency.arc.read",
+                                     { "guardId": guard.id } as any));
+    }
+    return (read_r.0, nil);
+}
+
+func concurrencyArcWrite(guard: ConcurrencyGuard, value: any): (bool, Error?) {
+    var write_r = syncArcGuardWrite(guard.id, value);
+    if (write_r.1 != nil) {
+        return (false,
+                concurrencyWrapError(write_r.1,
+                                     "concurrency.arc.write",
+                                     { "guardId": guard.id } as any));
+    }
+    return (write_r.0 as bool, nil);
+}
+
+func concurrencyArcRelease(guard: ConcurrencyGuard): (bool, Error?) {
+    var release_r = syncArcGuardRelease(guard.id);
+    if (release_r.1 != nil) {
+        return (false,
+                concurrencyWrapError(release_r.1,
+                                     "concurrency.arc.release",
+                                     { "guardId": guard.id } as any));
+    }
+    return (release_r.0 as bool, nil);
+}
+
+func concurrencyMailboxOpen(capacity: int): (ConcurrencyMailbox, Error?) {
+    var empty: ConcurrencyMailbox = concurrencyDefaultMailbox();
+    var inbox_r = concurrencyChannelOpen(capacity);
+    if (inbox_r.1 != nil) {
+        return (empty, inbox_r.1);
+    }
+
+    var outbox_r = concurrencyChannelOpen(capacity);
+    if (outbox_r.1 != nil) {
+        concurrencyChannelClose(inbox_r.0);
+        return (empty, outbox_r.1);
+    }
+
+    var mailbox: ConcurrencyMailbox = {
+        inboxChannelId: inbox_r.0.id,
+        outboxChannelId: outbox_r.0.id
+    };
+    return (mailbox, nil);
+}
+
+func concurrencyMailboxClose(mailbox: ConcurrencyMailbox): Error? {
+    var inbox_close = syncChannelClose(mailbox.inboxChannelId);
+    if (inbox_close.1 != nil) {
+        return concurrencyWrapError(inbox_close.1,
+                                    "concurrency.mailbox.closeInbox",
+                                    { "channelId": mailbox.inboxChannelId } as any);
+    }
+
+    var outbox_close = syncChannelClose(mailbox.outboxChannelId);
+    if (outbox_close.1 != nil) {
+        return concurrencyWrapError(outbox_close.1,
+                                    "concurrency.mailbox.closeOutbox",
+                                    { "channelId": mailbox.outboxChannelId } as any);
+    }
+
+    return nil;
+}
+
+func concurrencyChannelSendWithContext(channel: ConcurrencyChannel, value: any, ctx: Context): Error? {
+    while (true) {
+        var timeout_r = concurrencyContextSliceTimeoutMs(ctx, 200);
+        if (timeout_r.1 != nil) {
+            return timeout_r.1;
+        }
+
+        var send_err = concurrencyChannelSend(channel, value, timeout_r.0);
+        if (send_err == nil) {
+            return nil;
+        }
+        if (send_err.code == ERR_LIMIT) {
+            continue;
+        }
+        return send_err;
+    }
+}
+
+func concurrencyChannelRecvWithContext(channel: ConcurrencyChannel, ctx: Context): (any, Error?) {
+    while (true) {
+        var timeout_r = concurrencyContextSliceTimeoutMs(ctx, 200);
+        if (timeout_r.1 != nil) {
+            return (nil, timeout_r.1);
+        }
+
+        var recv_r = concurrencyChannelRecv(channel, timeout_r.0);
+        if (recv_r.1 == nil) {
+            return recv_r;
+        }
+        if (recv_r.1.code == ERR_LIMIT) {
+            continue;
+        }
+        return recv_r;
+    }
+}
+
+func concurrencyThreadJoinDoneWithContext(thread: ConcurrencyThread, ctx: Context): (bool, Error?) {
+    while (true) {
+        var timeout_r = concurrencyContextSliceTimeoutMs(ctx, 200);
+        if (timeout_r.1 != nil) {
+            return (false, timeout_r.1);
+        }
+
+        var join_r = concurrencyThreadJoinDone(thread, timeout_r.0);
+        if (join_r.1 == nil) {
+            return join_r;
+        }
+        if (join_r.1.code == ERR_LIMIT) {
+            continue;
+        }
+        return join_r;
+    }
+}
+
+func concurrencyThreadJoinValueWithContext(thread: ConcurrencyThread, ctx: Context): (any, Error?) {
+    while (true) {
+        var timeout_r = concurrencyContextSliceTimeoutMs(ctx, 200);
+        if (timeout_r.1 != nil) {
+            return (nil, timeout_r.1);
+        }
+
+        var join_r = concurrencyThreadJoinValue(thread, timeout_r.0);
+        if (join_r.1 == nil) {
+            return join_r;
+        }
+        if (join_r.1.code == ERR_LIMIT) {
+            continue;
+        }
+        return join_r;
+    }
+}

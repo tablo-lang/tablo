@@ -1,0 +1,82 @@
+map
+Ada
+true
+2
+3.5
+[1, 2]
+nil
+[true,false,2,"x",null]
+{"ok":true}
+{
+	"ok":	true
+}
+fast
+123
+"line\nbreak"
+123
+null
+{"1":"one"}
+true
+Ada
+2
+true
+true
+true
+$.count
+$.fields.count
+int
+string
+int
+string
+true
+true
+$
+$.items
+valid schema
+invalid schema
+valid schema
+invalid schema
+true
+true
+10
+20
+true
+$.x
+$.keys
+invalid_key
+int key
+x
+true
+true
+duplicate_key
+unique map keys
+true
+0001ff
+true
+$[1]
+$
+range_error
+byte (0..255)
+300
+byte (0..255)
+300
+true
+prod
+true
+literal_mismatch
+$.value
+"prod"
+"dev"
+true
+stage
+true
+enum_mismatch
+$.values
+one of enum values
+"qa"
+true
+up
+true
+no_variant_match
+$.variants
+true

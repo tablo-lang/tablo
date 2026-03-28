@@ -1,0 +1,5 @@
+import "fixtures/import_utils.tblo";
+
+func main() {
+    println(add(2, 3));
+}

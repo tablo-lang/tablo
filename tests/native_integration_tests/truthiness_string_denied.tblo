@@ -1,0 +1,6 @@
+// Strict truthiness: string in condition (should fail)
+func main(): void {
+    if ("x") {
+        println("no");
+    }
+}

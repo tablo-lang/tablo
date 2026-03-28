@@ -1,0 +1,89 @@
+func high_key(i: int): int {
+    // Preserve identical low 32 bits while varying upper bits.
+    return (i * 8589934592) + 17;
+}
+
+func main(): void {
+    var m: map<int, string> = {};
+    var count: int = 256;
+
+    var i: int = 0;
+    while (i < count) {
+        mapSet(m, high_key(i), "v" + str(i));
+        i = i + 1;
+    }
+
+    println(mapCount(m) == count);
+
+    var all_inserted: bool = true;
+    i = 0;
+    while (i < count) {
+        var v = mapGet(m, high_key(i));
+        if (v == nil || (v as string) != ("v" + str(i))) {
+            all_inserted = false;
+        }
+        i = i + 1;
+    }
+    println(all_inserted);
+
+    i = 0;
+    while (i < count) {
+        if ((i % 2) == 0) {
+            mapDelete(m, high_key(i));
+        }
+        i = i + 1;
+    }
+
+    println(mapCount(m) == (count / 2));
+
+    var evens_removed: bool = true;
+    var odds_present: bool = true;
+    i = 0;
+    while (i < count) {
+        var has_i: bool = mapHas(m, high_key(i));
+        if ((i % 2) == 0) {
+            if (has_i) evens_removed = false;
+        } else {
+            if (!has_i) odds_present = false;
+        }
+        i = i + 1;
+    }
+    println(evens_removed);
+    println(odds_present);
+
+    i = 0;
+    while (i < count) {
+        if ((i % 2) == 0) {
+            mapSet(m, high_key(i), "r" + str(i));
+        }
+        i = i + 1;
+    }
+
+    println(mapCount(m) == count);
+
+    var reinserts_ok: bool = true;
+    i = 0;
+    while (i < count) {
+        var v = mapGet(m, high_key(i));
+        if (v == nil) {
+            reinserts_ok = false;
+        } else {
+            var expected: string = "v" + str(i);
+            if ((i % 2) == 0) {
+                expected = "r" + str(i);
+            }
+            if ((v as string) != expected) {
+                reinserts_ok = false;
+            }
+        }
+        i = i + 1;
+    }
+    println(reinserts_ok);
+
+    var key_list = keys(m);
+    var value_list = values(m);
+    println(key_list != nil);
+    println(value_list != nil);
+    println(len(key_list) == count);
+    println(len(value_list) == count);
+}

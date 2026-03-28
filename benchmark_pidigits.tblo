@@ -1,0 +1,99 @@
+// Pi digits benchmark (ported from tests/benchmark_pidigits.go).
+//
+// Run:
+//   .\build\Release\tablo.exe run benchmark_pidigits.tblo 10000
+//
+// Output matches:
+//   .\tests\benchmark_pidigits.exe 10000
+
+var tmp1: bigint = 0n;
+var tmp2: bigint = 0n;
+var y2: bigint = 1n;
+var bigk: bigint = 0n;
+var accum: bigint = 0n;
+var denom: bigint = 1n;
+var numer: bigint = 1n;
+
+var ten: bigint = 10n;
+var three: bigint = 3n;
+var four: bigint = 4n;
+
+var digitChars: array<string> = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+var k: int = 0;
+
+func nextTerm(): void {
+    while (true) {
+        k = k + 1;
+        y2 = (k * 2 + 1) as bigint;
+        bigk = k as bigint;
+
+        // tmp1 = numer << 1  (numer*2)
+        tmp1 = numer + numer;
+        accum = accum + tmp1;
+        accum = accum * y2;
+        denom = denom * y2;
+        numer = numer * bigk;
+
+        if (accum > numer) {
+            return;
+        }
+    }
+}
+
+func extractDigit(nth: bigint): int {
+    tmp1 = nth * numer;
+    tmp2 = tmp1 + accum;
+    tmp1 = tmp2 / denom;
+    return tmp1 as int;
+}
+
+func nextDigit(): int {
+    while (true) {
+        nextTerm();
+        var d3: int = extractDigit(three);
+        var d4: int = extractDigit(four);
+        if (d3 == d4) {
+            return d3;
+        }
+    }
+    return 0;
+}
+
+func eliminateDigit(d: int): void {
+    tmp1 = d as bigint;
+    tmp1 = denom * tmp1;
+    accum = accum - tmp1;
+    accum = accum * ten;
+    numer = numer * ten;
+}
+
+func main(): void {
+    var n: int = 0;
+    if (len(argv) > 0) {
+        n = argv[0] as int;
+    }
+
+    var line: string = "";
+    var i: int = 1;
+    while (i <= n) {
+        var d: int = nextDigit();
+        line = line + digitChars[d];
+
+        if (len(line) == 10) {
+            println(line + "\t:" + str(i));
+            line = "";
+        }
+
+        eliminateDigit(d);
+        i = i + 1;
+    }
+
+    if (len(line) > 0) {
+        while (len(line) < 10) {
+            line = line + " ";
+        }
+        println(line + "\t:" + str(n));
+    }
+}
+

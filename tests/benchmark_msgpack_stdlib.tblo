@@ -1,0 +1,136 @@
+// MessagePack stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_msgpack_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_msgpack_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/msgpack.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchMsgpackEncode(iters: int): void {
+    var payload: map<string, any> = {};
+    mapSetString(payload, "name", "tablo");
+    mapSetString(payload, "port", 8080);
+    mapSetString(payload, "ok", true);
+    mapSetString(payload, "raw", hexToBytes("00 ff 10 aa").0);
+    mapSetString(payload, "tags", ["lang" as any, "vm" as any, "backend" as any]);
+
+    var meta: map<string, any> = {};
+    mapSetString(meta, "env", "prod");
+    mapSetString(meta, "workers", 8);
+    mapSetString(payload, "meta", meta as any);
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var enc_w = msgpackEncodeMap(payload);
+        if (enc_w.1 != nil) {
+            panic("benchMsgpackEncode warmup failed: " + enc_w.1.message);
+        }
+        sink = sink + len(enc_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var enc = msgpackEncodeMap(payload);
+        if (enc.1 != nil) {
+            panic("benchMsgpackEncode failed: " + enc.1.message);
+        }
+        sink = sink + len(enc.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf msgpackEncode", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchMsgpackDecode(iters: int): void {
+    var payload: map<string, any> = {};
+    mapSetString(payload, "name", "tablo");
+    mapSetString(payload, "port", 8080);
+    mapSetString(payload, "ok", true);
+    mapSetString(payload, "raw", hexToBytes("00 ff 10 aa").0);
+    mapSetString(payload, "tags", ["lang" as any, "vm" as any, "backend" as any]);
+
+    var meta: map<string, any> = {};
+    mapSetString(meta, "env", "prod");
+    mapSetString(meta, "workers", 8);
+    mapSetString(payload, "meta", meta as any);
+
+    var encoded = msgpackEncodeMap(payload);
+    if (encoded.1 != nil) {
+        panic("benchMsgpackDecode fixture encode failed: " + encoded.1.message);
+    }
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var dec_w = msgpackDecodeAsMap(encoded.0);
+        if (dec_w.1 != nil) {
+            panic("benchMsgpackDecode warmup failed: " + dec_w.1.message);
+        }
+        sink = sink + (mapGetString(dec_w.0, "port") as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var dec = msgpackDecodeAsMap(encoded.0);
+        if (dec.1 != nil) {
+            panic("benchMsgpackDecode failed: " + dec.1.message);
+        }
+
+        var tags_any: any = mapGetString(dec.0, "tags");
+        if (typeOf(tags_any) == "array") {
+            sink = sink + len(tags_any as array<any>);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf msgpackDecode", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang MessagePack Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchMsgpackEncode(70000 * scale);
+    benchMsgpackDecode(70000 * scale);
+
+    println("MessagePack stdlib benchmark complete!");
+}

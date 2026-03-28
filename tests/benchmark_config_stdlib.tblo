@@ -1,0 +1,112 @@
+// Config stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_config_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_config_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/config.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchConfigParseDotEnv(iters: int): void {
+    var text: string =
+        "PORT=8080\n" +
+        "HOST=localhost\n" +
+        "DEBUG=true\n" +
+        "NAME=\"Alice Doe\"\n" +
+        "TOKEN='abc=123'\n" +
+        "TIMEOUT_MS=1500\n";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = configParseDotEnv(text);
+        if (r_w.1 != nil) panic("configParseDotEnv warmup failed: " + r_w.1.message);
+        sink = sink + mapCount(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = configParseDotEnv(text);
+        if (r.1 != nil) panic("configParseDotEnv failed: " + r.1.message);
+        sink = sink + len(mapGetString(r.0, "HOST"));
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf configParseDotEnv", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchConfigTypedGets(iters: int): void {
+    var cfg: map<string, string> = {
+        "PORT": "8080",
+        "DEBUG": "true",
+        "NAME": "tablo",
+        "TIMEOUT_MS": "1500"
+    };
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var p_w = configGetInt(cfg, "PORT", 80);
+        var d_w = configGetBool(cfg, "DEBUG", false);
+        var n_w = configGetString(cfg, "NAME", "");
+        if (p_w.1 != nil || d_w.1 != nil) panic("config typed warmup failed");
+        sink = sink + p_w.0;
+        if (d_w.0) sink = sink + 1;
+        sink = sink + len(n_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p = configGetInt(cfg, "PORT", 80);
+        var d = configGetBool(cfg, "DEBUG", false);
+        var n = configGetString(cfg, "NAME", "");
+        if (p.1 != nil || d.1 != nil) panic("config typed failed");
+        sink = sink + p.0;
+        if (d.0) sink = sink + 1;
+        sink = sink + len(n);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf configTypedGets", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Config Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchConfigParseDotEnv(120000 * scale);
+    benchConfigTypedGets(200000 * scale);
+
+    println("Config stdlib benchmark complete!");
+}

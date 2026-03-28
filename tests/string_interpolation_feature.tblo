@@ -1,0 +1,6 @@
+func main(): void {
+    var user: string = "admin";
+    var retries: int = 2;
+    var line: string = "user=${user}, retries=${retries + 1}, ok=${true}";
+    println(line);
+}

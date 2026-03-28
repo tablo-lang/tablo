@@ -1,0 +1,441 @@
+// Buffered I/O micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_io_buffered.tblo
+//   ./build/Release/tablo run tests/benchmark_io_buffered.tblo 2
+//
+// This benchmark compares:
+// - unbuffered path: ioWriteAllTo for many small chunks
+// - buffered path: ioBufferedWriteAllTo + ioBufferedFlushTo
+// - read path: ioReadChunkFrom vs ioBufferedReadChunkFrom
+// - bytes path: ioWriteBytesAllTo + ioReadChunkBytesFrom
+
+import "native_integration_tests/fixtures/io.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func reportBytes(label: string, byte_count: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var mb_per_sec: int = ((byte_count / 1024) * 1000) / (elapsed * 1024);
+    println(label + ": " + str(byte_count) + " bytes in " + str(elapsed) + " ms (" + str(mb_per_sec) + " MiB/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func buildChunk(size: int): string {
+    var block: string = "0123456789abcdef0123456789abcdef";
+    var out: string = "";
+    while (len(out) < size) {
+        out = out + block;
+    }
+    return substring(out, 0, size);
+}
+
+func doWarmupUnbuffered(path: string, writes: int, chunk: string): void {
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("warmup unbuffered open failed: " + opened.1.message);
+
+    var i: int = 0;
+    while (i < writes) {
+        var wr = ioWriteAllTo(opened.0, chunk);
+        if (wr.1 != nil) panic("warmup unbuffered write failed: " + wr.1.message);
+        i = i + 1;
+    }
+    ioCloseWriter(opened.0);
+    delete(path);
+}
+
+func doWarmupBuffered(path: string, writes: int, chunk: string, flush_bytes: int): void {
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("warmup buffered open failed: " + opened.1.message);
+
+    var bw = ioBufferedWriterFrom(opened.0, flush_bytes);
+    if (bw.1 != nil) {
+        ioCloseWriter(opened.0);
+        panic("warmup buffered writer failed: " + bw.1.message);
+    }
+
+    var state = bw.0;
+    var i: int = 0;
+    while (i < writes) {
+        var wr = ioBufferedWriteAllTo(state, chunk);
+        if (wr.2 != nil) {
+            ioCloseWriter(opened.0);
+            panic("warmup buffered write failed: " + wr.2.message);
+        }
+        state = wr.0;
+        i = i + 1;
+    }
+
+    var flushed = ioBufferedFlushTo(state);
+    if (flushed.2 != nil) {
+        ioCloseWriter(opened.0);
+        panic("warmup buffered flush failed: " + flushed.2.message);
+    }
+    ioCloseWriter(opened.0);
+    delete(path);
+}
+
+func seedReadFile(path: string, total_bytes: int, chunk: string): void {
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("seed read file open failed: " + opened.1.message);
+
+    var written: int = 0;
+    while (written < total_bytes) {
+        var next: string = chunk;
+        var remain: int = total_bytes - written;
+        if (remain < len(chunk)) {
+            next = substring(chunk, 0, remain);
+        }
+        var wr = ioWriteAllTo(opened.0, next);
+        if (wr.1 != nil) {
+            ioCloseWriter(opened.0);
+            panic("seed read file write failed: " + wr.1.message);
+        }
+        written = written + wr.0;
+    }
+
+    ioCloseWriter(opened.0);
+}
+
+func drainReadChunk(path: string, chunk_bytes: int): (int, Error?) {
+    var opened = ioOpenReader(path);
+    if (opened.1 != nil) {
+        return (0, opened.1);
+    }
+
+    var total: int = 0;
+    while (true) {
+        var rr = ioReadChunkFrom(opened.0, chunk_bytes);
+        if (rr.1 != nil) {
+            ioCloseReader(opened.0);
+            return (total, rr.1);
+        }
+        if (rr.0 == nil) {
+            break;
+        }
+        total = total + len(rr.0 as string);
+    }
+
+    ioCloseReader(opened.0);
+    return (total, nil);
+}
+
+func drainReadChunkBytes(path: string, chunk_bytes: int): (int, Error?) {
+    var opened = ioOpenReader(path);
+    if (opened.1 != nil) {
+        return (0, opened.1);
+    }
+
+    var total: int = 0;
+    while (true) {
+        var rr = ioReadChunkBytesFrom(opened.0, chunk_bytes);
+        if (rr.1 != nil) {
+            ioCloseReader(opened.0);
+            return (total, rr.1);
+        }
+        if (rr.0 == nil) {
+            break;
+        }
+        total = total + len(rr.0 as bytes);
+    }
+
+    ioCloseReader(opened.0);
+    return (total, nil);
+}
+
+func drainBufferedReadChunk(path: string, read_chunk_bytes: int, take_bytes: int): (int, Error?) {
+    var opened = ioOpenReader(path);
+    if (opened.1 != nil) {
+        return (0, opened.1);
+    }
+
+    var br = ioBufferedReaderFrom(opened.0, read_chunk_bytes);
+    if (br.1 != nil) {
+        ioCloseReader(opened.0);
+        return (0, br.1);
+    }
+
+    var state = br.0;
+    var total: int = 0;
+    while (true) {
+        var rr = ioBufferedReadChunkFrom(state, take_bytes);
+        state = rr.0;
+        if (rr.2 != nil) {
+            ioCloseReader(opened.0);
+            return (total, rr.2);
+        }
+        if (rr.1 == "") {
+            break;
+        }
+        total = total + len(rr.1);
+    }
+
+    ioCloseReader(opened.0);
+    return (total, nil);
+}
+
+func benchReadChunks(iters: int, file_bytes: int, chunk: string): void {
+    var path: string = "bench_io_read.txt";
+    seedReadFile(path, file_bytes, chunk);
+
+    var warm: int = iters / 5;
+    if (warm < 5) {
+        warm = 5;
+    }
+    if (warm > 40) {
+        warm = 40;
+    }
+    var i: int = 0;
+    while (i < warm) {
+        var rw = drainReadChunk(path, 1024);
+        if (rw.1 != nil || rw.0 != file_bytes) {
+            panic("warmup ioReadChunk failed");
+        }
+
+        var rbw = drainBufferedReadChunk(path, 4096, 1024);
+        if (rbw.1 != nil || rbw.0 != file_bytes) {
+            panic("warmup buffered read failed");
+        }
+        i = i + 1;
+    }
+
+    var total_bytes_unbuffered: int = 0;
+    var start_u: int = timeMonotonicMillis();
+    var j: int = 0;
+    while (j < iters) {
+        var ru = drainReadChunk(path, 1024);
+        if (ru.1 != nil) panic("bench ioReadChunk failed: " + ru.1.message);
+        if (ru.0 != file_bytes) panic("bench ioReadChunk size mismatch");
+        total_bytes_unbuffered = total_bytes_unbuffered + ru.0;
+        j = j + 1;
+    }
+    var end_u: int = timeMonotonicMillis();
+
+    var total_bytes_buffered: int = 0;
+    var start_b: int = timeMonotonicMillis();
+    var k: int = 0;
+    while (k < iters) {
+        var rb = drainBufferedReadChunk(path, 4096, 1024);
+        if (rb.1 != nil) panic("bench buffered read failed: " + rb.1.message);
+        if (rb.0 != file_bytes) panic("bench buffered read size mismatch");
+        total_bytes_buffered = total_bytes_buffered + rb.0;
+        k = k + 1;
+    }
+    var end_b: int = timeMonotonicMillis();
+
+    report("perf ioReadChunk file", iters, start_u, end_u);
+    reportBytes("perf ioReadChunk file bytes", total_bytes_unbuffered, start_u, end_u);
+    report("perf ioBufferedReadChunk file", iters, start_b, end_b);
+    reportBytes("perf ioBufferedReadChunk file bytes", total_bytes_buffered, start_b, end_b);
+
+    delete(path);
+}
+
+func benchReadChunkBytes(iters: int, file_bytes: int, chunk: string): void {
+    var path: string = "bench_io_read_bytes.bin";
+    seedReadFile(path, file_bytes, chunk);
+
+    var warm: int = iters / 5;
+    if (warm < 5) {
+        warm = 5;
+    }
+    if (warm > 40) {
+        warm = 40;
+    }
+    var i: int = 0;
+    while (i < warm) {
+        var rw = drainReadChunkBytes(path, 1024);
+        if (rw.1 != nil || rw.0 != file_bytes) {
+            panic("warmup ioReadChunkBytes failed");
+        }
+        i = i + 1;
+    }
+
+    var total_bytes_read: int = 0;
+    var start: int = timeMonotonicMillis();
+    var j: int = 0;
+    while (j < iters) {
+        var rr = drainReadChunkBytes(path, 1024);
+        if (rr.1 != nil) panic("bench ioReadChunkBytes failed: " + rr.1.message);
+        if (rr.0 != file_bytes) panic("bench ioReadChunkBytes size mismatch");
+        total_bytes_read = total_bytes_read + rr.0;
+        j = j + 1;
+    }
+    var end: int = timeMonotonicMillis();
+
+    report("perf ioReadChunkBytes file", iters, start, end);
+    reportBytes("perf ioReadChunkBytes file bytes", total_bytes_read, start, end);
+
+    delete(path);
+}
+
+func benchUnbufferedWrites(iters: int, chunk: string): void {
+    var path: string = "bench_io_unbuffered.txt";
+    var total_bytes: int = iters * len(chunk);
+
+    var warm: int = warmup(iters);
+    doWarmupUnbuffered(path, warm, chunk);
+
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("bench unbuffered open failed: " + opened.1.message);
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var wr = ioWriteAllTo(opened.0, chunk);
+        if (wr.1 != nil) {
+            ioCloseWriter(opened.0);
+            panic("bench unbuffered write failed: " + wr.1.message);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    ioCloseWriter(opened.0);
+
+    var out = read_all(path);
+    if (out.1 != nil) panic("bench unbuffered readback failed: " + out.1.message);
+    if (len(out.0) != total_bytes) panic("bench unbuffered size mismatch");
+    delete(path);
+
+    report("perf ioWriteAll small chunks", iters, start, end);
+    reportBytes("perf ioWriteAll small chunks bytes", total_bytes, start, end);
+}
+
+func benchBytesWrites(iters: int, chunk: string): void {
+    var path: string = "bench_io_write_bytes.bin";
+    var chunk_r = stringToBytes(chunk);
+    if (chunk_r.1 != nil) panic("bench bytes chunk conversion failed: " + chunk_r.1.message);
+    var chunk_bytes: bytes = chunk_r.0;
+    var total_bytes: int = iters * len(chunk_bytes);
+
+    var warm: int = warmup(iters);
+    delete(path);
+    var warm_open = ioOpenWriter(path);
+    if (warm_open.1 != nil) panic("bench bytes warmup open failed: " + warm_open.1.message);
+    var w: int = 0;
+    while (w < warm) {
+        var wr_w = ioWriteBytesAllTo(warm_open.0, chunk_bytes);
+        if (wr_w.1 != nil) {
+            ioCloseWriter(warm_open.0);
+            panic("bench bytes warmup write failed: " + wr_w.1.message);
+        }
+        w = w + 1;
+    }
+    ioCloseWriter(warm_open.0);
+
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("bench bytes open failed: " + opened.1.message);
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var wr = ioWriteBytesAllTo(opened.0, chunk_bytes);
+        if (wr.1 != nil) {
+            ioCloseWriter(opened.0);
+            panic("bench bytes write failed: " + wr.1.message);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    ioCloseWriter(opened.0);
+
+    var out = drainReadChunkBytes(path, 4096);
+    if (out.1 != nil) panic("bench bytes readback failed: " + out.1.message);
+    if (out.0 != total_bytes) panic("bench bytes size mismatch");
+    delete(path);
+
+    report("perf ioWriteBytesAll small chunks", iters, start, end);
+    reportBytes("perf ioWriteBytesAll small chunks bytes", total_bytes, start, end);
+}
+
+func benchBufferedWrites(iters: int, chunk: string, flush_bytes: int): void {
+    var path: string = "bench_io_buffered.txt";
+    var total_bytes: int = iters * len(chunk);
+
+    var warm: int = warmup(iters);
+    doWarmupBuffered(path, warm, chunk, flush_bytes);
+
+    delete(path);
+    var opened = ioOpenWriter(path);
+    if (opened.1 != nil) panic("bench buffered open failed: " + opened.1.message);
+
+    var bw = ioBufferedWriterFrom(opened.0, flush_bytes);
+    if (bw.1 != nil) {
+        ioCloseWriter(opened.0);
+        panic("bench buffered writer failed: " + bw.1.message);
+    }
+
+    var state = bw.0;
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var wr = ioBufferedWriteAllTo(state, chunk);
+        if (wr.2 != nil) {
+            ioCloseWriter(opened.0);
+            panic("bench buffered write failed: " + wr.2.message);
+        }
+        state = wr.0;
+        i = i + 1;
+    }
+    var flushed = ioBufferedFlushTo(state);
+    var end: int = timeMonotonicMillis();
+    if (flushed.2 != nil) {
+        ioCloseWriter(opened.0);
+        panic("bench buffered flush failed: " + flushed.2.message);
+    }
+    ioCloseWriter(opened.0);
+
+    var out = read_all(path);
+    if (out.1 != nil) panic("bench buffered readback failed: " + out.1.message);
+    if (len(out.0) != total_bytes) panic("bench buffered size mismatch");
+    delete(path);
+
+    report("perf ioBufferedWriteAll small chunks", iters, start, end);
+    reportBytes("perf ioBufferedWriteAll small chunks bytes", total_bytes, start, end);
+}
+
+func main(): void {
+    println("=== TabloLang Buffered I/O Micro-Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    var chunk: string = buildChunk(64);
+    var writes: int = 80000 * scale;
+    var reads: int = 80 * scale;
+
+    benchUnbufferedWrites(writes, chunk);
+    benchBytesWrites(writes, chunk);
+    benchBufferedWrites(writes, chunk, 8192);
+    benchReadChunks(reads, 262144, chunk);
+    benchReadChunkBytes(reads, 262144, chunk);
+
+    println("Buffered I/O benchmark complete!");
+}

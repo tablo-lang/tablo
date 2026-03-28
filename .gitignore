@@ -1,14 +1,37 @@
 # Prerequisites
 *.d
 
-# Object files
+# Build directories
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Compiled files
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.obj
 *.o
 *.ko
 *.obj
 *.elf
+*.la
+*.lo
+
+# Debug files
+*.pdb
+*.ilk
+*.idb
+*.dSYM/
+*.su
 
 # Linker output
-*.ilk
 *.map
 *.exp
 
@@ -16,40 +39,33 @@
 *.gch
 *.pch
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
+# Visual Studio files
+.vs/
+*.suo
+*.user
+*.sln.docstates
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
+# Test logs
+Testing/Temporary/
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+# TabloLang bytecode artifacts
+*.tbc
+*.tbcc
+!tests/fuzz/corpus/artifact/*.tbc
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# Test artifacts
+tests/tmp_sqlite_stdlib_test_*.db
+tests/.tmp_*
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# Python artifacts
+__pycache__/
+*.pyc
 
-# debug information files
-*.dwo
+# Local workspace files
+AGENTS.md
+tasks.txt
+
+# Windows build artifacts
+Debug/
+Release/
+x64/

@@ -1,0 +1,520 @@
+// Date-time helpers for RFC3339 parsing/formatting and timezone-offset handling.
+
+record DateTimeParts {
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    second: int,
+    millis: int,
+    offsetMinutes: int
+};
+
+func datetimeZero(): DateTimeParts {
+    return {
+        year: 0,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        millis: 0,
+        offsetMinutes: 0
+    };
+}
+
+func datetimeStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func datetimeError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return datetimeStdError(code, message, data);
+}
+
+func datetimeIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func datetimePadInt(value: int, width: int): string {
+    var out: string = str(value);
+    while (len(out) < width) {
+        out = "0" + out;
+    }
+    return out;
+}
+
+func datetimeIsLeapYear(year: int): bool {
+    if ((year % 400) == 0) {
+        return true;
+    }
+    if ((year % 100) == 0) {
+        return false;
+    }
+    return (year % 4) == 0;
+}
+
+func datetimeDaysInMonthUnchecked(year: int, month: int): int {
+    if (month == 1 || month == 3 || month == 5 || month == 7 || month == 8 || month == 10 || month == 12) {
+        return 31;
+    }
+    if (month == 4 || month == 6 || month == 9 || month == 11) {
+        return 30;
+    }
+    var leap: bool = false;
+    if ((year % 400) == 0) {
+        leap = true;
+    } else if ((year % 100) == 0) {
+        leap = false;
+    } else if ((year % 4) == 0) {
+        leap = true;
+    }
+    if (leap) {
+        return 29;
+    }
+    return 28;
+}
+
+func datetimeDaysInMonth(year: int, month: int): (int, Error?) {
+    if (month < 1 || month > 12) {
+        return (0,
+                datetimeError(ERR_INVALID_ARGUMENT,
+                              "datetimeDaysInMonth: month out of range",
+                              "datetime.daysInMonth.month",
+                              month));
+    }
+    return (datetimeDaysInMonthUnchecked(year, month), nil);
+}
+
+func datetimeValidateParts(parts: DateTimeParts): Error? {
+    if (parts.year < 0) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: year must be >= 0",
+                             "datetime.validate.year",
+                             parts.year);
+    }
+
+    if (parts.month < 1 || parts.month > 12) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: month out of range",
+                             "datetime.validate.month",
+                             parts.month);
+    }
+
+    var dim: int = datetimeDaysInMonthUnchecked(parts.year, parts.month);
+    if (parts.day < 1 || parts.day > dim) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: day out of range",
+                             "datetime.validate.day",
+                             parts.day);
+    }
+
+    if (parts.hour < 0 || parts.hour > 23) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: hour out of range",
+                             "datetime.validate.hour",
+                             parts.hour);
+    }
+
+    if (parts.minute < 0 || parts.minute > 59) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: minute out of range",
+                             "datetime.validate.minute",
+                             parts.minute);
+    }
+
+    if (parts.second < 0 || parts.second > 59) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: second out of range",
+                             "datetime.validate.second",
+                             parts.second);
+    }
+
+    if (parts.millis < 0 || parts.millis > 999) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: millis out of range",
+                             "datetime.validate.millis",
+                             parts.millis);
+    }
+
+    if (parts.offsetMinutes < -1439 || parts.offsetMinutes > 1439) {
+        return datetimeError(ERR_INVALID_ARGUMENT,
+                             "datetimeValidateParts: offsetMinutes out of range",
+                             "datetime.validate.offset",
+                             parts.offsetMinutes);
+    }
+
+    return nil;
+}
+
+func datetimeNextDate(parts: array<int>): array<int> {
+    var y: int = parts[0];
+    var m: int = parts[1];
+    var d: int = parts[2] + 1;
+
+    var dim: int = datetimeDaysInMonthUnchecked(y, m);
+    if (d > dim) {
+        d = 1;
+        m = m + 1;
+        if (m > 12) {
+            m = 1;
+            y = y + 1;
+        }
+    }
+
+    return [y, m, d];
+}
+
+func datetimePrevDate(parts: array<int>): array<int> {
+    var y: int = parts[0];
+    var m: int = parts[1];
+    var d: int = parts[2] - 1;
+
+    if (d < 1) {
+        m = m - 1;
+        if (m < 1) {
+            m = 12;
+            y = y - 1;
+        }
+        d = datetimeDaysInMonthUnchecked(y, m);
+    }
+
+    return [y, m, d];
+}
+
+func datetimeSameDate(a: array<int>, b: array<int>): bool {
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
+
+func datetimeComputeLocalOffsetMinutes(local_parts: array<int>, utc_parts: array<int>): int {
+    var base: int = ((local_parts[3] * 60) + local_parts[4]) - ((utc_parts[3] * 60) + utc_parts[4]);
+    var offset: int = base;
+
+    if (!datetimeSameDate(local_parts, utc_parts)) {
+        var next_utc: array<int> = datetimeNextDate(utc_parts);
+        if (datetimeSameDate(local_parts, next_utc)) {
+            offset = base + 1440;
+        } else {
+            var prev_utc: array<int> = datetimePrevDate(utc_parts);
+            if (datetimeSameDate(local_parts, prev_utc)) {
+                offset = base - 1440;
+            }
+        }
+    }
+
+    while (offset > 840) {
+        offset = offset - 1440;
+    }
+    while (offset < -720) {
+        offset = offset + 1440;
+    }
+
+    return offset;
+}
+
+func datetimeFromBuiltinParts(parts: array<int>, offset_minutes: int): (DateTimeParts, Error?) {
+    var zero: DateTimeParts = datetimeZero();
+    if (len(parts) != 7) {
+        return (zero,
+                datetimeError(ERR_INTERNAL,
+                              "datetimeFromBuiltinParts: expected 7 fields",
+                              "datetime.fromBuiltinParts.length",
+                              len(parts)));
+    }
+
+    var out: DateTimeParts = {
+        year: parts[0],
+        month: parts[1],
+        day: parts[2],
+        hour: parts[3],
+        minute: parts[4],
+        second: parts[5],
+        millis: parts[6],
+        offsetMinutes: offset_minutes
+    };
+
+    var err: Error? = datetimeValidateParts(out);
+    if (err != nil) {
+        return (zero, err);
+    }
+
+    return (out, nil);
+}
+
+func datetimeNowUtc(): (DateTimeParts, Error?) {
+    return datetimeFromBuiltinParts(utcDateTime(), 0);
+}
+
+func datetimeNowLocal(): (DateTimeParts, Error?) {
+    var local_parts: array<int> = localDateTime();
+    var utc_parts: array<int> = utcDateTime();
+
+    if (len(local_parts) != 7 || len(utc_parts) != 7) {
+        return (datetimeZero(),
+                datetimeError(ERR_INTERNAL,
+                              "datetimeNowLocal: expected 7 fields from datetime builtins",
+                              "datetime.nowLocal.length",
+                              len(local_parts)));
+    }
+
+    var offset: int = datetimeComputeLocalOffsetMinutes(local_parts, utc_parts);
+    return datetimeFromBuiltinParts(local_parts, offset);
+}
+
+func datetimeParseIntAt(input: string, start: int, count: int, context: string): (int, Error?) {
+    if (start < 0 || count <= 0 || (start + count) > len(input)) {
+        return (0,
+                datetimeError(ERR_PARSE,
+                              "datetimeParseRfc3339: token out of bounds",
+                              context,
+                              start));
+    }
+
+    var i: int = start;
+    while (i < (start + count)) {
+        if (!datetimeIsDigit(substring(input, i, 1))) {
+            return (0,
+                    datetimeError(ERR_PARSE,
+                                  "datetimeParseRfc3339: expected digits",
+                                  context,
+                                  substring(input, i, 1)));
+        }
+        i = i + 1;
+    }
+
+    return (toInt(substring(input, start, count)), nil);
+}
+
+func datetimeParseMillisFraction(frac: string): int {
+    if (len(frac) == 1) {
+        return toInt(frac + "00");
+    }
+    if (len(frac) == 2) {
+        return toInt(frac + "0");
+    }
+    return toInt(substring(frac, 0, 3));
+}
+
+func datetimeParseRfc3339(text: string): (DateTimeParts, Error?) {
+    var s: string = trim(text);
+    var zero: DateTimeParts = datetimeZero();
+
+    if (len(s) < 20) {
+        return (zero,
+                datetimeError(ERR_PARSE,
+                              "datetimeParseRfc3339: input too short",
+                              "datetime.parse.length",
+                              s));
+    }
+
+    var year_r = datetimeParseIntAt(s, 0, 4, "datetime.parse.year");
+    if (year_r.1 != nil) return (zero, year_r.1);
+    if (substring(s, 4, 1) != "-") {
+        return (zero, datetimeError(ERR_PARSE, "datetimeParseRfc3339: expected '-' after year", "datetime.parse.sep", s));
+    }
+
+    var month_r = datetimeParseIntAt(s, 5, 2, "datetime.parse.month");
+    if (month_r.1 != nil) return (zero, month_r.1);
+    if (substring(s, 7, 1) != "-") {
+        return (zero, datetimeError(ERR_PARSE, "datetimeParseRfc3339: expected '-' after month", "datetime.parse.sep", s));
+    }
+
+    var day_r = datetimeParseIntAt(s, 8, 2, "datetime.parse.day");
+    if (day_r.1 != nil) return (zero, day_r.1);
+
+    var t_char: string = substring(s, 10, 1);
+    if (!(t_char == "T" || t_char == "t")) {
+        return (zero, datetimeError(ERR_PARSE, "datetimeParseRfc3339: expected 'T' separator", "datetime.parse.sep", t_char));
+    }
+
+    var hour_r = datetimeParseIntAt(s, 11, 2, "datetime.parse.hour");
+    if (hour_r.1 != nil) return (zero, hour_r.1);
+    if (substring(s, 13, 1) != ":") {
+        return (zero, datetimeError(ERR_PARSE, "datetimeParseRfc3339: expected ':' after hour", "datetime.parse.sep", s));
+    }
+
+    var minute_r = datetimeParseIntAt(s, 14, 2, "datetime.parse.minute");
+    if (minute_r.1 != nil) return (zero, minute_r.1);
+    if (substring(s, 16, 1) != ":") {
+        return (zero, datetimeError(ERR_PARSE, "datetimeParseRfc3339: expected ':' after minute", "datetime.parse.sep", s));
+    }
+
+    var second_r = datetimeParseIntAt(s, 17, 2, "datetime.parse.second");
+    if (second_r.1 != nil) return (zero, second_r.1);
+
+    var idx: int = 19;
+    var millis: int = 0;
+
+    if (idx < len(s) && substring(s, idx, 1) == ".") {
+        idx = idx + 1;
+        var frac_start: int = idx;
+        while (idx < len(s) && datetimeIsDigit(substring(s, idx, 1))) {
+            idx = idx + 1;
+        }
+
+        if (idx == frac_start) {
+            return (zero,
+                    datetimeError(ERR_PARSE,
+                                  "datetimeParseRfc3339: expected fractional second digits",
+                                  "datetime.parse.millis",
+                                  s));
+        }
+
+        millis = datetimeParseMillisFraction(substring(s, frac_start, idx - frac_start));
+    }
+
+    if (idx >= len(s)) {
+        return (zero,
+                datetimeError(ERR_PARSE,
+                              "datetimeParseRfc3339: missing timezone offset",
+                              "datetime.parse.offset",
+                              s));
+    }
+
+    var offset_minutes: int = 0;
+    var tz: string = substring(s, idx, 1);
+    if (tz == "Z" || tz == "z") {
+        idx = idx + 1;
+    } else if (tz == "+" || tz == "-") {
+        if ((idx + 6) > len(s)) {
+            return (zero,
+                    datetimeError(ERR_PARSE,
+                                  "datetimeParseRfc3339: incomplete timezone offset",
+                                  "datetime.parse.offset",
+                                  s));
+        }
+
+        var oh_r = datetimeParseIntAt(s, idx + 1, 2, "datetime.parse.offsetHour");
+        if (oh_r.1 != nil) return (zero, oh_r.1);
+
+        if (substring(s, idx + 3, 1) != ":") {
+            return (zero,
+                    datetimeError(ERR_PARSE,
+                                  "datetimeParseRfc3339: expected ':' in timezone offset",
+                                  "datetime.parse.offset",
+                                  s));
+        }
+
+        var om_r = datetimeParseIntAt(s, idx + 4, 2, "datetime.parse.offsetMinute");
+        if (om_r.1 != nil) return (zero, om_r.1);
+
+        if (oh_r.0 > 23 || om_r.0 > 59) {
+            return (zero,
+                    datetimeError(ERR_PARSE,
+                                  "datetimeParseRfc3339: timezone offset out of range",
+                                  "datetime.parse.offset",
+                                  s));
+        }
+
+        offset_minutes = (oh_r.0 * 60) + om_r.0;
+        if (tz == "-") {
+            offset_minutes = 0 - offset_minutes;
+        }
+
+        idx = idx + 6;
+    } else {
+        return (zero,
+                datetimeError(ERR_PARSE,
+                              "datetimeParseRfc3339: invalid timezone designator",
+                              "datetime.parse.offset",
+                              tz));
+    }
+
+    if (idx != len(s)) {
+        return (zero,
+                datetimeError(ERR_PARSE,
+                              "datetimeParseRfc3339: trailing characters",
+                              "datetime.parse.trailing",
+                              substring(s, idx, len(s) - idx)));
+    }
+
+    var out: DateTimeParts = {
+        year: year_r.0,
+        month: month_r.0,
+        day: day_r.0,
+        hour: hour_r.0,
+        minute: minute_r.0,
+        second: second_r.0,
+        millis: millis,
+        offsetMinutes: offset_minutes
+    };
+
+    var err: Error? = datetimeValidateParts(out);
+    if (err != nil) {
+        return (zero, err);
+    }
+
+    return (out, nil);
+}
+
+func datetimeFormatOffset(offset_minutes: int): (string, Error?) {
+    if (offset_minutes < -1439 || offset_minutes > 1439) {
+        return ("",
+                datetimeError(ERR_INVALID_ARGUMENT,
+                              "datetimeFormatOffset: offset out of range",
+                              "datetime.format.offset",
+                              offset_minutes));
+    }
+
+    if (offset_minutes == 0) {
+        return ("Z", nil);
+    }
+
+    var sign: string = "+";
+    var v: int = offset_minutes;
+    if (v < 0) {
+        sign = "-";
+        v = 0 - v;
+    }
+
+    var hh: int = v / 60;
+    var mm: int = v % 60;
+    return (sign + datetimePadInt(hh, 2) + ":" + datetimePadInt(mm, 2), nil);
+}
+
+func datetimeFormatRfc3339(parts: DateTimeParts): (string, Error?) {
+    var err: Error? = datetimeValidateParts(parts);
+    if (err != nil) {
+        return ("", err);
+    }
+
+    var off_r = datetimeFormatOffset(parts.offsetMinutes);
+    if (off_r.1 != nil) {
+        return ("", off_r.1);
+    }
+
+    var out: string =
+        datetimePadInt(parts.year, 4) + "-" +
+        datetimePadInt(parts.month, 2) + "-" +
+        datetimePadInt(parts.day, 2) + "T" +
+        datetimePadInt(parts.hour, 2) + ":" +
+        datetimePadInt(parts.minute, 2) + ":" +
+        datetimePadInt(parts.second, 2);
+
+    if (parts.millis > 0) {
+        out = out + "." + datetimePadInt(parts.millis, 3);
+    }
+
+    return (out + off_r.0, nil);
+}
+
+func datetimeNowUtcRfc3339(): (string, Error?) {
+    var now_r = datetimeNowUtc();
+    if (now_r.1 != nil) {
+        return ("", now_r.1);
+    }
+    return datetimeFormatRfc3339(now_r.0);
+}
+
+func datetimeNowLocalRfc3339(): (string, Error?) {
+    var now_r = datetimeNowLocal();
+    if (now_r.1 != nil) {
+        return ("", now_r.1);
+    }
+    return datetimeFormatRfc3339(now_r.0);
+}

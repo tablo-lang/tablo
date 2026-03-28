@@ -1,0 +1,68 @@
+import "fixtures/hash.tblo";
+
+func main(): void {
+    var s1 = hashStableString("hello");
+    var s2 = hashStableString("hello");
+    var s3 = hashStableString("hello!");
+    println(s1.1 == nil);
+    println(s2.1 == nil);
+    println(s3.1 == nil);
+    if (s1.1 == nil && s2.1 == nil && s3.1 == nil) {
+        println(s1.0 == s2.0);
+        println(s1.0 != s3.0);
+    }
+
+    var b_r = stringToBytes("hello");
+    println(b_r.1 == nil);
+    if (b_r.1 == nil && s1.1 == nil) {
+        var b_hash: int = hashStableBytes(b_r.0);
+        println(b_hash == s1.0);
+    }
+
+    var hex_s = hashStableHexString("hello");
+    println(hex_s.1 == nil);
+    if (hex_s.1 == nil) {
+        println(len(hex_s.0) == 8);
+        println(hex_s.0 == hashHex32(s1.0));
+    }
+
+    var adler_empty = hashAdler32String("");
+    println(adler_empty.1 == nil);
+    if (adler_empty.1 == nil) {
+        println(adler_empty.0 == 1);
+        println(hashHex32(adler_empty.0) == "00000001");
+    }
+
+    var adler_hello = hashAdler32String("hello");
+    println(adler_hello.1 == nil);
+    if (adler_hello.1 == nil) {
+        // zlib known value for "hello"
+        println(adler_hello.0 == 103547413);
+        println(hashHex32(adler_hello.0) == "062c0215");
+    }
+
+    var combined_a: int = hashCombine(17, 99);
+    var combined_b: int = hashCombine(99, 17);
+    println(combined_a != combined_b);
+    println(combined_a >= 0);
+    println(combined_b >= 0);
+
+    var fp1 = hashFingerprintStrings(["alpha", "beta", "gamma"]);
+    var fp2 = hashFingerprintStrings(["alpha", "beta", "gamma"]);
+    var fp3 = hashFingerprintStrings(["gamma", "beta", "alpha"]);
+    println(fp1.1 == nil);
+    println(fp2.1 == nil);
+    println(fp3.1 == nil);
+    if (fp1.1 == nil && fp2.1 == nil && fp3.1 == nil) {
+        println(fp1.0 == fp2.0);
+        println(fp1.0 != fp3.0);
+    }
+
+    var fp_hex = hashFingerprintHexStrings(["alpha", "beta", "gamma"]);
+    println(fp_hex.1 == nil);
+    if (fp_hex.1 == nil) {
+        println(len(fp_hex.0) == 8);
+    }
+
+    println(hashHex32(-1) == "ffffffff");
+}

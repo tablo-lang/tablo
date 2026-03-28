@@ -1,0 +1,116 @@
+// Text stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_text_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_text_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/text.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchTextSplitWordsAscii(iters: int): void {
+    var input: string = "HelloWorld API-server v2 alphaBeta XMLHTTPRequest 2026 data";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w = textSplitWordsAscii(input);
+        sink = sink + len(out_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out = textSplitWordsAscii(input);
+        sink = sink + len(out);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf textSplitWordsAscii", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchTextCamelCaseAscii(iters: int): void {
+    var input: string = "hello world API response for tablo 2026";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w: string = textCamelCaseAscii(input);
+        sink = sink + len(out_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out: string = textCamelCaseAscii(input);
+        sink = sink + len(out);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf textCamelCaseAscii", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchTextSlugifyAscii(iters: int): void {
+    var input: string = "  TabloLang: Fast, Simple, and Practical in 2026!  ";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var out_w = textSlugifyAscii(input, "-");
+        if (out_w.1 != nil) panic("textSlugifyAscii warmup failed: " + out_w.1.message);
+        sink = sink + len(out_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var out = textSlugifyAscii(input, "-");
+        if (out.1 != nil) panic("textSlugifyAscii failed: " + out.1.message);
+        sink = sink + len(out.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf textSlugifyAscii", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Text Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchTextSplitWordsAscii(170000 * scale);
+    benchTextCamelCaseAscii(150000 * scale);
+    benchTextSlugifyAscii(140000 * scale);
+
+    println("Text stdlib benchmark complete!");
+}

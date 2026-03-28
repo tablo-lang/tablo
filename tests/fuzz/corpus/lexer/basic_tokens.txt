@@ -1,0 +1,3 @@
+var x: int = 42;
+const msg: string = "hello";
+if (x > 0 && x < 100) { x += 1; }

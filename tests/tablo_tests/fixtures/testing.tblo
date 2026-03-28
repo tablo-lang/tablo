@@ -1,0 +1,153 @@
+// Lightweight test assertion helpers for TabloLang programs.
+// Assertions return Error? so callers can use '?' for early return.
+
+var TESTING_ASSERT_FAILED_CODE: int = 1001;
+
+func testingStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func testingAssertionError(assertion: string, message: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": "testing." + assertion,
+        "assertion": assertion
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+
+    var msg: string = message;
+    if (trim(msg) == "") {
+        msg = assertion + " failed";
+    }
+    return testingStdError(TESTING_ASSERT_FAILED_CODE, msg, data);
+}
+
+func fail(message: string): Error {
+    return testingAssertionError("fail", message, nil);
+}
+
+func assertTrue(condition: bool, message: string): Error? {
+    if (condition) {
+        return nil;
+    }
+
+    return testingAssertionError("assertTrue", message, {
+        "expected": true,
+        "actual": false
+    });
+}
+
+func assertNil(value: any, message: string): Error? {
+    if (value == nil) {
+        return nil;
+    }
+
+    var detail: map<string, any> = {
+        "expected": "nil",
+        "actualType": typeOf(value),
+        "actual": str(value)
+    };
+    return testingAssertionError("assertNil", message, detail);
+}
+
+func testingStringifyComparable(value: any): (string, Error?) {
+    if (value == nil) {
+        return ("nil", nil);
+    }
+
+    if (typeOf(value) == "bytes") {
+        var encoded_bytes = bytesToHex(value as bytes);
+        if (encoded_bytes.1 != nil) {
+            return ("",
+                    testingAssertionError("assertEq",
+                                          "failed to stringify bytes value",
+                                          encoded_bytes.1.data));
+        }
+        return (encoded_bytes.0, nil);
+    }
+
+    var encoded = jsonStringify(value);
+    if (encoded.1 != nil) {
+        return ("",
+                testingAssertionError("assertEq",
+                                      "failed to stringify value for comparison",
+                                      encoded.1.data));
+    }
+
+    return (encoded.0, nil);
+}
+
+func assertEq(actual: any, expected: any, message: string): Error? {
+    if (actual == nil && expected == nil) {
+        return nil;
+    }
+
+    if (actual == nil || expected == nil) {
+        var nil_detail: map<string, any> = {
+            "expectedType": typeOf(expected),
+            "actualType": typeOf(actual),
+            "expected": str(expected),
+            "actual": str(actual)
+        };
+        return testingAssertionError("assertEq", message, nil_detail);
+    }
+
+    var actual_type: string = typeOf(actual);
+    var expected_type: string = typeOf(expected);
+    if (actual_type != expected_type) {
+        var type_detail: map<string, any> = {
+            "expectedType": expected_type,
+            "actualType": actual_type,
+            "expected": str(expected),
+            "actual": str(actual)
+        };
+        return testingAssertionError("assertEq", message, type_detail);
+    }
+
+    var actual_text = testingStringifyComparable(actual);
+    if (actual_text.1 != nil) {
+        return actual_text.1;
+    }
+    var expected_text = testingStringifyComparable(expected);
+    if (expected_text.1 != nil) {
+        return expected_text.1;
+    }
+
+    if (actual_text.0 == expected_text.0) {
+        return nil;
+    }
+
+    var detail: map<string, any> = {
+        "expectedType": expected_type,
+        "actualType": actual_type,
+        "expected": expected_text.0,
+        "actual": actual_text.0
+    };
+    return testingAssertionError("assertEq", message, detail);
+}
+
+func assertErrorCode(err: Error?, expectedCode: int, message: string): Error? {
+    if (err == nil) {
+        return testingAssertionError("assertErrorCode",
+                                     message,
+                                     {
+                                         "expectedCode": expectedCode,
+                                         "actualCode": nil,
+                                         "actual": "nil"
+                                     });
+    }
+
+    var actual_err: Error = err as Error;
+    if (actual_err.code == expectedCode) {
+        return nil;
+    }
+
+    var detail: map<string, any> = {
+        "expectedCode": expectedCode,
+        "actualCode": actual_err.code,
+        "errorMessage": actual_err.message
+    };
+    return testingAssertionError("assertErrorCode", message, detail);
+}

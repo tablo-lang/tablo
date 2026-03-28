@@ -1,0 +1,804 @@
+// SQLite stdlib helpers for backend/CLI workflows.
+// Wraps sqlite* runtime builtins with contextual errors and typed decode helpers.
+
+record SqliteDb {
+    id: int,
+    path: string
+};
+
+record SqliteStatement {
+    id: int,
+    db: SqliteDb
+};
+
+func sqliteStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func sqliteError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return sqliteStdError(code, message, data);
+}
+
+func sqliteWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return sqliteStdError(err.code, err.message, data);
+}
+
+func sqliteDefaultDb(): SqliteDb {
+    var db: SqliteDb = {
+        id: -1,
+        path: ""
+    };
+    return db;
+}
+
+func sqliteDefaultStatement(): SqliteStatement {
+    var stmt: SqliteStatement = {
+        id: -1,
+        db: sqliteDefaultDb()
+    };
+    return stmt;
+}
+
+func sqliteOpenDb(path: string): (SqliteDb, Error?) {
+    var empty: SqliteDb = sqliteDefaultDb();
+    if (path == "") {
+        return (empty,
+                sqliteError(ERR_INVALID_ARGUMENT,
+                            "path must not be empty",
+                            "sqliteOpenDb.path",
+                            path));
+    }
+
+    var opened = sqliteOpen(path);
+    if (opened.1 != nil) {
+        return (empty,
+                sqliteWrapError(opened.1,
+                                "sqliteOpenDb",
+                                { "path": path } as any));
+    }
+
+    var db: SqliteDb = {
+        id: opened.0 as int,
+        path: path
+    };
+    return (db, nil);
+}
+
+func sqliteOpenMemory(): (SqliteDb, Error?) {
+    return sqliteOpenDb(":memory:");
+}
+
+func sqliteCloseDb(db: SqliteDb): Error? {
+    var closed = sqliteClose(db.id);
+    if (closed.1 != nil) {
+        return sqliteWrapError(closed.1,
+                               "sqliteCloseDb",
+                               {
+                                   "dbId": db.id,
+                                   "path": db.path
+                               } as any);
+    }
+    if (!closed.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteClose returned false",
+                           "sqliteCloseDb",
+                           { "dbId": db.id, "path": db.path } as any);
+    }
+    return nil;
+}
+
+func sqliteExecSql(db: SqliteDb, sql: string): (bool, Error?) {
+    if (sql == "") {
+        return (false,
+                sqliteError(ERR_INVALID_ARGUMENT,
+                            "sql must not be empty",
+                            "sqliteExecSql.sql",
+                            sql));
+    }
+
+    var executed = sqliteExec(db.id, sql);
+    if (executed.1 != nil) {
+        return (false,
+                sqliteWrapError(executed.1,
+                                "sqliteExecSql",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path,
+                                    "sql": sql
+                                } as any));
+    }
+    if (!executed.0) {
+        return (false,
+                sqliteError(ERR_IO,
+                            "sqliteExec returned false",
+                            "sqliteExecSql",
+                            { "dbId": db.id, "sql": sql } as any));
+    }
+    return (true, nil);
+}
+
+func sqliteExecBatch(db: SqliteDb, statements: array<string>): (int, Error?) {
+    var count: int = 0;
+    var i: int = 0;
+    while (i < len(statements)) {
+        var stmt_sql: string = statements[i];
+        var done = sqliteExecSql(db, stmt_sql);
+        if (done.1 != nil) {
+            return (count,
+                    sqliteWrapError(done.1,
+                                    "sqliteExecBatch.statement",
+                                    {
+                                        "index": i,
+                                        "sql": stmt_sql
+                                    } as any));
+        }
+        count = count + 1;
+        i = i + 1;
+    }
+    return (count, nil);
+}
+
+func sqliteExecBatchTx(db: SqliteDb, statements: array<string>): (int, Error?) {
+    var begin_err = sqliteBeginTx(db);
+    if (begin_err != nil) {
+        return (0,
+                sqliteWrapError(begin_err,
+                                "sqliteExecBatchTx.begin",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path
+                                } as any));
+    }
+
+    var executed = sqliteExecBatch(db, statements);
+    if (executed.1 != nil) {
+        var rollback_err = sqliteRollbackTx(db);
+        if (rollback_err != nil) {
+            return (executed.0,
+                    sqliteWrapError(rollback_err,
+                                    "sqliteExecBatchTx.rollback",
+                                    {
+                                        "dbId": db.id,
+                                        "path": db.path,
+                                        "executedCount": executed.0,
+                                        "execError": executed.1
+                                    } as any));
+        }
+        return (executed.0,
+                sqliteWrapError(executed.1,
+                                "sqliteExecBatchTx.exec",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path,
+                                    "executedCount": executed.0
+                                } as any));
+    }
+
+    var commit_err = sqliteCommitTx(db);
+    if (commit_err != nil) {
+        return (executed.0,
+                sqliteWrapError(commit_err,
+                                "sqliteExecBatchTx.commit",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path,
+                                    "executedCount": executed.0
+                                } as any));
+    }
+
+    return (executed.0, nil);
+}
+
+func sqliteBeginTx(db: SqliteDb): Error? {
+    var started = sqliteExecSql(db, "begin transaction;");
+    if (started.1 != nil) {
+        return sqliteWrapError(started.1,
+                               "sqliteBeginTx",
+                               {
+                                   "dbId": db.id,
+                                   "path": db.path
+                               } as any);
+    }
+    return nil;
+}
+
+func sqliteCommitTx(db: SqliteDb): Error? {
+    var committed = sqliteExecSql(db, "commit;");
+    if (committed.1 != nil) {
+        return sqliteWrapError(committed.1,
+                               "sqliteCommitTx",
+                               {
+                                   "dbId": db.id,
+                                   "path": db.path
+                               } as any);
+    }
+    return nil;
+}
+
+func sqliteRollbackTx(db: SqliteDb): Error? {
+    var rolled = sqliteExecSql(db, "rollback;");
+    if (rolled.1 != nil) {
+        return sqliteWrapError(rolled.1,
+                               "sqliteRollbackTx",
+                               {
+                                   "dbId": db.id,
+                                   "path": db.path
+                               } as any);
+    }
+    return nil;
+}
+
+func sqliteDecodeRows(raw_rows: any): (array<map<string, any>>, Error?) {
+    var out: array<map<string, any>> = [];
+    if (raw_rows == nil || typeOf(raw_rows) != "array") {
+        return (out,
+                sqliteError(ERR_PARSE,
+                            "sqlite row payload must be array",
+                            "sqliteDecodeRows.type",
+                            raw_rows));
+    }
+
+    var rows_any: array<any> = raw_rows as array<any>;
+    var i: int = 0;
+    while (i < len(rows_any)) {
+        var row_any: any = rows_any[i];
+        if (row_any == nil || typeOf(row_any) != "map") {
+            return (out,
+                    sqliteError(ERR_PARSE,
+                                "sqlite row must be map",
+                                "sqliteDecodeRows.rowType",
+                                {
+                                    "index": i,
+                                    "valueType": typeOf(row_any)
+                                } as any));
+        }
+        push(out, row_any as map<string, any>);
+        i = i + 1;
+    }
+    return (out, nil);
+}
+
+func sqliteQueryAll(db: SqliteDb, sql: string): (array<map<string, any>>, Error?) {
+    var out: array<map<string, any>> = [];
+    if (sql == "") {
+        return (out,
+                sqliteError(ERR_INVALID_ARGUMENT,
+                            "sql must not be empty",
+                            "sqliteQueryAll.sql",
+                            sql));
+    }
+
+    var queried = sqliteQuery(db.id, sql);
+    if (queried.1 != nil) {
+        return (out,
+                sqliteWrapError(queried.1,
+                                "sqliteQueryAll",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path,
+                                    "sql": sql
+                                } as any));
+    }
+
+    return sqliteDecodeRows(queried.0 as any);
+}
+
+func sqliteQueryOne(db: SqliteDb, sql: string): (map<string, any>?, Error?) {
+    var all = sqliteQueryAll(db, sql);
+    if (all.1 != nil) {
+        return (nil, all.1);
+    }
+    if (len(all.0) == 0) {
+        return (nil, nil);
+    }
+    return (all.0[0], nil);
+}
+
+func sqlitePrepareQuery(db: SqliteDb, sql: string): (SqliteStatement, Error?) {
+    var empty: SqliteStatement = sqliteDefaultStatement();
+    if (sql == "") {
+        return (empty,
+                sqliteError(ERR_INVALID_ARGUMENT,
+                            "sql must not be empty",
+                            "sqlitePrepareQuery.sql",
+                            sql));
+    }
+
+    var prepared = sqlitePrepare(db.id, sql);
+    if (prepared.1 != nil) {
+        return (empty,
+                sqliteWrapError(prepared.1,
+                                "sqlitePrepareQuery",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path,
+                                    "sql": sql
+                                } as any));
+    }
+
+    var stmt: SqliteStatement = {
+        id: prepared.0 as int,
+        db: db
+    };
+    return (stmt, nil);
+}
+
+func sqliteBindIntParam(stmt: SqliteStatement, index: int, value: int): Error? {
+    var bound = sqliteBindInt(stmt.id, index, value);
+    if (bound.1 != nil) {
+        return sqliteWrapError(bound.1,
+                               "sqliteBindIntParam",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id,
+                                   "index": index
+                               } as any);
+    }
+    if (!bound.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteBindInt returned false",
+                           "sqliteBindIntParam",
+                           { "statementId": stmt.id, "index": index } as any);
+    }
+    return nil;
+}
+
+func sqliteBindDoubleParam(stmt: SqliteStatement, index: int, value: any): Error? {
+    var bound = sqliteBindDouble(stmt.id, index, value);
+    if (bound.1 != nil) {
+        return sqliteWrapError(bound.1,
+                               "sqliteBindDoubleParam",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id,
+                                   "index": index
+                               } as any);
+    }
+    if (!bound.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteBindDouble returned false",
+                           "sqliteBindDoubleParam",
+                           { "statementId": stmt.id, "index": index } as any);
+    }
+    return nil;
+}
+
+func sqliteBindStringParam(stmt: SqliteStatement, index: int, value: string): Error? {
+    var bound = sqliteBindString(stmt.id, index, value);
+    if (bound.1 != nil) {
+        return sqliteWrapError(bound.1,
+                               "sqliteBindStringParam",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id,
+                                   "index": index
+                               } as any);
+    }
+    if (!bound.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteBindString returned false",
+                           "sqliteBindStringParam",
+                           { "statementId": stmt.id, "index": index } as any);
+    }
+    return nil;
+}
+
+func sqliteBindBytesParam(stmt: SqliteStatement, index: int, value: bytes): Error? {
+    var bound = sqliteBindBytes(stmt.id, index, value);
+    if (bound.1 != nil) {
+        return sqliteWrapError(bound.1,
+                               "sqliteBindBytesParam",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id,
+                                   "index": index
+                               } as any);
+    }
+    if (!bound.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteBindBytes returned false",
+                           "sqliteBindBytesParam",
+                           { "statementId": stmt.id, "index": index } as any);
+    }
+    return nil;
+}
+
+func sqliteBindNullParam(stmt: SqliteStatement, index: int): Error? {
+    var bound = sqliteBindNull(stmt.id, index);
+    if (bound.1 != nil) {
+        return sqliteWrapError(bound.1,
+                               "sqliteBindNullParam",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id,
+                                   "index": index
+                               } as any);
+    }
+    if (!bound.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteBindNull returned false",
+                           "sqliteBindNullParam",
+                           { "statementId": stmt.id, "index": index } as any);
+    }
+    return nil;
+}
+
+func sqliteResetStmt(stmt: SqliteStatement): Error? {
+    var reset = sqliteReset(stmt.id);
+    if (reset.1 != nil) {
+        return sqliteWrapError(reset.1,
+                               "sqliteResetStmt",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id
+                               } as any);
+    }
+    if (!reset.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteReset returned false",
+                           "sqliteResetStmt",
+                           { "statementId": stmt.id } as any);
+    }
+    return nil;
+}
+
+func sqliteClearStmtBindings(stmt: SqliteStatement): Error? {
+    var cleared = sqliteClearBindings(stmt.id);
+    if (cleared.1 != nil) {
+        return sqliteWrapError(cleared.1,
+                               "sqliteClearStmtBindings",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id
+                               } as any);
+    }
+    if (!cleared.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteClearBindings returned false",
+                           "sqliteClearStmtBindings",
+                           { "statementId": stmt.id } as any);
+    }
+    return nil;
+}
+
+func sqliteChangesCount(db: SqliteDb): (int, Error?) {
+    var changed = sqliteChanges(db.id);
+    if (changed.1 != nil) {
+        return (0,
+                sqliteWrapError(changed.1,
+                                "sqliteChangesCount",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path
+                                } as any));
+    }
+    return (changed.0 as int, nil);
+}
+
+func sqliteLastInsertId(db: SqliteDb): (int, Error?) {
+    var last = sqliteLastInsertRowId(db.id);
+    if (last.1 != nil) {
+        return (0,
+                sqliteWrapError(last.1,
+                                "sqliteLastInsertId",
+                                {
+                                    "dbId": db.id,
+                                    "path": db.path
+                                } as any));
+    }
+    return (last.0 as int, nil);
+}
+
+func sqliteBindParam(stmt: SqliteStatement, index: int, value: any): Error? {
+    if (index <= 0) {
+        return sqliteError(ERR_INVALID_ARGUMENT,
+                           "parameter index must be >= 1",
+                           "sqliteBindParam.index",
+                           index as any);
+    }
+
+    if (value == nil) {
+        return sqliteBindNullParam(stmt, index);
+    }
+
+    var value_type: string = typeOf(value);
+    if (value_type == "nil") {
+        return sqliteBindNullParam(stmt, index);
+    }
+    if (value_type == "int") {
+        return sqliteBindIntParam(stmt, index, value as int);
+    }
+    if (value_type == "bool") {
+        var as_int: int = 0;
+        if (value as bool) {
+            as_int = 1;
+        }
+        return sqliteBindIntParam(stmt, index, as_int);
+    }
+    if (value_type == "double") {
+        return sqliteBindDoubleParam(stmt, index, value);
+    }
+    if (value_type == "string") {
+        return sqliteBindStringParam(stmt, index, value as string);
+    }
+    if (value_type == "bytes") {
+        return sqliteBindBytesParam(stmt, index, value as bytes);
+    }
+
+    return sqliteError(ERR_INVALID_ARGUMENT,
+                       "unsupported sqlite parameter type",
+                       "sqliteBindParam.type",
+                       {
+                           "index": index,
+                           "valueType": value_type
+                       } as any);
+}
+
+func sqliteBindParams(stmt: SqliteStatement, params: array<any>): Error? {
+    var clear_err = sqliteClearStmtBindings(stmt);
+    if (clear_err != nil) {
+        return sqliteWrapError(clear_err,
+                               "sqliteBindParams.clear",
+                               { "statementId": stmt.id } as any);
+    }
+
+    var i: int = 0;
+    while (i < len(params)) {
+        var bind_err = sqliteBindParam(stmt, i + 1, params[i]);
+        if (bind_err != nil) {
+            return sqliteWrapError(bind_err,
+                                   "sqliteBindParams.bind",
+                                   {
+                                       "statementId": stmt.id,
+                                       "index": i + 1
+                                   } as any);
+        }
+        i = i + 1;
+    }
+    return nil;
+}
+
+func sqliteExecPrepared(stmt: SqliteStatement, params: array<any>): Error? {
+    var reset_err = sqliteResetStmt(stmt);
+    if (reset_err != nil) {
+        return sqliteWrapError(reset_err,
+                               "sqliteExecPrepared.reset",
+                               { "statementId": stmt.id } as any);
+    }
+
+    var bind_err = sqliteBindParams(stmt, params);
+    if (bind_err != nil) {
+        return sqliteWrapError(bind_err,
+                               "sqliteExecPrepared.bind",
+                               { "statementId": stmt.id } as any);
+    }
+
+    var stepped = sqliteStepRow(stmt);
+    if (stepped.1 != nil) {
+        return sqliteWrapError(stepped.1,
+                               "sqliteExecPrepared.step",
+                               { "statementId": stmt.id } as any);
+    }
+    if (stepped.0 != nil) {
+        return sqliteError(ERR_PARSE,
+                           "sqliteExecPrepared expected no row result",
+                           "sqliteExecPrepared.stepResult",
+                           { "statementId": stmt.id } as any);
+    }
+    return nil;
+}
+
+func sqliteExecPreparedMany(stmt: SqliteStatement, rows: array<array<any>>): (int, Error?) {
+    var count: int = 0;
+    var i: int = 0;
+    while (i < len(rows)) {
+        var exec_err = sqliteExecPrepared(stmt, rows[i]);
+        if (exec_err != nil) {
+            return (count,
+                    sqliteWrapError(exec_err,
+                                    "sqliteExecPreparedMany.exec",
+                                    {
+                                        "statementId": stmt.id,
+                                        "index": i
+                                    } as any));
+        }
+        count = count + 1;
+        i = i + 1;
+    }
+    return (count, nil);
+}
+
+func sqliteQueryPreparedAll(stmt: SqliteStatement, params: array<any>): (array<map<string, any>>, Error?) {
+    var out: array<map<string, any>> = [];
+
+    var reset_err = sqliteResetStmt(stmt);
+    if (reset_err != nil) {
+        return (out,
+                sqliteWrapError(reset_err,
+                                "sqliteQueryPreparedAll.reset",
+                                { "statementId": stmt.id } as any));
+    }
+
+    var bind_err = sqliteBindParams(stmt, params);
+    if (bind_err != nil) {
+        return (out,
+                sqliteWrapError(bind_err,
+                                "sqliteQueryPreparedAll.bind",
+                                { "statementId": stmt.id } as any));
+    }
+
+    while (true) {
+        var stepped = sqliteStepRow(stmt);
+        if (stepped.1 != nil) {
+            return (out,
+                    sqliteWrapError(stepped.1,
+                                    "sqliteQueryPreparedAll.step",
+                                    { "statementId": stmt.id } as any));
+        }
+        if (stepped.0 == nil) {
+            break;
+        }
+        push(out, stepped.0 as map<string, any>);
+    }
+
+    return (out, nil);
+}
+
+func sqliteQueryPreparedOne(stmt: SqliteStatement, params: array<any>): (map<string, any>?, Error?) {
+    var all = sqliteQueryPreparedAll(stmt, params);
+    if (all.1 != nil) {
+        return (nil, all.1);
+    }
+    if (len(all.0) == 0) {
+        return (nil, nil);
+    }
+    return (all.0[0], nil);
+}
+
+func sqliteQueryPreparedAllAs(stmt: SqliteStatement, params: array<any>, schema: any): (array<any>, Error?) {
+    var out: array<any> = [];
+    var rows = sqliteQueryPreparedAll(stmt, params);
+    if (rows.1 != nil) {
+        return (out, rows.1);
+    }
+
+    var i: int = 0;
+    while (i < len(rows.0)) {
+        var decoded = jsonDecode(rows.0[i] as any, schema);
+        if (decoded.1 != nil) {
+            return (out,
+                    sqliteWrapError(decoded.1,
+                                    "sqliteQueryPreparedAllAs.decode",
+                                    {
+                                        "statementId": stmt.id,
+                                        "index": i
+                                    } as any));
+        }
+        push(out, decoded.0);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func sqliteQueryPreparedOneAs(stmt: SqliteStatement, params: array<any>, schema: any): (any, Error?) {
+    var row = sqliteQueryPreparedOne(stmt, params);
+    if (row.1 != nil) {
+        return (nil, row.1);
+    }
+    if (row.0 == nil) {
+        return (nil, nil);
+    }
+
+    var decoded = jsonDecode(row.0 as any, schema);
+    if (decoded.1 != nil) {
+        return (nil,
+                sqliteWrapError(decoded.1,
+                                "sqliteQueryPreparedOneAs.decode",
+                                { "statementId": stmt.id } as any));
+    }
+    return (decoded.0, nil);
+}
+
+func sqliteStepRow(stmt: SqliteStatement): (map<string, any>?, Error?) {
+    var stepped = sqliteStep(stmt.id);
+    if (stepped.1 != nil) {
+        return (nil,
+                sqliteWrapError(stepped.1,
+                                "sqliteStepRow",
+                                {
+                                    "statementId": stmt.id,
+                                    "dbId": stmt.db.id
+                                } as any));
+    }
+    if (stepped.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(stepped.0) != "map") {
+        return (nil,
+                sqliteError(ERR_PARSE,
+                            "sqliteStep row must be map or nil",
+                            "sqliteStepRow.type",
+                            stepped.0));
+    }
+    return (stepped.0 as map<string, any>, nil);
+}
+
+func sqliteFinalizeStmt(stmt: SqliteStatement): Error? {
+    var finalized = sqliteFinalize(stmt.id);
+    if (finalized.1 != nil) {
+        return sqliteWrapError(finalized.1,
+                               "sqliteFinalizeStmt",
+                               {
+                                   "statementId": stmt.id,
+                                   "dbId": stmt.db.id
+                               } as any);
+    }
+    if (!finalized.0) {
+        return sqliteError(ERR_IO,
+                           "sqliteFinalize returned false",
+                           "sqliteFinalizeStmt",
+                           { "statementId": stmt.id } as any);
+    }
+    return nil;
+}
+
+func sqliteQueryAllAs(db: SqliteDb, sql: string, schema: any): (array<any>, Error?) {
+    var out: array<any> = [];
+    var rows = sqliteQueryAll(db, sql);
+    if (rows.1 != nil) {
+        return (out, rows.1);
+    }
+
+    var i: int = 0;
+    while (i < len(rows.0)) {
+        var decoded = jsonDecode(rows.0[i] as any, schema);
+        if (decoded.1 != nil) {
+            return (out,
+                    sqliteWrapError(decoded.1,
+                                    "sqliteQueryAllAs.decode",
+                                    {
+                                        "index": i,
+                                        "sql": sql
+                                    } as any));
+        }
+        push(out, decoded.0);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func sqliteQueryOneAs(db: SqliteDb, sql: string, schema: any): (any, Error?) {
+    var row = sqliteQueryOne(db, sql);
+    if (row.1 != nil) {
+        return (nil, row.1);
+    }
+    if (row.0 == nil) {
+        return (nil, nil);
+    }
+
+    var decoded = jsonDecode(row.0 as any, schema);
+    if (decoded.1 != nil) {
+        return (nil,
+                sqliteWrapError(decoded.1,
+                                "sqliteQueryOneAs.decode",
+                                { "sql": sql } as any));
+    }
+    return (decoded.0, nil);
+}

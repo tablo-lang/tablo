@@ -1,0 +1,36 @@
+func main() {
+    // int bitwise ops
+    println(5 & 3);
+    println(5 | 3);
+    println(5 ^ 3);
+    println(~0);
+    println(~1);
+    println(-1 & 3);
+    println(-2 | 1);
+    println(-2 ^ 1);
+    println((-1 ^ -1));
+
+    // Precedence: bitwise before comparisons
+    println(5 & 1 == 1);
+    println(5 | 0 == 5);
+    println(5 ^ 0 == 5);
+
+    // bigint bitwise ops
+    var a: bigint = 0x123456789abcdef0n;
+    var b: bigint = 0xffff0000ffff0000n;
+    println(a & b);
+    println(a | b);
+    println(a ^ b);
+
+    // bigint negative semantics (two's complement, infinite width)
+    println((-1n) & 3n);
+    println((-1n) | 0n);
+    println(~0n);
+    println(~(-1n));
+    println((-2n) ^ 1n);
+
+    // mixed int/bigint (promotes to bigint)
+    println(5 & 3n);
+    println(5n | 2);
+}
+

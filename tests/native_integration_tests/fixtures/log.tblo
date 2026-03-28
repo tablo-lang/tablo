@@ -1,0 +1,227 @@
+// Structured logging helpers on top of the logJson builtin.
+// Provides level filtering and contextual field merging.
+
+record Logger {
+    minLevel: string,
+    fields: map<string, any>
+};
+
+var LOG_UPPER_ASCII: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+var LOG_LOWER_ASCII: string = "abcdefghijklmnopqrstuvwxyz";
+
+func logStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func logModuleError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return logStdError(code, message, data);
+}
+
+func logLowerAscii(input: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        var idx: int = find(LOG_UPPER_ASCII, ch);
+        if (idx >= 0) {
+            out = out + substring(LOG_LOWER_ASCII, idx, 1);
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func logLevelRank(level: string): int {
+    if (level == "debug") {
+        return 10;
+    }
+    if (level == "info") {
+        return 20;
+    }
+    if (level == "warn") {
+        return 30;
+    }
+    if (level == "error") {
+        return 40;
+    }
+    return -1;
+}
+
+func logNormalizeLevel(level: string): (string, Error?) {
+    var normalized: string = logLowerAscii(trim(level));
+    if (logLevelRank(normalized) < 0) {
+        return ("",
+                logModuleError(ERR_INVALID_ARGUMENT,
+                               "invalid log level; expected debug/info/warn/error",
+                               "log.level",
+                               level));
+    }
+    return (normalized, nil);
+}
+
+func logCloneFields(fields: map<string, any>): map<string, any> {
+    var out: map<string, any> = {};
+    foreach (key_any in keys(fields)) {
+        if (key_any != nil && typeOf(key_any) == "string") {
+            var key: string = key_any as string;
+            mapSetString(out, key, mapGetString(fields, key));
+        }
+    }
+    return out;
+}
+
+func logMergeFields(base: map<string, any>, extra: map<string, any>): map<string, any> {
+    var out: map<string, any> = logCloneFields(base);
+    foreach (key_any in keys(extra)) {
+        if (key_any != nil && typeOf(key_any) == "string") {
+            var key: string = key_any as string;
+            mapSetString(out, key, mapGetString(extra, key));
+        }
+    }
+    return out;
+}
+
+func logDefault(): Logger {
+    var logger: Logger = {
+        minLevel: "info",
+        fields: {}
+    };
+    return logger;
+}
+
+func logNew(minLevel: string): (Logger, Error?) {
+    var normalized = logNormalizeLevel(minLevel);
+    if (normalized.1 != nil) {
+        return (logDefault(), normalized.1);
+    }
+
+    var logger: Logger = {
+        minLevel: normalized.0,
+        fields: {}
+    };
+    return (logger, nil);
+}
+
+func logWithMinLevel(logger: Logger, minLevel: string): (Logger, Error?) {
+    var normalized = logNormalizeLevel(minLevel);
+    if (normalized.1 != nil) {
+        return (logger, normalized.1);
+    }
+
+    var next: Logger = {
+        minLevel: normalized.0,
+        fields: logCloneFields(logger.fields)
+    };
+    return (next, nil);
+}
+
+func logWithField(logger: Logger, key: string, value: any): (Logger, Error?) {
+    var field_key: string = trim(key);
+    if (field_key == "") {
+        return (logger,
+                logModuleError(ERR_INVALID_ARGUMENT,
+                               "log field key cannot be empty",
+                               "log.field.key",
+                               key));
+    }
+
+    var next_fields: map<string, any> = logCloneFields(logger.fields);
+    mapSetString(next_fields, field_key, value);
+
+    var next: Logger = {
+        minLevel: logger.minLevel,
+        fields: next_fields
+    };
+    return (next, nil);
+}
+
+func logWithFields(logger: Logger, fields: map<string, any>): Logger {
+    var next: Logger = {
+        minLevel: logger.minLevel,
+        fields: logMergeFields(logger.fields, fields)
+    };
+    return next;
+}
+
+func logWouldEmit(logger: Logger, level: string): (bool, Error?) {
+    var min_level = logNormalizeLevel(logger.minLevel);
+    if (min_level.1 != nil) {
+        return (false,
+                logModuleError(ERR_INVALID_ARGUMENT,
+                               "logger minLevel is invalid",
+                               "log.logger.minLevel",
+                               logger.minLevel));
+    }
+
+    var event_level = logNormalizeLevel(level);
+    if (event_level.1 != nil) {
+        return (false, event_level.1);
+    }
+
+    return (logLevelRank(event_level.0) >= logLevelRank(min_level.0), nil);
+}
+
+func logEmit(logger: Logger, level: string, message: string, fields: map<string, any>): (bool, Error?) {
+    if (trim(message) == "") {
+        return (false,
+                logModuleError(ERR_INVALID_ARGUMENT,
+                               "log message cannot be empty",
+                               "log.emit.message",
+                               message));
+    }
+
+    var event_level = logNormalizeLevel(level);
+    if (event_level.1 != nil) {
+        return (false, event_level.1);
+    }
+
+    var should_emit = logWouldEmit(logger, event_level.0);
+    if (should_emit.1 != nil) {
+        return (false, should_emit.1);
+    }
+    if (!should_emit.0) {
+        return (false, nil);
+    }
+
+    var payload: map<string, any> = logMergeFields(logger.fields, fields);
+    var emitted = logJson(event_level.0, message, payload);
+    if (emitted.1 != nil) {
+        var detail: map<string, any> = {
+            "level": event_level.0,
+            "message": message
+        };
+        if (emitted.1.data != nil) {
+            mapSetString(detail, "cause", emitted.1.data);
+        }
+        return (false,
+                logModuleError(emitted.1.code,
+                               "logEmit failed: " + emitted.1.message,
+                               "log.emit",
+                               detail));
+    }
+
+    return (emitted.0, nil);
+}
+
+func logDebug(logger: Logger, message: string, fields: map<string, any>): (bool, Error?) {
+    return logEmit(logger, "debug", message, fields);
+}
+
+func logInfo(logger: Logger, message: string, fields: map<string, any>): (bool, Error?) {
+    return logEmit(logger, "info", message, fields);
+}
+
+func logWarn(logger: Logger, message: string, fields: map<string, any>): (bool, Error?) {
+    return logEmit(logger, "warn", message, fields);
+}
+
+func logError(logger: Logger, message: string, fields: map<string, any>): (bool, Error?) {
+    return logEmit(logger, "error", message, fields);
+}

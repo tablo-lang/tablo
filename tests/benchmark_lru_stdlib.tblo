@@ -1,0 +1,233 @@
+// LRU stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_lru_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_lru_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/lru.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchLruSetGetHot(iters: int): void {
+    var opened = lruNew(4096);
+    if (opened.1 != nil) {
+        println("perf lruSetGetHot: setup failed");
+        return;
+    }
+
+    var store: LruStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key_w: string = "warm-" + str(w % 1024);
+        var set_w = lruSet(store, key_w, w as any);
+        store = set_w.0;
+        if (set_w.2 != nil) {
+            println("perf lruSetGetHot: warm set failed");
+            return;
+        }
+
+        var get_w = lruGet(store, key_w);
+        store = get_w.0;
+        if (get_w.3 != nil || !get_w.2) {
+            println("perf lruSetGetHot: warm get failed");
+            return;
+        }
+        sink = sink + (get_w.1 as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key_i: string = "id-" + str(i % 2048);
+        var set_i = lruSet(store, key_i, i as any);
+        store = set_i.0;
+        if (set_i.2 != nil) {
+            println("perf lruSetGetHot: set failed");
+            return;
+        }
+
+        var get_i = lruGet(store, key_i);
+        store = get_i.0;
+        if (get_i.3 != nil || !get_i.2) {
+            println("perf lruSetGetHot: get failed");
+            return;
+        }
+        sink = sink + (get_i.1 as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf lruSetGetHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchLruEvictChurn(iters: int): void {
+    var opened = lruNew(512);
+    if (opened.1 != nil) {
+        println("perf lruEvictChurn: setup failed");
+        return;
+    }
+    var store: LruStore = opened.0;
+
+    var seed_hot = lruSet(store, "hot", 0 as any);
+    store = seed_hot.0;
+    if (seed_hot.2 != nil) {
+        println("perf lruEvictChurn: hot seed failed");
+        return;
+    }
+
+    var p: int = 0;
+    while (p < 511) {
+        var seed_cold = lruSet(store, "cold-" + str(p), p as any);
+        store = seed_cold.0;
+        if (seed_cold.2 != nil) {
+            println("perf lruEvictChurn: cold seed failed");
+            return;
+        }
+        p = p + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var hot = lruGet(store, "hot");
+        store = hot.0;
+        if (hot.3 != nil || !hot.2) {
+            println("perf lruEvictChurn: warm get failed");
+            return;
+        }
+        sink = sink + (hot.1 as int);
+
+        var set_w = lruSet(store, "evict-w-" + str(w), w as any);
+        store = set_w.0;
+        if (set_w.2 != nil) {
+            println("perf lruEvictChurn: warm set failed");
+            return;
+        }
+        if (set_w.1.evicted) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var hot_i = lruGet(store, "hot");
+        store = hot_i.0;
+        if (hot_i.3 != nil || !hot_i.2) {
+            println("perf lruEvictChurn: get failed");
+            return;
+        }
+        sink = sink + (hot_i.1 as int);
+
+        var set_i = lruSet(store, "evict-i-" + str(i), i as any);
+        store = set_i.0;
+        if (set_i.2 != nil) {
+            println("perf lruEvictChurn: set failed");
+            return;
+        }
+        if (set_i.1.evicted) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf lruEvictChurn", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchLruOrderSnapshot(iters: int): void {
+    var opened = lruNew(2048);
+    if (opened.1 != nil) {
+        println("perf lruOrderSnapshot: setup failed");
+        return;
+    }
+    var store: LruStore = opened.0;
+
+    var p: int = 0;
+    while (p < 2048) {
+        store = lruSet(store, "k-" + str(p), p as any).0;
+        p = p + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var get_w = lruGet(store, "k-" + str(w % 2048));
+        store = get_w.0;
+        if (get_w.3 != nil || !get_w.2) {
+            println("perf lruOrderSnapshot: warm get failed");
+            return;
+        }
+
+        sink = sink + len(lruKeysLruToMru(store));
+        sink = sink + len(lruKeysMruToLru(store));
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var get_i = lruGet(store, "k-" + str(i % 2048));
+        store = get_i.0;
+        if (get_i.3 != nil || !get_i.2) {
+            println("perf lruOrderSnapshot: get failed");
+            return;
+        }
+
+        sink = sink + len(lruKeysLruToMru(store));
+        sink = sink + len(lruKeysMruToLru(store));
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf lruOrderSnapshot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang LRU Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchLruSetGetHot(80000 * scale);
+    benchLruEvictChurn(40000 * scale);
+    benchLruOrderSnapshot(2500 * scale);
+
+    println("LRU stdlib benchmark complete!");
+}

@@ -1,0 +1,22 @@
+record Box[T] { value: T };
+
+interface Formatter {
+    format(): string;
+};
+
+func boxFormat[T](b: Box[T]): string {
+    return "box";
+}
+
+impl Formatter as Box[T] {
+    format = boxFormat;
+};
+
+func render(f: Formatter): string {
+    return f.format();
+}
+
+func main(): void {
+    var b: Box[int] = { value: 7 };
+    println(render(b));
+}

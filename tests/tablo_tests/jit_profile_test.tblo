@@ -1,0 +1,448 @@
+func hotLeaf(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n + 1;
+}
+
+func hotFallback(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n * 2;
+}
+
+func hotStub(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return ~n;
+}
+
+func hotSub(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n - 1;
+}
+
+func hotDiv(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n / 2;
+}
+
+func hotMod(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n % 2;
+}
+
+func hotAnd(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n & 3;
+}
+
+func hotOr(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n | 1;
+}
+
+func hotXor(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n ^ 1;
+}
+
+func hotDynamic(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    return n & 7;
+}
+
+func invokeDynamic(fn: any, n: int): int {
+    return fn(n);
+}
+
+func hotAdd2(a: int, b: int): int {
+    return a + b;
+}
+
+func hotSub2(a: int, b: int): int {
+    return a - b;
+}
+
+func hotMul2(a: int, b: int): int {
+    return a * b;
+}
+
+func hotAnd2(a: int, b: int): int {
+    return a & b;
+}
+
+func hotOr2(a: int, b: int): int {
+    return a | b;
+}
+
+func hotXor2(a: int, b: int): int {
+    return a ^ b;
+}
+
+func hotDynamic2(a: int, b: int): int {
+    return a + b;
+}
+
+func hotLt2(a: int, b: int): bool {
+    return a < b;
+}
+
+func hotLe2(a: int, b: int): bool {
+    return a <= b;
+}
+
+func hotEq2(a: int, b: int): bool {
+    return a == b;
+}
+
+func hotNe2(a: int, b: int): bool {
+    return a != b;
+}
+
+func hotGt2(a: int, b: int): bool {
+    return a > b;
+}
+
+func hotGe2(a: int, b: int): bool {
+    return a >= b;
+}
+
+func hotLtConst(n: int): bool {
+    return n < 2;
+}
+
+func hotLeConst(n: int): bool {
+    return n <= 1;
+}
+
+func hotEqConst(n: int): bool {
+    return n == 1;
+}
+
+func hotNeConst(n: int): bool {
+    return n != 1;
+}
+
+func hotGtConst(n: int): bool {
+    return n > 1;
+}
+
+func hotGeConst(n: int): bool {
+    return n >= 2;
+}
+
+func hotMinConst(n: int): int {
+    if (n < 2) {
+        return n;
+    }
+    return 2;
+}
+
+func hotMaxConst(n: int): int {
+    if (n < 2) {
+        return 2;
+    }
+    return n;
+}
+
+func guardedMinConst(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    if (n < 2) {
+        return n;
+    }
+    return 2;
+}
+
+func guardedMaxConst(n: int): int {
+    if (n < 0) {
+        return n;
+    }
+    if (n < 2) {
+        return 2;
+    }
+    return n;
+}
+
+func guardedLtBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return false;
+    }
+    return a < b;
+}
+
+func guardedLeBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return false;
+    }
+    return a <= b;
+}
+
+func guardedEqBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return true;
+    }
+    return a == b;
+}
+
+func guardedNeBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return true;
+    }
+    return a != b;
+}
+
+func guardedGtBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return false;
+    }
+    return a > b;
+}
+
+func guardedGeBool2(a: int, b: int): bool {
+    if (a < 0) {
+        return true;
+    }
+    return a >= b;
+}
+
+func hotMinLt2(a: int, b: int): int {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+func hotMaxLt2(a: int, b: int): int {
+    if (a < b) {
+        return b;
+    }
+    return a;
+}
+
+func hotMinLe2(a: int, b: int): int {
+    if (a <= b) {
+        return a;
+    }
+    return b;
+}
+
+func hotMaxGt2(a: int, b: int): int {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+func hotMaxGe2(a: int, b: int): int {
+    if (a >= b) {
+        return a;
+    }
+    return b;
+}
+
+func guardedMinLt2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+func guardedMaxLt2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    if (a < b) {
+        return b;
+    }
+    return a;
+}
+
+func guardedMinLe2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    if (a <= b) {
+        return a;
+    }
+    return b;
+}
+
+func guardedMaxGt2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+func guardedMaxGe2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    if (a >= b) {
+        return a;
+    }
+    return b;
+}
+
+func invokeDynamic2(fn: any, a: int, b: int): int {
+    return fn(a, b);
+}
+
+func invokeDynamicBool2(fn: any, a: int, b: int): bool {
+    return fn(a, b);
+}
+
+func invokeDynamicBool1(fn: any, n: int): bool {
+    return fn(n);
+}
+
+func guardedAdd2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a + b;
+}
+
+func guardedSub2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a - b;
+}
+
+func guardedMul2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a * b;
+}
+
+func guardedAnd2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a & b;
+}
+
+func guardedOr2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a | b;
+}
+
+func guardedXor2(a: int, b: int): int {
+    if (a < 0) {
+        return a;
+    }
+    return a ^ b;
+}
+
+func warmCaller(limit: int): int {
+    var total: int = 0;
+    var i: int = 0;
+    while (i < limit) {
+        total = total + hotLeaf(i);
+        total = total + hotFallback(i);
+        total = total + hotStub(i);
+        total = total + hotSub(i);
+        total = total + hotDiv(i);
+        total = total + hotMod(i);
+        total = total + hotAnd(i);
+        total = total + hotOr(i);
+        total = total + hotXor(i);
+        total = total + invokeDynamic(hotDynamic, i);
+        total = total + invokeDynamic2(hotAdd2, i, 1);
+        total = total + invokeDynamic2(hotSub2, i, 1);
+        total = total + invokeDynamic2(hotMul2, i, 2);
+        total = total + invokeDynamic2(hotAnd2, i, 3);
+        total = total + invokeDynamic2(hotOr2, i, 1);
+        total = total + invokeDynamic2(hotXor2, i, 1);
+        total = total + invokeDynamic2(hotDynamic2, i, 2);
+        invokeDynamicBool2(hotLt2, i, 2);
+        invokeDynamicBool2(hotLe2, i, 1);
+        invokeDynamicBool2(hotEq2, i, 1);
+        invokeDynamicBool2(hotNe2, i, 1);
+        invokeDynamicBool2(hotGt2, i, 1);
+        invokeDynamicBool2(hotGe2, i, 2);
+        if (invokeDynamicBool1(hotLtConst, i)) { total = total + 1; }
+        if (invokeDynamicBool1(hotLeConst, i)) { total = total + 1; }
+        if (invokeDynamicBool1(hotEqConst, i)) { total = total + 1; }
+        if (invokeDynamicBool1(hotNeConst, i)) { total = total + 1; }
+        if (invokeDynamicBool1(hotGtConst, i)) { total = total + 1; }
+        if (invokeDynamicBool1(hotGeConst, i)) { total = total + 1; }
+        total = total + hotMinConst(i);
+        total = total + hotMaxConst(i);
+        total = total + guardedMinConst(i);
+        total = total + guardedMaxConst(i);
+        invokeDynamicBool2(guardedLtBool2, i, 2);
+        invokeDynamicBool2(guardedLeBool2, i, 2);
+        invokeDynamicBool2(guardedEqBool2, i, 1);
+        invokeDynamicBool2(guardedNeBool2, i, 1);
+        invokeDynamicBool2(guardedGtBool2, i, 1);
+        invokeDynamicBool2(guardedGeBool2, i, 2);
+        total = total + invokeDynamic2(hotMinLt2, i, 2);
+        total = total + invokeDynamic2(hotMaxLt2, i, 2);
+        total = total + invokeDynamic2(hotMinLe2, i, 1);
+        total = total + invokeDynamic2(hotMaxGt2, i, 1);
+        total = total + invokeDynamic2(hotMaxGe2, i, 2);
+        total = total + invokeDynamic2(guardedMinLt2, i, 2);
+        total = total + invokeDynamic2(guardedMaxLt2, i, 2);
+        total = total + invokeDynamic2(guardedMinLe2, i, 1);
+        total = total + invokeDynamic2(guardedMaxGt2, i, 1);
+        total = total + invokeDynamic2(guardedMaxGe2, i, 2);
+        total = total + invokeDynamic2(guardedAdd2, i, 1);
+        total = total + invokeDynamic2(guardedSub2, i, 1);
+        total = total + invokeDynamic2(guardedMul2, i, 2);
+        total = total + invokeDynamic2(guardedAnd2, i, 3);
+        total = total + invokeDynamic2(guardedOr2, i, 1);
+        total = total + invokeDynamic2(guardedXor2, i, 1);
+        i = i + 1;
+    }
+    return total;
+}
+
+async func asyncLeaf(): int {
+    return 7;
+}
+
+func main(): void {
+    println(warmCaller(3));
+    var guardedBoolScore: int = 0;
+    if (guardedLtBool2(-1, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    if (guardedLeBool2(-1, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    if (guardedEqBool2(-1, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    if (guardedNeBool2(-1, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    if (guardedGtBool2(3, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    if (guardedGeBool2(-1, 2)) { guardedBoolScore = guardedBoolScore + 1; }
+    println(guardedBoolScore);
+    var first: Future[int] = asyncLeaf();
+    var second: Future[int] = asyncLeaf();
+    println(futureGet(first));
+    println(futureGet(second));
+}

@@ -1,0 +1,146 @@
+// General-purpose collection helpers for arrays/maps.
+// Focused on common backend and CLI data-shaping operations.
+
+func collectionsStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func collectionsError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return collectionsStdError(code, message, data);
+}
+
+func collectionsUniqueStrings(items: array<string>): array<string> {
+    var seen: map<string, bool> = {};
+    var out: array<string> = [];
+
+    foreach (item in items) {
+        if (!mapHasString(seen, item)) {
+            mapSetString(seen, item, true);
+            push(out, item);
+        }
+    }
+
+    return out;
+}
+
+func collectionsCountStrings(items: array<string>): map<string, int> {
+    var counts: map<string, int> = {};
+
+    foreach (item in items) {
+        var existing_any: any = mapGetString(counts, item);
+        if (existing_any == nil || typeOf(existing_any) != "int") {
+            mapSetString(counts, item, 1);
+        } else {
+            mapSetString(counts, item, (existing_any as int) + 1);
+        }
+    }
+
+    return counts;
+}
+
+func collectionsMostFrequentString(items: array<string>): (string?, int) {
+    if (len(items) == 0) {
+        return (nil, 0);
+    }
+
+    var counts: map<string, int> = collectionsCountStrings(items);
+    var best_key: string = "";
+    var best_count: int = 0;
+    var has_best: bool = false;
+
+    foreach (item in items) {
+        var count_any: any = mapGetString(counts, item);
+        if (count_any == nil || typeOf(count_any) != "int") {
+            continue;
+        }
+
+        var count: int = count_any as int;
+        if (!has_best || count > best_count) {
+            best_key = item;
+            best_count = count;
+            has_best = true;
+        }
+    }
+
+    if (!has_best) {
+        return (nil, 0);
+    }
+
+    return (best_key, best_count);
+}
+
+func collectionsChunkStrings(items: array<string>, size: int): (array<array<string>>, Error?) {
+    var out: array<array<string>> = [];
+    if (size <= 0) {
+        return (out,
+                collectionsError(ERR_INVALID_ARGUMENT,
+                                 "collectionsChunkStrings: size must be >= 1",
+                                 "collectionsChunkStrings.size",
+                                 size));
+    }
+
+    var i: int = 0;
+    while (i < len(items)) {
+        var chunk: array<string> = [];
+        var j: int = 0;
+        while (j < size && i < len(items)) {
+            push(chunk, items[i]);
+            i = i + 1;
+            j = j + 1;
+        }
+        push(out, chunk);
+    }
+
+    return (out, nil);
+}
+
+func collectionsIntersectUniqueStrings(left: array<string>, right: array<string>): array<string> {
+    var right_set: map<string, bool> = {};
+    foreach (item in right) {
+        mapSetString(right_set, item, true);
+    }
+
+    var seen: map<string, bool> = {};
+    var out: array<string> = [];
+    foreach (item in left) {
+        if (mapHasString(right_set, item) && !mapHasString(seen, item)) {
+            mapSetString(seen, item, true);
+            push(out, item);
+        }
+    }
+
+    return out;
+}
+
+func collectionsDifferenceUniqueStrings(left: array<string>, right: array<string>): array<string> {
+    var right_set: map<string, bool> = {};
+    foreach (item in right) {
+        mapSetString(right_set, item, true);
+    }
+
+    var seen: map<string, bool> = {};
+    var out: array<string> = [];
+    foreach (item in left) {
+        if (!mapHasString(right_set, item) && !mapHasString(seen, item)) {
+            mapSetString(seen, item, true);
+            push(out, item);
+        }
+    }
+
+    return out;
+}
+
+func collectionsJoinNonEmpty(items: array<string>, sep: string): string {
+    var out: array<string> = [];
+    foreach (item in items) {
+        if (item != "") {
+            push(out, item);
+        }
+    }
+    return join(out, sep);
+}

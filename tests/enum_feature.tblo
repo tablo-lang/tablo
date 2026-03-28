@@ -1,0 +1,12 @@
+enum Status {
+    Ok = 200,
+    NotFound = 404,
+    Retry
+};
+
+func main(): void {
+    var ok: int = Status.Ok;
+    var nf: int = Status.NotFound;
+    var retry: int = Status.Retry;
+    println("sum=" + str(ok + nf + retry));
+}

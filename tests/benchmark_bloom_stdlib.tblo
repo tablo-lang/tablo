@@ -1,0 +1,212 @@
+// Bloom stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_bloom_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_bloom_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/bloom.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchBloomAddMaybeHot(iters: int): void {
+    var opened = bloomNew(350000, 6);
+    if (opened.1 != nil) {
+        println("perf bloomAddMaybeHot: setup failed");
+        return;
+    }
+    var store: BloomStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key_w: string = "warm-" + str(w % 50000);
+
+        var add_w = bloomAdd(store, key_w as any);
+        store = add_w.0;
+        if (add_w.2 != nil) {
+            println("perf bloomAddMaybeHot: warm add failed");
+            return;
+        }
+
+        var has_w = bloomMaybeHas(store, key_w as any);
+        if (has_w.1 != nil || !has_w.0) {
+            println("perf bloomAddMaybeHot: warm maybeHas failed");
+            return;
+        }
+
+        if (add_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key_i: string = "id-" + str(i);
+
+        var add_i = bloomAdd(store, key_i as any);
+        store = add_i.0;
+        if (add_i.2 != nil) {
+            println("perf bloomAddMaybeHot: add failed");
+            return;
+        }
+
+        var has_i = bloomMaybeHas(store, key_i as any);
+        if (has_i.1 != nil || !has_i.0) {
+            println("perf bloomAddMaybeHot: maybeHas failed");
+            return;
+        }
+
+        if (add_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bloomAddMaybeHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchBloomMaybeHasHot(iters: int): void {
+    var opened = bloomNew(250000, 6);
+    if (opened.1 != nil) {
+        println("perf bloomMaybeHasHot: setup failed");
+        return;
+    }
+    var store: BloomStore = opened.0;
+
+    var pre: int = 0;
+    while (pre < 60000) {
+        var key_pre: string = "pre-" + str(pre);
+        var add_pre = bloomAdd(store, key_pre as any);
+        store = add_pre.0;
+        if (add_pre.2 != nil) {
+            println("perf bloomMaybeHasHot: preload failed");
+            return;
+        }
+        pre = pre + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var key_w: string = "pre-" + str(w % 60000);
+        var has_w = bloomMaybeHas(store, key_w as any);
+        if (has_w.1 != nil || !has_w.0) {
+            println("perf bloomMaybeHasHot: warm maybeHas failed");
+            return;
+        }
+        sink = sink + 1;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var key_i: string = "pre-" + str(i % 60000);
+        var has_i = bloomMaybeHas(store, key_i as any);
+        if (has_i.1 != nil || !has_i.0) {
+            println("perf bloomMaybeHasHot: maybeHas failed");
+            return;
+        }
+        sink = sink + 1;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bloomMaybeHasHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchBloomUnionStats(iters: int): void {
+    var left_open = bloomNew(220000, 5);
+    var right_open = bloomNew(220000, 5);
+    if (left_open.1 != nil || right_open.1 != nil) {
+        println("perf bloomUnionStats: setup failed");
+        return;
+    }
+
+    var left: BloomStore = left_open.0;
+    var right: BloomStore = right_open.0;
+
+    var p: int = 0;
+    while (p < 30000) {
+        left = bloomAdd(left, ("left-" + str(p)) as any).0;
+        right = bloomAdd(right, ("right-" + str(p)) as any).0;
+        p = p + 1;
+    }
+
+    var sink: int = 0;
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var u_w = bloomUnion(left, right);
+        if (u_w.1 != nil) {
+            println("perf bloomUnionStats: warm union failed");
+            return;
+        }
+        var s_w: BloomStats = bloomStats(u_w.0);
+        sink = sink + s_w.setBitCount;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var u_i = bloomUnion(left, right);
+        if (u_i.1 != nil) {
+            println("perf bloomUnionStats: union failed");
+            return;
+        }
+        var s_i: BloomStats = bloomStats(u_i.0);
+        sink = sink + s_i.setBitCount;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf bloomUnionStats", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Bloom Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchBloomAddMaybeHot(70000 * scale);
+    benchBloomMaybeHasHot(140000 * scale);
+    benchBloomUnionStats(1200 * scale);
+
+    println("Bloom stdlib benchmark complete!");
+}

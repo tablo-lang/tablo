@@ -1,0 +1,111 @@
+import "fixtures/regexp.tblo";
+
+func main(): void {
+    var m1 = regexpIsMatch("hello123", "^hello\\d+$");
+    println(m1.1 == nil);
+    if (m1.1 == nil) println(m1.0);
+
+    var m2 = regexpIsMatch("xhello123", "^hello\\d+$");
+    println(m2.1 == nil);
+    if (m2.1 == nil) println(!m2.0);
+
+    var m3 = regexpIsMatch("Alice", "^[A-Z][a-z]+$");
+    println(m3.1 == nil);
+    if (m3.1 == nil) println(m3.0);
+
+    var m4 = regexpIsMatch("Alice1", "^[^0-9]+$");
+    println(m4.1 == nil);
+    if (m4.1 == nil) println(!m4.0);
+
+    var m5 = regexpIsMatch("A_B 9", "^\\w+\\s\\d$");
+    println(m5.1 == nil);
+    if (m5.1 == nil) println(m5.0);
+
+    var f1 = regexpFindFirst("abc123def", "\\d+");
+    println(f1.1 == nil);
+    if (f1.1 == nil && f1.0 != nil) {
+        var x1: RegexpMatch = f1.0 as RegexpMatch;
+        println(x1.start == 3);
+        println(x1.end == 6);
+        println(x1.text == "123");
+    } else {
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var f2 = regexpFindFirst("abcdef", "\\d+");
+    println(f2.1 == nil);
+    if (f2.1 == nil) println(f2.0 == nil);
+
+    var all = regexpFindAll("a1 b22 c333", "\\d+", 0);
+    println(all.1 == nil);
+    if (all.1 == nil) {
+        println(len(all.0) == 3);
+        if (len(all.0) == 3) {
+            println(all.0[0].text == "1");
+            println(all.0[1].text == "22");
+            println(all.0[2].text == "333");
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    }
+
+    var all_limited = regexpFindAll("a1 b22 c333", "\\d+", 2);
+    println(all_limited.1 == nil);
+    if (all_limited.1 == nil) {
+        println(len(all_limited.0) == 2);
+    }
+
+    var replaced = regexpReplaceAll("a1 b22 c333", "\\d+", "#");
+    println(replaced.1 == nil);
+    if (replaced.1 == nil) println(replaced.0 == "a# b# c#");
+
+    var split1 = regexpSplit("a, b,  c", ",\\s*", 0);
+    println(split1.1 == nil);
+    if (split1.1 == nil) {
+        println(len(split1.0) == 3);
+        if (len(split1.0) == 3) {
+            println(split1.0[0] == "a");
+            println(split1.0[1] == "b");
+            println(split1.0[2] == "c");
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    }
+
+    var split2 = regexpSplit("a1b22c333", "\\d+", 2);
+    println(split2.1 == nil);
+    if (split2.1 == nil) {
+        println(len(split2.0) == 2);
+        if (len(split2.0) == 2) {
+            println(split2.0[0] == "a");
+            println(split2.0[1] == "b22c333");
+        } else {
+            println(false);
+            println(false);
+        }
+    }
+
+    println(regexpQuoteMeta("a+b(c).d?") == "a\\+b\\(c\\)\\.d\\?");
+
+    var bad1 = regexpIsMatch("x", "*x");
+    println(bad1.1 != nil);
+    if (bad1.1 != nil) println(bad1.1.code == ERR_PARSE);
+
+    var bad2 = regexpIsMatch("x", "[abc");
+    println(bad2.1 != nil);
+    if (bad2.1 != nil) println(bad2.1.code == ERR_PARSE);
+
+    var bad3 = regexpFindAll("x", "x", -1);
+    println(bad3.1 != nil);
+    if (bad3.1 != nil) println(bad3.1.code == ERR_INVALID_ARGUMENT);
+
+    var bad4 = regexpSplit("x", "x", -1);
+    println(bad4.1 != nil);
+    if (bad4.1 != nil) println(bad4.1.code == ERR_INVALID_ARGUMENT);
+}

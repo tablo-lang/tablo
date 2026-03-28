@@ -1,0 +1,112 @@
+async func branchBefore(flag: bool, left: Future[int], right: Future[int]): int {
+    var chosen: Future[int] = left;
+    if (!flag) {
+        chosen = right;
+    }
+    var base: int = 10;
+    return base + await chosen;
+}
+
+async func branchAfter(task: Future[int]): int {
+    var value: int = await task;
+    if (value > 5) {
+        return value + 100;
+    }
+    return value + 1;
+}
+
+async func nestedBlock(task: Future[int]): int {
+    var outer: int = 2;
+    {
+        var inner: int = 3;
+        var got: int = await task;
+        outer = outer + inner + got;
+    }
+    return outer;
+}
+
+async func loopAccumulate(first: Future[int], second: Future[int], third: Future[int]): int {
+    var i: int = 0;
+    var total: int = 0;
+    while (i < 3) {
+        var current: int = 0;
+        if (i == 0) {
+            current = await first;
+        } else if (i == 1) {
+            current = await second;
+        } else {
+            current = await third;
+        }
+        total = total + current;
+        i = i + 1;
+    }
+    return total;
+}
+
+async func loopContinue(taskA: Future[int], taskB: Future[int]): int {
+    var i: int = 0;
+    var total: int = 0;
+    while (i < 3) {
+        i = i + 1;
+        if (i == 1) {
+            total = total + await taskA;
+            continue;
+        }
+        if (i == 2) {
+            total = total + 5;
+            continue;
+        }
+        total = total + await taskB;
+    }
+    return total;
+}
+
+func main(): void {
+    var left = futurePending<int>();
+    var right = futurePending<int>();
+    var chooseLeft = branchBefore(true, left, right);
+    println(str(!futureIsReady(chooseLeft)));
+    println(str(futureComplete(left, 7)));
+    println(str(futureGet(chooseLeft)));
+
+    var chooseRight = branchBefore(false, futureResolved(1), right);
+    println(str(!futureIsReady(chooseRight)));
+    println(str(futureComplete(right, 9)));
+    println(str(futureGet(chooseRight)));
+
+    var afterSmall = branchAfter(futureResolved(4));
+    println(str(futureGet(afterSmall)));
+
+    var afterBigPending = futurePending<int>();
+    var afterBig = branchAfter(afterBigPending);
+    println(str(!futureIsReady(afterBig)));
+    println(str(futureComplete(afterBigPending, 8)));
+    println(str(futureGet(afterBig)));
+
+    var nestedPending = futurePending<int>();
+    var nested = nestedBlock(nestedPending);
+    println(str(!futureIsReady(nested)));
+    println(str(futureComplete(nestedPending, 4)));
+    println(str(futureGet(nested)));
+
+    var first = futurePending<int>();
+    var second = futurePending<int>();
+    var third = futurePending<int>();
+    var looped = loopAccumulate(first, second, third);
+    println(str(!futureIsReady(looped)));
+    println(str(futureComplete(first, 2)));
+    println(str(!futureIsReady(looped)));
+    println(str(futureComplete(second, 3)));
+    println(str(!futureIsReady(looped)));
+    println(str(futureComplete(third, 4)));
+    println(str(futureGet(looped)));
+
+    var contA = futurePending<int>();
+    var contB = futurePending<int>();
+    var continued = loopContinue(contA, contB);
+    println(str(!futureIsReady(continued)));
+    println(str(futureComplete(contA, 6)));
+    println(str(!futureIsReady(continued)));
+    println(str(futureComplete(contB, 7)));
+    println(str(futureGet(continued)));
+}

@@ -1,0 +1,379 @@
+// RSA Library for TabloLang
+// Provides key generation, encryption, decryption, signing, and verification
+// Uses secure random and bigint builtins
+
+// ============================================================================
+// Record Types
+// ============================================================================
+
+record RSAPublicKey {
+    n: bigint;
+    e: bigint
+}
+
+record RSAPrivateKey {
+    n: bigint;
+    d: bigint;
+    p: bigint;
+    q: bigint
+}
+
+record RSAKeyPair {
+    public: RSAPublicKey;
+    private: RSAPrivateKey
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// Default public exponent (commonly used value)
+var RSA_DEFAULT_EXPONENT: bigint = 65537n;
+
+// Default number of Miller-Rabin rounds for primality testing
+var RSA_PRIMALITY_ROUNDS: int = 40;
+
+// Best-effort secure random bigint bits.
+// Falls back to non-cryptographic RNG if CSPRNG is unavailable.
+func rsaRandomBigIntBits(bits: int): bigint {
+    var r = secureRandomBigIntBits(bits);
+    if (r.1 != nil) {
+        return randomBigIntBits(bits);
+    }
+    return r.0;
+}
+
+// ============================================================================
+// Prime Generation
+// ============================================================================
+
+// Generate a random prime number with the specified number of bits
+// Uses Miller-Rabin primality test with secure random number generation
+func rsaGeneratePrime(bits: int): bigint {
+    var candidate: bigint = 0n;
+    var found: int = 0;
+
+    while (found == 0) {
+        // Generate random odd number with the correct bit length
+        candidate = rsaRandomBigIntBits(bits);
+
+        // Ensure the high bit is set (to guarantee bit length)
+        var highBit: bigint = powBigInt(2n, bits - 1);
+        if (candidate < highBit) {
+            candidate = candidate + highBit;
+        }
+
+        // Make it odd
+        if (isEvenBigInt(candidate)) {
+            candidate = candidate + 1n;
+        }
+
+        // Check primality using Miller-Rabin
+        if (isProbablePrimeBigInt(candidate, RSA_PRIMALITY_ROUNDS)) {
+            found = 1;
+        }
+    }
+
+    return candidate;
+}
+
+// Generate a random prime that is coprime to e (gcd(p-1, e) = 1)
+func rsaGeneratePrimeForE(bits: int, e: bigint): bigint {
+    var prime: bigint = 0n;
+    var valid: int = 0;
+
+    while (valid == 0) {
+        prime = rsaGeneratePrime(bits);
+        // Ensure gcd(prime - 1, e) = 1 so that e has a modular inverse mod phi
+        if (gcdBigInt(prime - 1n, e) == 1n) {
+            valid = 1;
+        }
+    }
+
+    return prime;
+}
+
+// ============================================================================
+// Key Generation
+// ============================================================================
+
+// Generate an RSA key pair with the specified key size in bits
+// The key size is the size of the modulus n (p and q will each be half this size)
+func rsaGenerateKeyPair(keyBits: int): RSAKeyPair {
+    var halfBits: int = keyBits / 2;
+    var e: bigint = RSA_DEFAULT_EXPONENT;
+
+    // Generate two distinct primes p and q
+    var p: bigint = rsaGeneratePrimeForE(halfBits, e);
+    var q: bigint = rsaGeneratePrimeForE(halfBits, e);
+
+    // Ensure p != q
+    while (p == q) {
+        q = rsaGeneratePrimeForE(halfBits, e);
+    }
+
+    // Compute n = p * q
+    var n: bigint = p * q;
+
+    // Compute phi(n) = (p-1) * (q-1)
+    var phi: bigint = (p - 1n) * (q - 1n);
+
+    // Compute private exponent d = e^(-1) mod phi(n)
+    var d: bigint = modInverseBigInt(e, phi);
+
+    // Create the key pair
+    var publicKey: RSAPublicKey = { n: n, e: e };
+    var privateKey: RSAPrivateKey = { n: n, d: d, p: p, q: q };
+    var keyPair: RSAKeyPair = { public: publicKey, private: privateKey };
+
+    return keyPair;
+}
+
+// Generate an RSA key pair with custom public exponent
+func rsaGenerateKeyPairWithExponent(keyBits: int, e: bigint): RSAKeyPair {
+    var halfBits: int = keyBits / 2;
+
+    // Generate two distinct primes p and q
+    var p: bigint = rsaGeneratePrimeForE(halfBits, e);
+    var q: bigint = rsaGeneratePrimeForE(halfBits, e);
+
+    // Ensure p != q
+    while (p == q) {
+        q = rsaGeneratePrimeForE(halfBits, e);
+    }
+
+    // Compute n = p * q
+    var n: bigint = p * q;
+
+    // Compute phi(n) = (p-1) * (q-1)
+    var phi: bigint = (p - 1n) * (q - 1n);
+
+    // Compute private exponent d = e^(-1) mod phi(n)
+    var d: bigint = modInverseBigInt(e, phi);
+
+    // Create the key pair
+    var publicKey: RSAPublicKey = { n: n, e: e };
+    var privateKey: RSAPrivateKey = { n: n, d: d, p: p, q: q };
+    var keyPair: RSAKeyPair = { public: publicKey, private: privateKey };
+
+    return keyPair;
+}
+
+// ============================================================================
+// Encryption and Decryption
+// ============================================================================
+
+// Encrypt a message using the public key
+// Message must be less than n (the modulus)
+// Returns ciphertext c = m^e mod n
+func rsaEncrypt(message: bigint, publicKey: RSAPublicKey): bigint {
+    return modPowBigInt(message, publicKey.e, publicKey.n);
+}
+
+// Decrypt a ciphertext using the private key
+// Returns plaintext m = c^d mod n
+func rsaDecrypt(ciphertext: bigint, privateKey: RSAPrivateKey): bigint {
+    return modPowBigInt(ciphertext, privateKey.d, privateKey.n);
+}
+
+// Encrypt raw bytes (represented as bigint) - alias for rsaEncrypt
+func rsaEncryptRaw(data: bigint, publicKey: RSAPublicKey): bigint {
+    return rsaEncrypt(data, publicKey);
+}
+
+// Decrypt raw bytes (represented as bigint) - alias for rsaDecrypt
+func rsaDecryptRaw(data: bigint, privateKey: RSAPrivateKey): bigint {
+    return rsaDecrypt(data, privateKey);
+}
+
+// ============================================================================
+// Digital Signatures
+// ============================================================================
+
+// Sign a message hash using the private key
+// Returns signature s = hash^d mod n
+func rsaSign(messageHash: bigint, privateKey: RSAPrivateKey): bigint {
+    return modPowBigInt(messageHash, privateKey.d, privateKey.n);
+}
+
+// Verify a signature using the public key
+// Returns 1 if valid (recovered hash matches), 0 otherwise
+func rsaVerify(messageHash: bigint, signature: bigint, publicKey: RSAPublicKey): int {
+    var recovered: bigint = modPowBigInt(signature, publicKey.e, publicKey.n);
+    if (recovered == messageHash) {
+        return 1;
+    }
+    return 0;
+}
+
+// Recover the message hash from a signature using the public key
+// Returns the recovered hash = s^e mod n
+func rsaRecoverHash(signature: bigint, publicKey: RSAPublicKey): bigint {
+    return modPowBigInt(signature, publicKey.e, publicKey.n);
+}
+
+// ============================================================================
+// Key Export (to string format for display)
+// ============================================================================
+
+// Export public key to a simple string format
+// Format: "RSA_PUB:n_value:e_value"
+func rsaExportPublicKey(key: RSAPublicKey): string {
+    var result: string = "RSA_PUB:";
+    result = result + str(key.n);
+    result = result + ":";
+    result = result + str(key.e);
+    return result;
+}
+
+// Export private key to a simple string format
+// Format: "RSA_PRIV:n_value:d_value:p_value:q_value"
+func rsaExportPrivateKey(key: RSAPrivateKey): string {
+    var result: string = "RSA_PRIV:";
+    result = result + str(key.n);
+    result = result + ":";
+    result = result + str(key.d);
+    result = result + ":";
+    result = result + str(key.p);
+    result = result + ":";
+    result = result + str(key.q);
+    return result;
+}
+
+// Export key pair to string format
+// Returns a two-element array: [public_key_string, private_key_string]
+func rsaExportKeyPair(keyPair: RSAKeyPair): array<string> {
+    var result: array<string> = [
+        rsaExportPublicKey(keyPair.public),
+        rsaExportPrivateKey(keyPair.private)
+    ];
+    return result;
+}
+
+// ============================================================================
+// Key Import (from individual values)
+// ============================================================================
+
+// Create a public key from individual bigint values
+func rsaCreatePublicKey(n: bigint, e: bigint): RSAPublicKey {
+    var key: RSAPublicKey = { n: n, e: e };
+    return key;
+}
+
+// Create a private key from individual bigint values
+func rsaCreatePrivateKey(n: bigint, d: bigint, p: bigint, q: bigint): RSAPrivateKey {
+    var key: RSAPrivateKey = { n: n, d: d, p: p, q: q };
+    return key;
+}
+
+// Create a key pair from individual bigint values
+func rsaCreateKeyPair(n: bigint, e: bigint, d: bigint, p: bigint, q: bigint): RSAKeyPair {
+    var publicKey: RSAPublicKey = { n: n, e: e };
+    var privateKey: RSAPrivateKey = { n: n, d: d, p: p, q: q };
+    var keyPair: RSAKeyPair = { public: publicKey, private: privateKey };
+    return keyPair;
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+// Get the key size in bits (based on modulus n)
+func rsaKeySize(publicKey: RSAPublicKey): int {
+    return digitsBigInt(publicKey.n) * 10 / 3;
+}
+
+// Check if a message can be encrypted with the given public key
+// Message must be less than n
+func rsaCanEncrypt(message: bigint, publicKey: RSAPublicKey): int {
+    if (message >= 0n && message < publicKey.n) {
+        return 1;
+    }
+    return 0;
+}
+
+// Derive public key from private key
+func rsaPublicKeyFromPrivate(privateKey: RSAPrivateKey): RSAPublicKey {
+    // Compute e from d, p, q (requires computing phi)
+    var phi: bigint = (privateKey.p - 1n) * (privateKey.q - 1n);
+    var e: bigint = modInverseBigInt(privateKey.d, phi);
+    var publicKey: RSAPublicKey = { n: privateKey.n, e: e };
+    return publicKey;
+}
+
+// Validate that a key pair is consistent
+// Returns 1 if valid, 0 otherwise
+func rsaValidateKeyPair(keyPair: RSAKeyPair): int {
+    // Check that n matches
+    if (keyPair.public.n != keyPair.private.n) {
+        return 0;
+    }
+
+    // Check that p * q = n
+    if (keyPair.private.p * keyPair.private.q != keyPair.private.n) {
+        return 0;
+    }
+
+    // Check that e * d = 1 mod phi
+    var phi: bigint = (keyPair.private.p - 1n) * (keyPair.private.q - 1n);
+    var product: bigint = (keyPair.public.e * keyPair.private.d) % phi;
+    if (product != 1n) {
+        return 0;
+    }
+
+    // Test encrypt/decrypt cycle
+    var testMsg: bigint = 12345n;
+    var encrypted: bigint = rsaEncrypt(testMsg, keyPair.public);
+    var decrypted: bigint = rsaDecrypt(encrypted, keyPair.private);
+    if (decrypted != testMsg) {
+        return 0;
+    }
+
+    return 1;
+}
+
+// ============================================================================
+// PKCS#1 v1.5 Style Padding (simplified)
+// ============================================================================
+
+// Add simple padding to a message before encryption
+// This is a simplified padding scheme - for real use, implement full PKCS#1 or OAEP
+// Returns: 0x00 || 0x02 || random_padding || 0x00 || message
+// Represented as a bigint
+func rsaPad(message: bigint, keyBitSize: int): bigint {
+    var messageBits: int = digitsBigInt(message) * 10 / 3;
+    var paddingBits: int = keyBitSize - messageBits - 24;
+
+    if (paddingBits < 64) {
+        // Message too large for this key size
+        return 0n;
+    }
+
+    // Generate random non-zero padding
+    var padding: bigint = rsaRandomBigIntBits(paddingBits);
+    if (padding == 0n) {
+        padding = 1n;
+    }
+
+    // Construct padded message: 0x02 || padding || 0x00 || message
+    var paddedMessage: bigint = 2n;
+    paddedMessage = paddedMessage * powBigInt(2n, paddingBits);
+    paddedMessage = paddedMessage + padding;
+    paddedMessage = paddedMessage * powBigInt(2n, messageBits + 8);
+    paddedMessage = paddedMessage + message;
+
+    return paddedMessage;
+}
+
+// Remove padding from a decrypted message
+// Returns the original message or 0 if padding is invalid
+func rsaUnpad(paddedMessage: bigint): bigint {
+    // Find the 0x00 separator byte (simplified - just return lower bits)
+    // In a real implementation, you'd properly parse the padding structure
+    var temp: bigint = paddedMessage;
+    var mask: bigint = 255n;
+
+    // Find message by looking for the pattern
+    // This is simplified - real PKCS#1 parsing is more complex
+    return paddedMessage % powBigInt(2n, 256);
+}

@@ -1,0 +1,22 @@
+import "fixtures/testing.tblo";
+
+func testAssertTrue(): void {
+    var err = assertTrue(1 + 1 == 2, "math should hold");
+    if (err != nil) {
+        panic(err.message);
+    }
+}
+
+func testAssertEqRecord(): void {
+    var err = assertEq({"name": "tablo", "version": 1},
+                       {"name": "tablo", "version": 1},
+                       "record payload should match");
+    if (err != nil) {
+        panic(err.message);
+    }
+}
+
+func main(): void {
+    testAssertTrue();
+    testAssertEqRecord();
+}

@@ -1,0 +1,157 @@
+// Glob stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_glob_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_glob_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/glob.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchGlobMatch(iters: int): void {
+    var patterns: array<string> = [
+        "src/**/*.tblo",
+        "tests/**/test_*.tblo",
+        "docs/**/*.md",
+        "bin/*.exe",
+        "**/*.txt",
+        "C:/tmp/**/log-*.txt"
+    ];
+    var paths: array<string> = [
+        "src/main.tblo",
+        "src/http/server.tblo",
+        "src/http/router.tblo",
+        "tests/unit/test_cli.tblo",
+        "tests/integration/test_http.tblo",
+        "docs/guide/start.md",
+        "docs/design/notes.txt",
+        "bin/tablo.exe",
+        "C:/tmp/a/b/log-2026.txt",
+        "assets/logo.svg"
+    ];
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var p_w: string = patterns[w % len(patterns)];
+        var s_w: string = paths[w % len(paths)];
+        var m_w = globMatch(p_w, s_w);
+        if (m_w.1 != nil) {
+            panic("benchGlobMatch warmup failed: " + m_w.1.message);
+        }
+        if (m_w.0) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p: string = patterns[i % len(patterns)];
+        var s: string = paths[i % len(paths)];
+        var m = globMatch(p, s);
+        if (m.1 != nil) {
+            panic("benchGlobMatch failed: " + m.1.message);
+        }
+        if (m.0) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf globMatch", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func globBenchCorpus(): array<string> {
+    var out: array<string> = [];
+
+    var i: int = 0;
+    while (i < 200) {
+        var ext: string = ".txt";
+        if ((i % 5) == 0) {
+            ext = ".tblo";
+        } else if ((i % 7) == 0) {
+            ext = ".md";
+        }
+
+        var path_value: string = "src/service" + str(i % 20) +
+                                 "/part" + str(i % 10) +
+                                 "/file" + str(i) + ext;
+        push(out, path_value);
+        i = i + 1;
+    }
+
+    return out;
+}
+
+func benchGlobFilter(iters: int): void {
+    var corpus: array<string> = globBenchCorpus();
+    var pattern: string = "src/**/file*.tblo";
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var filtered_w = globFilter(pattern, corpus);
+        if (filtered_w.1 != nil) {
+            panic("benchGlobFilter warmup failed: " + filtered_w.1.message);
+        }
+        sink = sink + len(filtered_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var filtered = globFilter(pattern, corpus);
+        if (filtered.1 != nil) {
+            panic("benchGlobFilter failed: " + filtered.1.message);
+        }
+        sink = sink + len(filtered.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf globFilter", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Glob Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchGlobMatch(250000 * scale);
+    benchGlobFilter(12000 * scale);
+
+    println("Glob stdlib benchmark complete!");
+}

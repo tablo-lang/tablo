@@ -1,0 +1,415 @@
+// Configuration helpers for CLI/services.
+// Supports dotenv-style files, environment overlays, and typed getters.
+
+func configStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func configError(code: int,
+                 message: string,
+                 context: string,
+                 key: string,
+                 line: int,
+                 column: int,
+                 data: any): Error {
+    var err_data: map<string, any> = {
+        "context": context,
+        "key": key,
+        "line": line,
+        "column": column
+    };
+    if (data != nil) {
+        mapSetString(err_data, "detail", data);
+    }
+    return configStdError(code, message, err_data);
+}
+
+func configIsValidKey(key: string): bool {
+    if (key == "") {
+        return false;
+    }
+
+    var first_allowed: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+    var rest_allowed: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+    if (find(first_allowed, substring(key, 0, 1)) < 0) {
+        return false;
+    }
+
+    var i: int = 1;
+    while (i < len(key)) {
+        if (find(rest_allowed, substring(key, i, 1)) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func configUnescapeDoubleQuoted(value: string, line: int): (string, Error?) {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(value)) {
+        var ch: string = substring(value, i, 1);
+        if (ch == "\\") {
+            if ((i + 1) >= len(value)) {
+                return ("",
+                        configError(ERR_PARSE,
+                                    "configParseDotEnv: trailing escape sequence",
+                                    "configParseDotEnv.escape",
+                                    "",
+                                    line,
+                                    i + 1,
+                                    value));
+            }
+            var esc: string = substring(value, i + 1, 1);
+            if (esc == "n") {
+                out = out + "\n";
+            } else if (esc == "r") {
+                out = out + "\r";
+            } else if (esc == "t") {
+                out = out + "\t";
+            } else if (esc == "\"") {
+                out = out + "\"";
+            } else if (esc == "\\") {
+                out = out + "\\";
+            } else {
+                return ("",
+                        configError(ERR_PARSE,
+                                    "configParseDotEnv: unsupported escape sequence",
+                                    "configParseDotEnv.escape",
+                                    "",
+                                    line,
+                                    i + 1,
+                                    esc));
+            }
+            i = i + 2;
+            continue;
+        }
+
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func configClone(values: map<string, string>): map<string, string> {
+    var out: map<string, string> = {};
+    foreach (key_any in keys(values)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+        var key: string = key_any as string;
+        var value_any: any = mapGetString(values, key);
+        if (value_any != nil && typeOf(value_any) == "string") {
+            mapSetString(out, key, value_any as string);
+        }
+    }
+    return out;
+}
+
+func configMerge(base: map<string, string>, overlay: map<string, string>): map<string, string> {
+    var out: map<string, string> = configClone(base);
+    foreach (key_any in keys(overlay)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            continue;
+        }
+        var key: string = key_any as string;
+        var value_any: any = mapGetString(overlay, key);
+        if (value_any != nil && typeOf(value_any) == "string") {
+            mapSetString(out, key, value_any as string);
+        }
+    }
+    return out;
+}
+
+func configParseDotEnv(text: string): (map<string, string>, Error?) {
+    var out: map<string, string> = {};
+    if (text == "") {
+        return (out, nil);
+    }
+
+    var lines: array<string> = split(text, "\n");
+    var line_no: int = 1;
+    foreach (raw_line in lines) {
+        var line: string = raw_line;
+        if (endsWith(line, "\r")) {
+            line = substring(line, 0, len(line) - 1);
+        }
+
+        var trimmed: string = trim(line);
+        if (trimmed == "" || startsWith(trimmed, "#")) {
+            line_no = line_no + 1;
+            continue;
+        }
+
+        if (startsWith(trimmed, "export ")) {
+            trimmed = trim(substring(trimmed, 7, len(trimmed) - 7));
+        }
+
+        var eq: int = find(trimmed, "=");
+        if (eq < 0) {
+            return (out,
+                    configError(ERR_PARSE,
+                                "configParseDotEnv: expected key=value pair",
+                                "configParseDotEnv.syntax",
+                                "",
+                                line_no,
+                                1,
+                                line));
+        }
+
+        var key: string = trim(substring(trimmed, 0, eq));
+        if (!configIsValidKey(key)) {
+            return (out,
+                    configError(ERR_PARSE,
+                                "configParseDotEnv: invalid key name",
+                                "configParseDotEnv.key",
+                                key,
+                                line_no,
+                                1,
+                                line));
+        }
+
+        var value_part: string = trim(substring(trimmed, eq + 1, len(trimmed) - (eq + 1)));
+        var value: string = "";
+
+        if (value_part == "") {
+            value = "";
+        } else if (startsWith(value_part, "\"")) {
+            if (!endsWith(value_part, "\"") || len(value_part) < 2) {
+                return (out,
+                        configError(ERR_PARSE,
+                                    "configParseDotEnv: unterminated double-quoted value",
+                                    "configParseDotEnv.quote",
+                                    key,
+                                    line_no,
+                                    eq + 2,
+                                    value_part));
+            }
+            var inner: string = substring(value_part, 1, len(value_part) - 2);
+            var unescaped = configUnescapeDoubleQuoted(inner, line_no);
+            if (unescaped.1 != nil) {
+                return (out, wrapError(unescaped.1, "configParseDotEnv value decode failed"));
+            }
+            value = unescaped.0;
+        } else if (startsWith(value_part, "'")) {
+            if (!endsWith(value_part, "'") || len(value_part) < 2) {
+                return (out,
+                        configError(ERR_PARSE,
+                                    "configParseDotEnv: unterminated single-quoted value",
+                                    "configParseDotEnv.quote",
+                                    key,
+                                    line_no,
+                                    eq + 2,
+                                    value_part));
+            }
+            value = substring(value_part, 1, len(value_part) - 2);
+        } else {
+            var hash: int = find(value_part, " #");
+            if (hash >= 0) {
+                value_part = substring(value_part, 0, hash);
+            }
+            value = trim(value_part);
+        }
+
+        mapSetString(out, key, value);
+        line_no = line_no + 1;
+    }
+
+    return (out, nil);
+}
+
+func configLoadDotEnv(path: string): (map<string, string>, Error?) {
+    var read_r = read_all(path);
+    if (read_r.1 != nil) {
+        return ({}, wrapError(read_r.1, "configLoadDotEnv read_all failed"));
+    }
+
+    var parsed = configParseDotEnv(read_r.0);
+    if (parsed.1 != nil) {
+        return ({}, wrapError(parsed.1, "configLoadDotEnv parse failed"));
+    }
+    return parsed;
+}
+
+func configFromEnv(envKeys: array<string>): (map<string, string>, Error?) {
+    var out: map<string, string> = {};
+    foreach (key in envKeys) {
+        if (!configIsValidKey(key)) {
+            return (out,
+                    configError(ERR_INVALID_ARGUMENT,
+                                "configFromEnv: invalid environment key",
+                                "configFromEnv.key",
+                                key,
+                                0,
+                                0,
+                                nil));
+        }
+
+        var env_r = envGet(key);
+        if (env_r.1 != nil) {
+            return (out, wrapError(env_r.1, "configFromEnv envGet failed for " + key));
+        }
+        if (env_r.0 != nil) {
+            mapSetString(out, key, env_r.0 as string);
+        }
+    }
+    return (out, nil);
+}
+
+func configApplyEnv(base: map<string, string>, envKeys: array<string>): (map<string, string>, Error?) {
+    var env_r = configFromEnv(envKeys);
+    if (env_r.1 != nil) {
+        return (base, env_r.1);
+    }
+    return (configMerge(base, env_r.0), nil);
+}
+
+func configApplyDotEnv(base: map<string, string>, path: string): (map<string, string>, Error?) {
+    var file_r = configLoadDotEnv(path);
+    if (file_r.1 != nil) {
+        return (base, file_r.1);
+    }
+    return (configMerge(base, file_r.0), nil);
+}
+
+func configGetString(cfg: map<string, string>, key: string, defaultValue: string): string {
+    var value_any: any = mapGetString(cfg, key);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return defaultValue;
+    }
+    return value_any as string;
+}
+
+func configGetRequiredString(cfg: map<string, string>, key: string): (string, Error?) {
+    var value_any: any = mapGetString(cfg, key);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return ("",
+                configError(ERR_INVALID_ARGUMENT,
+                            "configGetRequiredString: missing required key",
+                            "configGetRequiredString.missing",
+                            key,
+                            0,
+                            0,
+                            nil));
+    }
+    return (value_any as string, nil);
+}
+
+func configIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func configParseInt(value: string): (int, Error?) {
+    var trimmed: string = trim(value);
+    if (trimmed == "") {
+        return (0,
+                configError(ERR_PARSE,
+                            "configParseInt: value is empty",
+                            "configParseInt.empty",
+                            "",
+                            0,
+                            0,
+                            value));
+    }
+
+    var i: int = 0;
+    if (substring(trimmed, 0, 1) == "+" || substring(trimmed, 0, 1) == "-") {
+        if (len(trimmed) == 1) {
+            return (0,
+                    configError(ERR_PARSE,
+                                "configParseInt: sign without digits",
+                                "configParseInt.sign",
+                                "",
+                                0,
+                                0,
+                                value));
+        }
+        i = 1;
+    }
+
+    while (i < len(trimmed)) {
+        if (!configIsDigit(substring(trimmed, i, 1))) {
+            return (0,
+                    configError(ERR_PARSE,
+                                "configParseInt: invalid integer value",
+                                "configParseInt.invalid",
+                                "",
+                                0,
+                                i + 1,
+                                value));
+        }
+        i = i + 1;
+    }
+
+    return (toInt(trimmed), nil);
+}
+
+func configParseBool(value: string): (bool, Error?) {
+    var v: string = trim(value);
+    if (v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES" || v == "on" || v == "ON") {
+        return (true, nil);
+    }
+    if (v == "0" || v == "false" || v == "FALSE" || v == "no" || v == "NO" || v == "off" || v == "OFF") {
+        return (false, nil);
+    }
+
+    return (false,
+            configError(ERR_PARSE,
+                        "configParseBool: invalid boolean value",
+                        "configParseBool.invalid",
+                        "",
+                        0,
+                        0,
+                        value));
+}
+
+func configGetInt(cfg: map<string, string>, key: string, defaultValue: int): (int, Error?) {
+    var value_any: any = mapGetString(cfg, key);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return (defaultValue, nil);
+    }
+    var parsed = configParseInt(value_any as string);
+    if (parsed.1 != nil) {
+        return (defaultValue, wrapError(parsed.1, "configGetInt failed for key " + key));
+    }
+    return parsed;
+}
+
+func configGetRequiredInt(cfg: map<string, string>, key: string): (int, Error?) {
+    var value_r = configGetRequiredString(cfg, key);
+    if (value_r.1 != nil) {
+        return (0, value_r.1);
+    }
+    var parsed = configParseInt(value_r.0);
+    if (parsed.1 != nil) {
+        return (0, wrapError(parsed.1, "configGetRequiredInt failed for key " + key));
+    }
+    return parsed;
+}
+
+func configGetBool(cfg: map<string, string>, key: string, defaultValue: bool): (bool, Error?) {
+    var value_any: any = mapGetString(cfg, key);
+    if (value_any == nil || typeOf(value_any) != "string") {
+        return (defaultValue, nil);
+    }
+    var parsed = configParseBool(value_any as string);
+    if (parsed.1 != nil) {
+        return (defaultValue, wrapError(parsed.1, "configGetBool failed for key " + key));
+    }
+    return parsed;
+}
+
+func configGetRequiredBool(cfg: map<string, string>, key: string): (bool, Error?) {
+    var value_r = configGetRequiredString(cfg, key);
+    if (value_r.1 != nil) {
+        return (false, value_r.1);
+    }
+    var parsed = configParseBool(value_r.0);
+    if (parsed.1 != nil) {
+        return (false, wrapError(parsed.1, "configGetRequiredBool failed for key " + key));
+    }
+    return parsed;
+}

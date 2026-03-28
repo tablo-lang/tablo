@@ -1,0 +1,105 @@
+import "fixtures/ini.tblo";
+
+func main(): void {
+    var text: string = "; app config\n" +
+                       "name = tablo\n" +
+                       "mode = \"dev\" # inline comment\n" +
+                       "\n" +
+                       "[server]\n" +
+                       "host = 127.0.0.1\n" +
+                       "port = 8080\n" +
+                       "enabled = true\n" +
+                       "\n" +
+                       "[flags]\n" +
+                       "feature_x = on\n" +
+                       "feature_y = off\n" +
+                       "quoted = \"hello;world\"\n";
+
+    var parsed = iniParse(text);
+    println(parsed.1 == nil);
+
+    if (parsed.1 == nil) {
+        println(iniHas(parsed.0, "", "name"));
+        println(iniHas(parsed.0, "server", "port"));
+
+        var name_r = iniGet(parsed.0, "", "name");
+        println(name_r.1 == nil);
+        if (name_r.1 == nil && name_r.0 != nil) println(name_r.0 == "tablo");
+
+        var mode_r = iniGet(parsed.0, "", "mode");
+        println(mode_r.1 == nil);
+        if (mode_r.1 == nil && mode_r.0 != nil) println(mode_r.0 == "dev");
+
+        var host_r = iniGet(parsed.0, "server", "host");
+        println(host_r.1 == nil);
+        if (host_r.1 == nil && host_r.0 != nil) println(host_r.0 == "127.0.0.1");
+
+        var port_r = iniGetInt(parsed.0, "server", "port");
+        println(port_r.1 == nil);
+        if (port_r.1 == nil && port_r.0 != nil) println(port_r.0 == 8080);
+
+        var enabled_r = iniGetBool(parsed.0, "server", "enabled");
+        println(enabled_r.1 == nil);
+        if (enabled_r.1 == nil && enabled_r.0 != nil) println(enabled_r.0);
+
+        var fx_r = iniGetBool(parsed.0, "flags", "feature_x");
+        println(fx_r.1 == nil);
+        if (fx_r.1 == nil && fx_r.0 != nil) println(fx_r.0);
+
+        var fy_r = iniGetBool(parsed.0, "flags", "feature_y");
+        println(fy_r.1 == nil);
+        if (fy_r.1 == nil && fy_r.0 != nil) println(!fy_r.0);
+
+        var quoted_r = iniGet(parsed.0, "flags", "quoted");
+        println(quoted_r.1 == nil);
+        if (quoted_r.1 == nil && quoted_r.0 != nil) println(quoted_r.0 == "hello;world");
+
+        var missing_r = iniGet(parsed.0, "server", "missing");
+        println(missing_r.1 == nil);
+        println(missing_r.0 == nil);
+
+        var bad_int = iniGetInt(parsed.0, "", "name");
+        println(bad_int.1 != nil);
+        if (bad_int.1 != nil) println(bad_int.1.code == ERR_PARSE);
+
+        var bad_bool = iniGetBool(parsed.0, "", "name");
+        println(bad_bool.1 != nil);
+        if (bad_bool.1 != nil) println(bad_bool.1.code == ERR_PARSE);
+
+        var stringified = iniStringify(parsed.0);
+        println(stringified.1 == nil);
+        if (stringified.1 == nil) {
+            var parsed_back = iniParse(stringified.0);
+            println(parsed_back.1 == nil);
+            if (parsed_back.1 == nil) {
+                var port_back = iniGetInt(parsed_back.0, "server", "port");
+                println(port_back.1 == nil);
+                if (port_back.1 == nil && port_back.0 != nil) println(port_back.0 == 8080);
+            }
+        }
+    }
+
+    var dup_global = iniParse("a=1\na=2\n");
+    println(dup_global.1 != nil);
+    if (dup_global.1 != nil) println(dup_global.1.code == ERR_PARSE);
+
+    var dup_section = iniParse("[s]\na=1\na=2\n");
+    println(dup_section.1 != nil);
+    if (dup_section.1 != nil) println(dup_section.1.code == ERR_PARSE);
+
+    var bad_section = iniParse("[server\nport=1\n");
+    println(bad_section.1 != nil);
+    if (bad_section.1 != nil) println(bad_section.1.code == ERR_PARSE);
+
+    var bad_key = iniParse("bad key=1\n");
+    println(bad_key.1 != nil);
+    if (bad_key.1 != nil) println(bad_key.1.code == ERR_PARSE);
+
+    var quoted_empty = iniParse("x=\"\"\n");
+    println(quoted_empty.1 == nil);
+    if (quoted_empty.1 == nil) {
+        var empty_v = iniGet(quoted_empty.0, "", "x");
+        println(empty_v.1 == nil);
+        if (empty_v.1 == nil && empty_v.0 != nil) println(empty_v.0 == "");
+    }
+}

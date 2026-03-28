@@ -1,0 +1,31 @@
+// Standard Library Tests - Math Functions
+
+func main(): void {
+    // Test absInt / absDouble
+    println(absInt(-42));        // 42
+    println(absDouble(-3.14));   // 3.14
+    
+    // Test min/max
+    println(min(10, 20));        // 10
+    println(max(10, 20));        // 20
+    println(min(3.5, 2.5));      // 2.5
+    println(max(3.5, 2.5));      // 3.5
+    
+    // Test floor/ceil/round
+    println(floor(3.7));         // 3.0
+    println(ceil(3.2));          // 4.0
+    println(round(3.5));         // 4.0
+    println(round(3.4));         // 3.0
+    
+    // Test sqrt
+    println(sqrt(16.0));         // 4.0
+    println(sqrt(2.0));          // ~1.414
+    
+    // Test pow
+    println(pow(2.0, 3.0));      // 8.0
+    println(pow(10.0, 2.0));     // 100.0
+    
+    // Test random functions
+    println(random() >= 0.0 && random() < 1.0);  // 1 (true)
+    println(randomInt(1, 10) >= 1 && randomInt(1, 10) <= 10);  // 1 (true)
+}

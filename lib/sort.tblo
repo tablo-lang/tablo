@@ -1,0 +1,400 @@
+// Typed sorting/search helpers for common app and backend workflows.
+// All sort helpers return copied arrays and do not mutate input slices.
+// Fast paths use builtin sort/reverse; pure TabloLang quicksort/reverse remain as safe fallback.
+
+func sortStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func sortError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return sortStdError(code, message, data);
+}
+
+func sortValidateK(total: int, k: int, context: string): Error? {
+    if (k < 0 || k > total) {
+        return sortError(ERR_INVALID_ARGUMENT,
+                         "k must be between 0 and input length",
+                         context,
+                         {
+                             "k": k,
+                             "total": total
+                         } as any);
+    }
+    return nil;
+}
+
+func sortCopyInts(items: array<int>): array<int> {
+    var out: array<int> = [];
+    var i: int = 0;
+    while (i < len(items)) {
+        push(out, items[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+func sortCopyDoubles(items: array<double>): array<double> {
+    var out: array<double> = [];
+    var i: int = 0;
+    while (i < len(items)) {
+        push(out, items[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+func sortInsertionIntsRange(items: array<int>, low: int, high: int): array<int> {
+    var out: array<int> = items;
+    if (low >= high) {
+        return out;
+    }
+
+    var i: int = low + 1;
+    while (i <= high) {
+        var current: int = out[i];
+        var j: int = i - 1;
+        while (j >= low && out[j] > current) {
+            out[j + 1] = out[j];
+            j = j - 1;
+        }
+        out[j + 1] = current;
+        i = i + 1;
+    }
+
+    return out;
+}
+
+func sortQuickIntsRange(items: array<int>, low: int, high: int): array<int> {
+    var out: array<int> = items;
+    if (low >= high) {
+        return out;
+    }
+    if ((high - low) <= 16) {
+        return sortInsertionIntsRange(out, low, high);
+    }
+
+    var i: int = low;
+    var j: int = high;
+    var pivot: int = out[(low + high) / 2];
+
+    while (i <= j) {
+        while (out[i] < pivot) {
+            i = i + 1;
+        }
+        while (out[j] > pivot) {
+            j = j - 1;
+        }
+        if (i <= j) {
+            var temp: int = out[i];
+            out[i] = out[j];
+            out[j] = temp;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+
+    if (low < j) {
+        out = sortQuickIntsRange(out, low, j);
+    }
+    if (i < high) {
+        out = sortQuickIntsRange(out, i, high);
+    }
+
+    return out;
+}
+
+func sortInsertionDoublesRange(items: array<double>, low: int, high: int): array<double> {
+    var out: array<double> = items;
+    if (low >= high) {
+        return out;
+    }
+
+    var i: int = low + 1;
+    while (i <= high) {
+        var current: double = out[i];
+        var j: int = i - 1;
+        while (j >= low && out[j] > current) {
+            out[j + 1] = out[j];
+            j = j - 1;
+        }
+        out[j + 1] = current;
+        i = i + 1;
+    }
+
+    return out;
+}
+
+func sortQuickDoublesRange(items: array<double>, low: int, high: int): array<double> {
+    var out: array<double> = items;
+    if (low >= high) {
+        return out;
+    }
+    if ((high - low) <= 16) {
+        return sortInsertionDoublesRange(out, low, high);
+    }
+
+    var i: int = low;
+    var j: int = high;
+    var pivot: double = out[(low + high) / 2];
+
+    while (i <= j) {
+        while (out[i] < pivot) {
+            i = i + 1;
+        }
+        while (out[j] > pivot) {
+            j = j - 1;
+        }
+        if (i <= j) {
+            var temp: double = out[i];
+            out[i] = out[j];
+            out[j] = temp;
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+
+    if (low < j) {
+        out = sortQuickDoublesRange(out, low, j);
+    }
+    if (i < high) {
+        out = sortQuickDoublesRange(out, i, high);
+    }
+
+    return out;
+}
+
+func sortIntsAscPure(items: array<int>): array<int> {
+    var out: array<int> = sortCopyInts(items);
+    if (len(out) > 1) {
+        out = sortQuickIntsRange(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func sortDoublesAscPure(items: array<double>): array<double> {
+    var out: array<double> = sortCopyDoubles(items);
+    if (len(out) > 1) {
+        out = sortQuickDoublesRange(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func sortIntsAsc(items: array<int>): array<int> {
+    var out: array<int> = sortCopyInts(items);
+    if (len(out) <= 1) {
+        return out;
+    }
+
+    sort(out);
+    if (!sortIsSortedIntsAsc(out)) {
+        out = sortQuickIntsRange(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func sortIsSortedIntsDesc(items: array<int>): bool {
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] > items[i - 1]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func sortIsSortedDoublesDesc(items: array<double>): bool {
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] > items[i - 1]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func sortReverseIntsManual(items: array<int>): array<int> {
+    var out: array<int> = items;
+    var i: int = 0;
+    var j: int = len(out) - 1;
+    while (i < j) {
+        var temp: int = out[i];
+        out[i] = out[j];
+        out[j] = temp;
+        i = i + 1;
+        j = j - 1;
+    }
+    return out;
+}
+
+func sortReverseDoublesManual(items: array<double>): array<double> {
+    var out: array<double> = items;
+    var i: int = 0;
+    var j: int = len(out) - 1;
+    while (i < j) {
+        var temp: double = out[i];
+        out[i] = out[j];
+        out[j] = temp;
+        i = i + 1;
+        j = j - 1;
+    }
+    return out;
+}
+
+func sortIntsDesc(items: array<int>): array<int> {
+    var out: array<int> = sortIntsAsc(items);
+    if (len(out) > 1) {
+        reverse(out);
+        if (!sortIsSortedIntsDesc(out)) {
+            out = sortReverseIntsManual(out);
+        }
+    }
+    return out;
+}
+
+func sortDoublesAsc(items: array<double>): array<double> {
+    var out: array<double> = sortCopyDoubles(items);
+    if (len(out) <= 1) {
+        return out;
+    }
+
+    sort(out);
+    if (!sortIsSortedDoublesAsc(out)) {
+        out = sortQuickDoublesRange(out, 0, len(out) - 1);
+    }
+    return out;
+}
+
+func sortDoublesDesc(items: array<double>): array<double> {
+    var out: array<double> = sortDoublesAsc(items);
+    if (len(out) > 1) {
+        reverse(out);
+        if (!sortIsSortedDoublesDesc(out)) {
+            out = sortReverseDoublesManual(out);
+        }
+    }
+    return out;
+}
+
+func sortIsSortedIntsAsc(items: array<int>): bool {
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] < items[i - 1]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func sortIsSortedDoublesAsc(items: array<double>): bool {
+    var i: int = 1;
+    while (i < len(items)) {
+        if (items[i] < items[i - 1]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func sortLowerBoundInts(sorted_items: array<int>, target: int): int {
+    var lo: int = 0;
+    var hi: int = len(sorted_items);
+    while (lo < hi) {
+        var mid: int = lo + ((hi - lo) / 2);
+        if (sorted_items[mid] < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+func sortUpperBoundInts(sorted_items: array<int>, target: int): int {
+    var lo: int = 0;
+    var hi: int = len(sorted_items);
+    while (lo < hi) {
+        var mid: int = lo + ((hi - lo) / 2);
+        if (sorted_items[mid] <= target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+func sortBinarySearchInts(sorted_items: array<int>, target: int): (int, bool) {
+    var idx: int = sortLowerBoundInts(sorted_items, target);
+    if (idx >= 0 && idx < len(sorted_items) && sorted_items[idx] == target) {
+        return (idx, true);
+    }
+    return (-1, false);
+}
+
+func sortTopKSmallestInts(items: array<int>, k: int): (array<int>, Error?) {
+    var out: array<int> = [];
+    var k_err = sortValidateK(len(items), k, "sort.topKSmallestInts.k");
+    if (k_err != nil) {
+        return (out, k_err);
+    }
+
+    if (k == 0) {
+        return (out, nil);
+    }
+
+    var sorted: array<int> = sortIntsAsc(items);
+    var i: int = 0;
+    while (i < k) {
+        push(out, sorted[i]);
+        i = i + 1;
+    }
+    return (out, nil);
+}
+
+func sortTopKLargestInts(items: array<int>, k: int): (array<int>, Error?) {
+    var out: array<int> = [];
+    var k_err = sortValidateK(len(items), k, "sort.topKLargestInts.k");
+    if (k_err != nil) {
+        return (out, k_err);
+    }
+
+    if (k == 0) {
+        return (out, nil);
+    }
+
+    var sorted: array<int> = sortIntsAsc(items);
+    var i: int = len(sorted) - 1;
+    while (i >= 0 && len(out) < k) {
+        push(out, sorted[i]);
+        i = i - 1;
+    }
+    return (out, nil);
+}
+
+func sortUniqueInts(items: array<int>): array<int> {
+    var out: array<int> = [];
+    if (len(items) == 0) {
+        return out;
+    }
+
+    var sorted: array<int> = sortIntsAsc(items);
+    push(out, sorted[0]);
+
+    var i: int = 1;
+    while (i < len(sorted)) {
+        if (sorted[i] != sorted[i - 1]) {
+            push(out, sorted[i]);
+        }
+        i = i + 1;
+    }
+    return out;
+}

@@ -1,0 +1,165 @@
+// Retry stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_retry_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_retry_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/retry.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchRetryComputeDelayMs(iters: int): void {
+    var policy: RetryPolicy = retryDefaultPolicy();
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var retry_num: int = (w % 8) + 1;
+        var d_w = retryComputeDelayMs(policy, retry_num);
+        if (d_w.1 == nil) {
+            sink = sink + (d_w.0 as int);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var retry_num2: int = (i % 8) + 1;
+        var d = retryComputeDelayMs(policy, retry_num2);
+        if (d.1 == nil) {
+            sink = sink + (d.0 as int);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf retryComputeDelayMs", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchRetryShouldRetry(iters: int): void {
+    var policy: RetryPolicy = retryDefaultPolicy();
+    var transient_err: Error = { code: ERR_NETWORK, message: "network", data: nil };
+    var non_transient_err: Error = { code: ERR_PARSE, message: "parse", data: nil };
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        if (retryShouldRetry(policy, 1, transient_err)) {
+            sink = sink + 1;
+        }
+        if (!retryShouldRetry(policy, 1, non_transient_err)) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        if (retryShouldRetry(policy, (i % 4) + 1, transient_err)) {
+            sink = sink + 1;
+        }
+        if (!retryShouldRetry(policy, (i % 4) + 1, non_transient_err)) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf retryShouldRetry", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchRetryCircuitTransitions(iters: int): void {
+    var circuit_r = retryCircuitNew(3, 1000, 2);
+    if (circuit_r.1 != nil) {
+        println("perf retryCircuitTransitions: setup failed");
+        return;
+    }
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var circuit_w: RetryCircuit = circuit_r.0;
+        circuit_w = retryCircuitOnFailure(circuit_w, 1000);
+        circuit_w = retryCircuitOnFailure(circuit_w, 1001);
+        circuit_w = retryCircuitOnFailure(circuit_w, 1002);
+        var allow_w = retryCircuitAllow(circuit_w, 2002);
+        circuit_w = allow_w.0;
+        if (allow_w.1) {
+            circuit_w = retryCircuitOnSuccess(circuit_w);
+            circuit_w = retryCircuitOnSuccess(circuit_w);
+        }
+        if (circuit_w.state == "closed") {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var circuit: RetryCircuit = circuit_r.0;
+        circuit = retryCircuitOnFailure(circuit, 1000);
+        circuit = retryCircuitOnFailure(circuit, 1001);
+        circuit = retryCircuitOnFailure(circuit, 1002);
+        var allow = retryCircuitAllow(circuit, 2002);
+        circuit = allow.0;
+        if (allow.1) {
+            circuit = retryCircuitOnSuccess(circuit);
+            circuit = retryCircuitOnSuccess(circuit);
+        }
+        if (circuit.state == "closed") {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf retryCircuitTransitions", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Retry Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchRetryComputeDelayMs(240000 * scale);
+    benchRetryShouldRetry(300000 * scale);
+    benchRetryCircuitTransitions(120000 * scale);
+
+    println("Retry stdlib benchmark complete!");
+}

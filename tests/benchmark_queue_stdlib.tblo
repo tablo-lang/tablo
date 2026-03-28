@@ -1,0 +1,215 @@
+// Queue stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_queue_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_queue_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/queue.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchQueueEnqueueDequeueHot(iters: int): void {
+    var opened = queueNew(0);
+    if (opened.1 != nil) {
+        println("perf queueEnqueueDequeueHot: setup failed");
+        return;
+    }
+    var store: QueueStore = opened.0;
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var en_w = queueEnqueue(store, w as any);
+        store = en_w.0;
+        if (en_w.1 != nil) {
+            println("perf queueEnqueueDequeueHot: warm enqueue failed");
+            return;
+        }
+
+        var de_w = queueDequeue(store);
+        store = de_w.0;
+        if (!de_w.2) {
+            println("perf queueEnqueueDequeueHot: warm dequeue failed");
+            return;
+        }
+        sink = sink + (de_w.1 as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var en_i = queueEnqueue(store, i as any);
+        store = en_i.0;
+        if (en_i.1 != nil) {
+            println("perf queueEnqueueDequeueHot: enqueue failed");
+            return;
+        }
+
+        var de_i = queueDequeue(store);
+        store = de_i.0;
+        if (!de_i.2) {
+            println("perf queueEnqueueDequeueHot: dequeue failed");
+            return;
+        }
+        sink = sink + (de_i.1 as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf queueEnqueueDequeueHot", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchQueueDropOldest(iters: int): void {
+    var opened = queueNew(64);
+    if (opened.1 != nil) {
+        println("perf queueDropOldest: setup failed");
+        return;
+    }
+    var store: QueueStore = opened.0;
+    var sink: int = 0;
+
+    var fill: int = 0;
+    while (fill < 64) {
+        var en_fill = queueEnqueue(store, fill as any);
+        store = en_fill.0;
+        if (en_fill.1 != nil) {
+            println("perf queueDropOldest: fill failed");
+            return;
+        }
+        fill = fill + 1;
+    }
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var d_w = queueEnqueueDropOldest(store, w as any);
+        store = d_w.0;
+        if (d_w.1) {
+            sink = sink + 1;
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var d_i = queueEnqueueDropOldest(store, i as any);
+        store = d_i.0;
+        if (d_i.1) {
+            sink = sink + 1;
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf queueDropOldest", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func benchQueueTypedRoundTrip(iters: int): void {
+    var opened = queueNew(0);
+    if (opened.1 != nil) {
+        println("perf queueTypedRoundTrip: setup failed");
+        return;
+    }
+    var store: QueueStore = opened.0;
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+    var sink: int = 0;
+
+    var warm: int = warmup(iters);
+    var w: int = 0;
+    while (w < warm) {
+        var en_w = queueEnqueueTyped(store,
+                                     {"id": w, "name": "u"} as any,
+                                     schema as any);
+        store = en_w.0;
+        if (en_w.1 != nil) {
+            println("perf queueTypedRoundTrip: warm enqueue failed");
+            return;
+        }
+
+        var de_w = queueDequeueTyped(store, schema as any);
+        store = de_w.0;
+        if (de_w.3 != nil || !de_w.2) {
+            println("perf queueTypedRoundTrip: warm dequeue failed");
+            return;
+        }
+
+        var row_w: map<string, any> = de_w.1 as map<string, any>;
+        sink = sink + (mapGetString(row_w, "id") as int);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var en_i = queueEnqueueTyped(store,
+                                     {"id": i, "name": "u"} as any,
+                                     schema as any);
+        store = en_i.0;
+        if (en_i.1 != nil) {
+            println("perf queueTypedRoundTrip: enqueue failed");
+            return;
+        }
+
+        var de_i = queueDequeueTyped(store, schema as any);
+        store = de_i.0;
+        if (de_i.3 != nil || !de_i.2) {
+            println("perf queueTypedRoundTrip: dequeue failed");
+            return;
+        }
+
+        var row_i: map<string, any> = de_i.1 as map<string, any>;
+        sink = sink + (mapGetString(row_i, "id") as int);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf queueTypedRoundTrip", iters, start, end);
+
+    if (sink == -1) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang Queue Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchQueueEnqueueDequeueHot(260000 * scale);
+    benchQueueDropOldest(220000 * scale);
+    benchQueueTypedRoundTrip(140000 * scale);
+
+    println("Queue stdlib benchmark complete!");
+}

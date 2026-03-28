@@ -1,0 +1,863 @@
+// MessagePack helpers for compact binary serialization.
+// Supported types: nil, bool, int (up to int32/uint32), string (ASCII decode), bytes, array<any>, map<string, any>.
+
+var MSGPACK_ASCII_PRINTABLE: string = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+var MSGPACK_MAX_DEPTH: int = 96;
+
+func msgpackStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func msgpackError(code: int,
+                  message: string,
+                  context: string,
+                  offset: int,
+                  detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "offset": offset
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return msgpackStdError(code, message, data);
+}
+
+func msgpackEmptyBytes(): bytes {
+    return bytesWithSize(0, 0).0;
+}
+
+func msgpackBytesFromInts(byte_values: array<int>, context: string): (bytes, Error?) {
+    var out_r = bytesWithSize(len(byte_values), 0);
+    if (out_r.1 != nil) {
+        return (msgpackEmptyBytes(),
+                msgpackError(out_r.1.code,
+                             "bytesWithSize failed",
+                             context + ".bytesWithSize",
+                             -1,
+                             out_r.1.message));
+    }
+
+    var out: bytes = out_r.0;
+    var i: int = 0;
+    while (i < len(byte_values)) {
+        var v: int = byte_values[i];
+        if (v < 0 || v > 255) {
+            return (msgpackEmptyBytes(),
+                    msgpackError(ERR_INVALID_ARGUMENT,
+                                 "byte value out of range",
+                                 context + ".byteRange",
+                                 i,
+                                 v));
+        }
+        out[i] = v;
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func msgpackJoin(parts: array<bytes>, context: string): (bytes, Error?) {
+    var joined = bytesJoin(parts);
+    if (joined.1 != nil) {
+        return (msgpackEmptyBytes(),
+                msgpackError(joined.1.code,
+                             "bytesJoin failed",
+                             context + ".bytesJoin",
+                             -1,
+                             joined.1.message));
+    }
+    return (joined.0, nil);
+}
+
+func msgpackU16Bytes(value: int, context: string): (bytes, Error?) {
+    if (value < 0 || value > 65535) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_INVALID_ARGUMENT,
+                             "u16 value out of range",
+                             context + ".u16",
+                             -1,
+                             value));
+    }
+
+    var b0: int = value / 256;
+    var b1: int = value % 256;
+    return msgpackBytesFromInts([b0, b1], context + ".u16Bytes");
+}
+
+func msgpackU32Bytes(value: int, context: string): (bytes, Error?) {
+    if (value < 0 || value > 4294967295) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_INVALID_ARGUMENT,
+                             "u32 value out of range",
+                             context + ".u32",
+                             -1,
+                             value));
+    }
+
+    var b0: int = value / 16777216;
+    var rem1: int = value % 16777216;
+    var b1: int = rem1 / 65536;
+    var rem2: int = rem1 % 65536;
+    var b2: int = rem2 / 256;
+    var b3: int = rem2 % 256;
+
+    return msgpackBytesFromInts([b0, b1, b2, b3], context + ".u32Bytes");
+}
+
+func msgpackEncodeNil(): (bytes, Error?) {
+    return msgpackBytesFromInts([0xc0], "msgpack.encode.nil");
+}
+
+func msgpackEncodeBool(value: bool): (bytes, Error?) {
+    if (value) {
+        return msgpackBytesFromInts([0xc3], "msgpack.encode.bool.true");
+    }
+    return msgpackBytesFromInts([0xc2], "msgpack.encode.bool.false");
+}
+
+func msgpackEncodeInt(value: int): (bytes, Error?) {
+    if (value >= 0 && value <= 127) {
+        return msgpackBytesFromInts([value], "msgpack.encode.int.fixpos");
+    }
+
+    if (value >= -32 && value < 0) {
+        return msgpackBytesFromInts([256 + value], "msgpack.encode.int.fixneg");
+    }
+
+    if (value >= 0) {
+        if (value <= 255) {
+            return msgpackBytesFromInts([0xcc, value], "msgpack.encode.int.u8");
+        }
+        if (value <= 65535) {
+            var u16 = msgpackU16Bytes(value, "msgpack.encode.int.u16");
+            if (u16.1 != nil) return (msgpackEmptyBytes(), u16.1);
+            var h16 = msgpackBytesFromInts([0xcd], "msgpack.encode.int.u16.header");
+            if (h16.1 != nil) return (msgpackEmptyBytes(), h16.1);
+            return msgpackJoin([h16.0, u16.0], "msgpack.encode.int.u16.join");
+        }
+        if (value <= 4294967295) {
+            var u32 = msgpackU32Bytes(value, "msgpack.encode.int.u32");
+            if (u32.1 != nil) return (msgpackEmptyBytes(), u32.1);
+            var h32 = msgpackBytesFromInts([0xce], "msgpack.encode.int.u32.header");
+            if (h32.1 != nil) return (msgpackEmptyBytes(), h32.1);
+            return msgpackJoin([h32.0, u32.0], "msgpack.encode.int.u32.join");
+        }
+
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "int value exceeds uint32 MessagePack subset",
+                             "msgpack.encode.int.max",
+                             -1,
+                             value));
+    }
+
+    if (value >= -128) {
+        return msgpackBytesFromInts([0xd0, 256 + value], "msgpack.encode.int.i8");
+    }
+
+    if (value >= -32768) {
+        var i16_raw: int = 65536 + value;
+        var i16 = msgpackU16Bytes(i16_raw, "msgpack.encode.int.i16");
+        if (i16.1 != nil) return (msgpackEmptyBytes(), i16.1);
+        var h_i16 = msgpackBytesFromInts([0xd1], "msgpack.encode.int.i16.header");
+        if (h_i16.1 != nil) return (msgpackEmptyBytes(), h_i16.1);
+        return msgpackJoin([h_i16.0, i16.0], "msgpack.encode.int.i16.join");
+    }
+
+    if (value >= -2147483648) {
+        var i32_raw: int = 4294967296 + value;
+        var i32 = msgpackU32Bytes(i32_raw, "msgpack.encode.int.i32");
+        if (i32.1 != nil) return (msgpackEmptyBytes(), i32.1);
+        var h_i32 = msgpackBytesFromInts([0xd2], "msgpack.encode.int.i32.header");
+        if (h_i32.1 != nil) return (msgpackEmptyBytes(), h_i32.1);
+        return msgpackJoin([h_i32.0, i32.0], "msgpack.encode.int.i32.join");
+    }
+
+    return (msgpackEmptyBytes(),
+            msgpackError(ERR_LIMIT,
+                         "negative int value exceeds int32 MessagePack subset",
+                         "msgpack.encode.int.min",
+                         -1,
+                         value));
+}
+
+func msgpackEncodeString(value: string): (bytes, Error?) {
+    var payload = stringToBytes(value);
+    if (payload.1 != nil) {
+        return (msgpackEmptyBytes(),
+                msgpackError(payload.1.code,
+                             "stringToBytes failed",
+                             "msgpack.encode.string.stringToBytes",
+                             -1,
+                             payload.1.message));
+    }
+
+    var size: int = len(payload.0);
+    if (size <= 31) {
+        var fix = msgpackBytesFromInts([0xa0 + size], "msgpack.encode.string.fixstr.header");
+        if (fix.1 != nil) return (msgpackEmptyBytes(), fix.1);
+        return msgpackJoin([fix.0, payload.0], "msgpack.encode.string.fixstr.join");
+    }
+
+    if (size <= 255) {
+        var h8 = msgpackBytesFromInts([0xd9, size], "msgpack.encode.string.str8.header");
+        if (h8.1 != nil) return (msgpackEmptyBytes(), h8.1);
+        return msgpackJoin([h8.0, payload.0], "msgpack.encode.string.str8.join");
+    }
+
+    if (size <= 65535) {
+        var sz16 = msgpackU16Bytes(size, "msgpack.encode.string.str16.size");
+        if (sz16.1 != nil) return (msgpackEmptyBytes(), sz16.1);
+        var h16 = msgpackBytesFromInts([0xda], "msgpack.encode.string.str16.header");
+        if (h16.1 != nil) return (msgpackEmptyBytes(), h16.1);
+        var hp = msgpackJoin([h16.0, sz16.0], "msgpack.encode.string.str16.prefix");
+        if (hp.1 != nil) return (msgpackEmptyBytes(), hp.1);
+        return msgpackJoin([hp.0, payload.0], "msgpack.encode.string.str16.join");
+    }
+
+    return (msgpackEmptyBytes(),
+            msgpackError(ERR_LIMIT,
+                         "string length exceeds str16 MessagePack subset",
+                         "msgpack.encode.string.limit",
+                         -1,
+                         size));
+}
+func msgpackEncodeBytes(value: bytes): (bytes, Error?) {
+    var size: int = len(value);
+
+    if (size <= 255) {
+        var h8 = msgpackBytesFromInts([0xc4, size], "msgpack.encode.bytes.bin8.header");
+        if (h8.1 != nil) return (msgpackEmptyBytes(), h8.1);
+        return msgpackJoin([h8.0, value], "msgpack.encode.bytes.bin8.join");
+    }
+
+    if (size <= 65535) {
+        var sz16 = msgpackU16Bytes(size, "msgpack.encode.bytes.bin16.size");
+        if (sz16.1 != nil) return (msgpackEmptyBytes(), sz16.1);
+        var h16 = msgpackBytesFromInts([0xc5], "msgpack.encode.bytes.bin16.header");
+        if (h16.1 != nil) return (msgpackEmptyBytes(), h16.1);
+        var hp = msgpackJoin([h16.0, sz16.0], "msgpack.encode.bytes.bin16.prefix");
+        if (hp.1 != nil) return (msgpackEmptyBytes(), hp.1);
+        return msgpackJoin([hp.0, value], "msgpack.encode.bytes.bin16.join");
+    }
+
+    return (msgpackEmptyBytes(),
+            msgpackError(ERR_LIMIT,
+                         "bytes length exceeds bin16 MessagePack subset",
+                         "msgpack.encode.bytes.limit",
+                         -1,
+                         size));
+}
+
+func msgpackEncodeArrayInternal(items: array<any>, depth: int): (bytes, Error?) {
+    if (depth > MSGPACK_MAX_DEPTH) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "maximum nesting depth exceeded",
+                             "msgpack.encode.array.depth",
+                             -1,
+                             depth));
+    }
+
+    var size: int = len(items);
+    if (size > 65535) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "array length exceeds array16 MessagePack subset",
+                             "msgpack.encode.array.limit",
+                             -1,
+                             size));
+    }
+
+    var chunks: array<bytes> = [];
+    foreach (item in items) {
+        var encoded = msgpackEncodeValue(item, depth + 1);
+        if (encoded.1 != nil) {
+            return (msgpackEmptyBytes(), encoded.1);
+        }
+        push(chunks, encoded.0);
+    }
+
+    var payload = msgpackJoin(chunks, "msgpack.encode.array.payload");
+    if (payload.1 != nil) {
+        return (msgpackEmptyBytes(), payload.1);
+    }
+
+    if (size <= 15) {
+        var fix = msgpackBytesFromInts([0x90 + size], "msgpack.encode.array.fixarray.header");
+        if (fix.1 != nil) return (msgpackEmptyBytes(), fix.1);
+        return msgpackJoin([fix.0, payload.0], "msgpack.encode.array.fixarray.join");
+    }
+
+    var len16 = msgpackU16Bytes(size, "msgpack.encode.array.array16.size");
+    if (len16.1 != nil) return (msgpackEmptyBytes(), len16.1);
+    var h16 = msgpackBytesFromInts([0xdc], "msgpack.encode.array.array16.header");
+    if (h16.1 != nil) return (msgpackEmptyBytes(), h16.1);
+    var hp = msgpackJoin([h16.0, len16.0], "msgpack.encode.array.array16.prefix");
+    if (hp.1 != nil) return (msgpackEmptyBytes(), hp.1);
+    return msgpackJoin([hp.0, payload.0], "msgpack.encode.array.array16.join");
+}
+
+func msgpackEncodeMapStringAny(values: map<string, any>, depth: int): (bytes, Error?) {
+    if (depth > MSGPACK_MAX_DEPTH) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "maximum nesting depth exceeded",
+                             "msgpack.encode.map.depth",
+                             -1,
+                             depth));
+    }
+
+    var entry_chunks: array<bytes> = [];
+    var count: int = 0;
+    foreach (key_any in keys(values)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            return (msgpackEmptyBytes(),
+                    msgpackError(ERR_INVALID_ARGUMENT,
+                                 "map key must be string",
+                                 "msgpack.encode.map.keyType",
+                                 -1,
+                                 key_any));
+        }
+
+        var key: string = key_any as string;
+        var key_encoded = msgpackEncodeString(key);
+        if (key_encoded.1 != nil) {
+            return (msgpackEmptyBytes(), key_encoded.1);
+        }
+
+        var value_any: any = mapGetString(values, key);
+        var value_encoded = msgpackEncodeValue(value_any, depth + 1);
+        if (value_encoded.1 != nil) {
+            return (msgpackEmptyBytes(), value_encoded.1);
+        }
+
+        push(entry_chunks, key_encoded.0);
+        push(entry_chunks, value_encoded.0);
+        count = count + 1;
+    }
+
+    if (count > 65535) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "map size exceeds map16 MessagePack subset",
+                             "msgpack.encode.map.limit",
+                             -1,
+                             count));
+    }
+
+    var payload = msgpackJoin(entry_chunks, "msgpack.encode.map.payload");
+    if (payload.1 != nil) {
+        return (msgpackEmptyBytes(), payload.1);
+    }
+
+    if (count <= 15) {
+        var fix = msgpackBytesFromInts([0x80 + count], "msgpack.encode.map.fixmap.header");
+        if (fix.1 != nil) return (msgpackEmptyBytes(), fix.1);
+        return msgpackJoin([fix.0, payload.0], "msgpack.encode.map.fixmap.join");
+    }
+
+    var len16 = msgpackU16Bytes(count, "msgpack.encode.map.map16.size");
+    if (len16.1 != nil) return (msgpackEmptyBytes(), len16.1);
+    var h16 = msgpackBytesFromInts([0xde], "msgpack.encode.map.map16.header");
+    if (h16.1 != nil) return (msgpackEmptyBytes(), h16.1);
+    var hp = msgpackJoin([h16.0, len16.0], "msgpack.encode.map.map16.prefix");
+    if (hp.1 != nil) return (msgpackEmptyBytes(), hp.1);
+    return msgpackJoin([hp.0, payload.0], "msgpack.encode.map.map16.join");
+}
+
+func msgpackEncodeValue(value: any, depth: int): (bytes, Error?) {
+    if (depth > MSGPACK_MAX_DEPTH) {
+        return (msgpackEmptyBytes(),
+                msgpackError(ERR_LIMIT,
+                             "maximum nesting depth exceeded",
+                             "msgpack.encode.value.depth",
+                             -1,
+                             depth));
+    }
+
+    if (value == nil) {
+        return msgpackEncodeNil();
+    }
+
+    var t: string = typeOf(value);
+    if (t == "bool") {
+        return msgpackEncodeBool(value as bool);
+    }
+    if (t == "int") {
+        return msgpackEncodeInt(value as int);
+    }
+    if (t == "string") {
+        return msgpackEncodeString(value as string);
+    }
+    if (t == "bytes") {
+        return msgpackEncodeBytes(value as bytes);
+    }
+    if (t == "array") {
+        return msgpackEncodeArrayInternal(value as array<any>, depth + 1);
+    }
+    if (t == "map") {
+        return msgpackEncodeMapStringAny(value as map<string, any>, depth + 1);
+    }
+
+    return (msgpackEmptyBytes(),
+            msgpackError(ERR_INVALID_ARGUMENT,
+                         "unsupported value type for msgpack encode",
+                         "msgpack.encode.value.type",
+                         -1,
+                         t));
+}
+
+func msgpackEncode(value: any): (bytes, Error?) {
+    return msgpackEncodeValue(value, 0);
+}
+
+func msgpackEncodeMap(doc: map<string, any>): (bytes, Error?) {
+    return msgpackEncodeMapStringAny(doc, 0);
+}
+
+func msgpackEncodeArray(items: array<any>): (bytes, Error?) {
+    return msgpackEncodeArrayInternal(items, 0);
+}
+
+func msgpackEncodeToHex(value: any): (string, Error?) {
+    var encoded = msgpackEncode(value);
+    if (encoded.1 != nil) {
+        return ("", encoded.1);
+    }
+
+    var hex_r = bytesToHex(encoded.0);
+    if (hex_r.1 != nil) {
+        return ("",
+                msgpackError(hex_r.1.code,
+                             "bytesToHex failed",
+                             "msgpack.encodeToHex.bytesToHex",
+                             -1,
+                             hex_r.1.message));
+    }
+
+    return (hex_r.0, nil);
+}
+func msgpackEnsureAvailable(data: bytes,
+                            start: int,
+                            count: int,
+                            context: string): Error? {
+    if (start < 0 || count < 0) {
+        return msgpackError(ERR_INVALID_ARGUMENT,
+                            "negative offset/count",
+                            context + ".range.negative",
+                            start,
+                            count);
+    }
+
+    if (start > len(data)) {
+        return msgpackError(ERR_PARSE,
+                            "offset beyond input length",
+                            context + ".range.start",
+                            start,
+                            len(data));
+    }
+
+    if ((start + count) > len(data)) {
+        var detail: map<string, any> = {
+            "start": start,
+            "count": count,
+            "length": len(data)
+        };
+        return msgpackError(ERR_PARSE,
+                            "truncated MessagePack payload",
+                            context + ".range.end",
+                            start,
+                            detail);
+    }
+
+    return nil;
+}
+
+func msgpackReadU8At(data: bytes, offset: int, context: string): (int, Error?) {
+    var err = msgpackEnsureAvailable(data, offset, 1, context);
+    if (err != nil) {
+        return (0, err);
+    }
+    return (data[offset], nil);
+}
+
+func msgpackReadU16At(data: bytes, offset: int, context: string): (int, Error?) {
+    var err = msgpackEnsureAvailable(data, offset, 2, context);
+    if (err != nil) {
+        return (0, err);
+    }
+
+    var b0: int = data[offset];
+    var b1: int = data[offset + 1];
+    return ((b0 * 256) + b1, nil);
+}
+
+func msgpackReadU32At(data: bytes, offset: int, context: string): (int, Error?) {
+    var err = msgpackEnsureAvailable(data, offset, 4, context);
+    if (err != nil) {
+        return (0, err);
+    }
+
+    var b0: int = data[offset];
+    var b1: int = data[offset + 1];
+    var b2: int = data[offset + 2];
+    var b3: int = data[offset + 3];
+    return (((b0 * 16777216) + (b1 * 65536) + (b2 * 256) + b3), nil);
+}
+
+func msgpackSliceBytes(data: bytes,
+                       start: int,
+                       count: int,
+                       context: string): (bytes, Error?) {
+    var err = msgpackEnsureAvailable(data, start, count, context);
+    if (err != nil) {
+        return (msgpackEmptyBytes(), err);
+    }
+    return (slice(data, start, start + count), nil);
+}
+
+func msgpackDecodeAsciiString(data: bytes,
+                              start: int,
+                              count: int,
+                              context: string): (string, Error?) {
+    var s = msgpackSliceBytes(data, start, count, context + ".slice");
+    if (s.1 != nil) {
+        return ("", s.1);
+    }
+
+    var out: string = "";
+    var offset: int = 0;
+    foreach (byte_v in s.0) {
+        if (byte_v == 9) {
+            out = out + "\t";
+        } else if (byte_v == 10) {
+            out = out + "\n";
+        } else if (byte_v == 13) {
+            out = out + "\r";
+        } else if (byte_v >= 32 && byte_v <= 126) {
+            out = out + substring(MSGPACK_ASCII_PRINTABLE, byte_v - 32, 1);
+        } else {
+            var detail: map<string, any> = {
+                "byte": byte_v,
+                "relativeOffset": offset,
+                "absoluteOffset": start + offset
+            };
+            return ("",
+                    msgpackError(ERR_PARSE,
+                                 "msgpack string contains non-ASCII byte; UTF-8 decode not yet supported",
+                                 context + ".ascii",
+                                 start + offset,
+                                 detail));
+        }
+
+        offset = offset + 1;
+    }
+
+    return (out, nil);
+}
+
+func msgpackDecodeArray(data: bytes,
+                        offset: int,
+                        count: int,
+                        depth: int): (array<any>, int, Error?) {
+    var out: array<any> = [];
+    var idx: int = offset;
+
+    var i: int = 0;
+    while (i < count) {
+        var item = msgpackDecodeAt(data, idx, depth + 1);
+        if (item.2 != nil) {
+            return (out, idx, item.2);
+        }
+        push(out, item.0);
+        idx = item.1;
+        i = i + 1;
+    }
+
+    return (out, idx, nil);
+}
+
+func msgpackDecodeMap(data: bytes,
+                      offset: int,
+                      count: int,
+                      depth: int): (map<string, any>, int, Error?) {
+    var out: map<string, any> = {};
+    var idx: int = offset;
+
+    var i: int = 0;
+    while (i < count) {
+        var key_r = msgpackDecodeAt(data, idx, depth + 1);
+        if (key_r.2 != nil) {
+            return (out, idx, key_r.2);
+        }
+
+        if (key_r.0 == nil || typeOf(key_r.0) != "string") {
+            return (out,
+                    idx,
+                    msgpackError(ERR_PARSE,
+                                 "map key must decode to string",
+                                 "msgpack.decode.map.keyType",
+                                 idx,
+                                 typeOf(key_r.0)));
+        }
+
+        var key: string = key_r.0 as string;
+        idx = key_r.1;
+
+        var value_r = msgpackDecodeAt(data, idx, depth + 1);
+        if (value_r.2 != nil) {
+            return (out, idx, value_r.2);
+        }
+
+        if (mapHasString(out, key)) {
+            return (out,
+                    idx,
+                    msgpackError(ERR_PARSE,
+                                 "duplicate key in decoded map",
+                                 "msgpack.decode.map.duplicate",
+                                 idx,
+                                 key));
+        }
+
+        mapSetString(out, key, value_r.0);
+        idx = value_r.1;
+        i = i + 1;
+    }
+
+    return (out, idx, nil);
+}
+
+func msgpackDecodeAt(data: bytes, offset: int, depth: int): (any, int, Error?) {
+    if (depth > MSGPACK_MAX_DEPTH) {
+        return (nil,
+                offset,
+                msgpackError(ERR_LIMIT,
+                             "maximum nesting depth exceeded",
+                             "msgpack.decode.depth",
+                             offset,
+                             depth));
+    }
+
+    var marker_r = msgpackReadU8At(data, offset, "msgpack.decode.marker");
+    if (marker_r.1 != nil) {
+        return (nil, offset, marker_r.1);
+    }
+
+    var marker: int = marker_r.0;
+
+    if (marker <= 0x7f) {
+        return (marker, offset + 1, nil);
+    }
+
+    if (marker >= 0xe0) {
+        return (marker - 256, offset + 1, nil);
+    }
+
+    if (marker >= 0xa0 && marker <= 0xbf) {
+        var str_len: int = marker - 0xa0;
+        var str_start: int = offset + 1;
+        var text = msgpackDecodeAsciiString(data, str_start, str_len, "msgpack.decode.fixstr");
+        if (text.1 != nil) {
+            return (nil, offset, text.1);
+        }
+        return (text.0, str_start + str_len, nil);
+    }
+
+    if (marker >= 0x90 && marker <= 0x9f) {
+        var arr_len: int = marker - 0x90;
+        var arr = msgpackDecodeArray(data, offset + 1, arr_len, depth + 1);
+        return (arr.0 as any, arr.1, arr.2);
+    }
+
+    if (marker >= 0x80 && marker <= 0x8f) {
+        var map_len: int = marker - 0x80;
+        var mp = msgpackDecodeMap(data, offset + 1, map_len, depth + 1);
+        return (mp.0 as any, mp.1, mp.2);
+    }
+
+    if (marker == 0xc0) {
+        return (nil, offset + 1, nil);
+    }
+    if (marker == 0xc2) {
+        return (false, offset + 1, nil);
+    }
+    if (marker == 0xc3) {
+        return (true, offset + 1, nil);
+    }
+
+    if (marker == 0xcc) {
+        var u8 = msgpackReadU8At(data, offset + 1, "msgpack.decode.u8");
+        if (u8.1 != nil) return (nil, offset, u8.1);
+        return (u8.0, offset + 2, nil);
+    }
+    if (marker == 0xcd) {
+        var u16 = msgpackReadU16At(data, offset + 1, "msgpack.decode.u16");
+        if (u16.1 != nil) return (nil, offset, u16.1);
+        return (u16.0, offset + 3, nil);
+    }
+    if (marker == 0xce) {
+        var u32 = msgpackReadU32At(data, offset + 1, "msgpack.decode.u32");
+        if (u32.1 != nil) return (nil, offset, u32.1);
+        return (u32.0, offset + 5, nil);
+    }
+
+    if (marker == 0xd0) {
+        var i8r = msgpackReadU8At(data, offset + 1, "msgpack.decode.i8");
+        if (i8r.1 != nil) return (nil, offset, i8r.1);
+        var i8: int = i8r.0;
+        if (i8 >= 128) {
+            i8 = i8 - 256;
+        }
+        return (i8, offset + 2, nil);
+    }
+    if (marker == 0xd1) {
+        var i16r = msgpackReadU16At(data, offset + 1, "msgpack.decode.i16");
+        if (i16r.1 != nil) return (nil, offset, i16r.1);
+        var i16: int = i16r.0;
+        if (i16 >= 32768) {
+            i16 = i16 - 65536;
+        }
+        return (i16, offset + 3, nil);
+    }
+    if (marker == 0xd2) {
+        var i32r = msgpackReadU32At(data, offset + 1, "msgpack.decode.i32");
+        if (i32r.1 != nil) return (nil, offset, i32r.1);
+        var i32: int = i32r.0;
+        if (i32 >= 2147483648) {
+            i32 = i32 - 4294967296;
+        }
+        return (i32, offset + 5, nil);
+    }
+
+    if (marker == 0xd9) {
+        var l8 = msgpackReadU8At(data, offset + 1, "msgpack.decode.str8.length");
+        if (l8.1 != nil) return (nil, offset, l8.1);
+        var s8_start: int = offset + 2;
+        var s8 = msgpackDecodeAsciiString(data, s8_start, l8.0, "msgpack.decode.str8");
+        if (s8.1 != nil) return (nil, offset, s8.1);
+        return (s8.0, s8_start + l8.0, nil);
+    }
+
+    if (marker == 0xda) {
+        var l16 = msgpackReadU16At(data, offset + 1, "msgpack.decode.str16.length");
+        if (l16.1 != nil) return (nil, offset, l16.1);
+        var s16_start: int = offset + 3;
+        var s16 = msgpackDecodeAsciiString(data, s16_start, l16.0, "msgpack.decode.str16");
+        if (s16.1 != nil) return (nil, offset, s16.1);
+        return (s16.0, s16_start + l16.0, nil);
+    }
+
+    if (marker == 0xc4) {
+        var bl8 = msgpackReadU8At(data, offset + 1, "msgpack.decode.bin8.length");
+        if (bl8.1 != nil) return (nil, offset, bl8.1);
+        var b8_start: int = offset + 2;
+        var b8 = msgpackSliceBytes(data, b8_start, bl8.0, "msgpack.decode.bin8.payload");
+        if (b8.1 != nil) return (nil, offset, b8.1);
+        return (b8.0 as any, b8_start + bl8.0, nil);
+    }
+
+    if (marker == 0xc5) {
+        var bl16 = msgpackReadU16At(data, offset + 1, "msgpack.decode.bin16.length");
+        if (bl16.1 != nil) return (nil, offset, bl16.1);
+        var b16_start: int = offset + 3;
+        var b16 = msgpackSliceBytes(data, b16_start, bl16.0, "msgpack.decode.bin16.payload");
+        if (b16.1 != nil) return (nil, offset, b16.1);
+        return (b16.0 as any, b16_start + bl16.0, nil);
+    }
+
+    if (marker == 0xdc) {
+        var al16 = msgpackReadU16At(data, offset + 1, "msgpack.decode.array16.length");
+        if (al16.1 != nil) return (nil, offset, al16.1);
+        var arr16 = msgpackDecodeArray(data, offset + 3, al16.0, depth + 1);
+        return (arr16.0 as any, arr16.1, arr16.2);
+    }
+
+    if (marker == 0xde) {
+        var ml16 = msgpackReadU16At(data, offset + 1, "msgpack.decode.map16.length");
+        if (ml16.1 != nil) return (nil, offset, ml16.1);
+        var map16 = msgpackDecodeMap(data, offset + 3, ml16.0, depth + 1);
+        return (map16.0 as any, map16.1, map16.2);
+    }
+
+    return (nil,
+            offset,
+            msgpackError(ERR_PARSE,
+                         "unsupported MessagePack marker in current subset",
+                         "msgpack.decode.marker.unsupported",
+                         offset,
+                         marker));
+}
+
+func msgpackDecode(data: bytes): (any, Error?) {
+    var decoded = msgpackDecodeAt(data, 0, 0);
+    if (decoded.2 != nil) {
+        return (nil, decoded.2);
+    }
+
+    if (decoded.1 != len(data)) {
+        var detail: map<string, any> = {
+            "consumed": decoded.1,
+            "length": len(data)
+        };
+        return (nil,
+                msgpackError(ERR_PARSE,
+                             "trailing bytes after MessagePack value",
+                             "msgpack.decode.trailing",
+                             decoded.1,
+                             detail));
+    }
+
+    return (decoded.0, nil);
+}
+
+func msgpackDecodeAsMap(data: bytes): (map<string, any>, Error?) {
+    var decoded = msgpackDecode(data);
+    if (decoded.1 != nil) {
+        return ({}, decoded.1);
+    }
+
+    if (decoded.0 == nil || typeOf(decoded.0) != "map") {
+        return ({},
+                msgpackError(ERR_PARSE,
+                             "decoded value is not a map",
+                             "msgpack.decodeAsMap.type",
+                             0,
+                             typeOf(decoded.0)));
+    }
+
+    return (decoded.0 as map<string, any>, nil);
+}
+
+func msgpackDecodeAsArray(data: bytes): (array<any>, Error?) {
+    var decoded = msgpackDecode(data);
+    if (decoded.1 != nil) {
+        return ([], decoded.1);
+    }
+
+    if (decoded.0 == nil || typeOf(decoded.0) != "array") {
+        return ([],
+                msgpackError(ERR_PARSE,
+                             "decoded value is not an array",
+                             "msgpack.decodeAsArray.type",
+                             0,
+                             typeOf(decoded.0)));
+    }
+
+    return (decoded.0 as array<any>, nil);
+}
+
+func msgpackDecodeFromHex(hex_text: string): (any, Error?) {
+    var raw = hexToBytes(hex_text);
+    if (raw.1 != nil) {
+        return (nil,
+                msgpackError(raw.1.code,
+                             "hexToBytes failed",
+                             "msgpack.decodeFromHex.hexToBytes",
+                             -1,
+                             raw.1.message));
+    }
+    return msgpackDecode(raw.0);
+}

@@ -1,0 +1,31 @@
+type IntTransformer = func(int): int;
+type Identity[T] = func(T): T;
+
+func add(a: int, b: int): int {
+    var c: int = a + b;
+    return c;
+}
+
+func applyTwice(fn: IntTransformer, value: int): int {
+    return fn(fn(value));
+}
+
+func main() {
+    println(add(2, 3));
+    println(add(add(1, 2), 4));
+
+    var increment: IntTransformer = func(value: int): int {
+        return value + 1;
+    };
+    println(applyTwice(increment, 40));
+
+    var doubleTransform: func(int): int = func(value: int): int {
+        return value * 2;
+    };
+    println(doubleTransform(21));
+
+    var identity: Identity[int] = func(value: int): int {
+        return value;
+    };
+    println(identity(9));
+}

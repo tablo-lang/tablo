@@ -1,0 +1,182 @@
+import "fixtures/lru.tblo";
+
+func orderEquals(actual: array<string>, expected: array<string>): bool {
+    if (len(actual) != len(expected)) {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(actual)) {
+        if (actual[i] != expected[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func main(): void {
+    var opened = lruNew(3);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+
+    var store: LruStore = opened.0;
+    println(store.capacity == 3);
+    println(lruCount(store) == 0);
+    println(store.lruKey == "");
+    println(store.mruKey == "");
+
+    var bad_open = lruNew(0);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var set_a = lruSet(store, "a", 1 as any);
+    store = set_a.0;
+    println(set_a.2 == nil);
+    if (set_a.2 == nil) {
+        println(set_a.1.inserted);
+        println(!set_a.1.updated);
+        println(!set_a.1.evicted);
+        println(set_a.1.count == 1);
+    }
+
+    var set_b = lruSet(store, "b", 2 as any);
+    store = set_b.0;
+    println(set_b.2 == nil);
+    if (set_b.2 == nil) {
+        println(set_b.1.inserted);
+        println(!set_b.1.evicted);
+    }
+
+    var set_c = lruSet(store, "c", 3 as any);
+    store = set_c.0;
+    println(set_c.2 == nil);
+    println(lruCount(store) == 3);
+
+    var order_abc = lruKeysLruToMru(store);
+    println(orderEquals(order_abc, ["a", "b", "c"]));
+    var reverse_cba = lruKeysMruToLru(store);
+    println(orderEquals(reverse_cba, ["c", "b", "a"]));
+
+    var get_b = lruGet(store, "b");
+    store = get_b.0;
+    println(get_b.3 == nil);
+    println(get_b.2);
+    if (get_b.2) {
+        println((get_b.1 as int) == 2);
+    }
+
+    var order_acb = lruKeysLruToMru(store);
+    println(orderEquals(order_acb, ["a", "c", "b"]));
+
+    var set_d = lruSet(store, "d", 4 as any);
+    store = set_d.0;
+    println(set_d.2 == nil);
+    if (set_d.2 == nil) {
+        println(set_d.1.inserted);
+        println(set_d.1.evicted);
+        println(set_d.1.evictedKey == "a");
+        println((set_d.1.evictedValue as int) == 1);
+        println(set_d.1.count == 3);
+    }
+
+    var order_cbd = lruKeysLruToMru(store);
+    println(orderEquals(order_cbd, ["c", "b", "d"]));
+
+    var has_a = lruHas(store, "a");
+    store = has_a.0;
+    println(has_a.2 == nil);
+    if (has_a.2 == nil) {
+        println(!has_a.1);
+    }
+
+    var peek_c = lruPeek(store, "c");
+    store = peek_c.0;
+    println(peek_c.3 == nil);
+    println(peek_c.2);
+    if (peek_c.2) {
+        println((peek_c.1 as int) == 3);
+    }
+    var order_bdc = lruKeysLruToMru(store);
+    println(orderEquals(order_bdc, ["b", "d", "c"]));
+
+    var has_d = lruHas(store, "d");
+    store = has_d.0;
+    println(has_d.2 == nil);
+    if (has_d.2 == nil) {
+        println(has_d.1);
+    }
+    var order_bcd = lruKeysLruToMru(store);
+    println(orderEquals(order_bcd, ["b", "c", "d"]));
+
+    var delete_c = lruDelete(store, "c");
+    store = delete_c.0;
+    println(delete_c.2 == nil);
+    if (delete_c.2 == nil) {
+        println(delete_c.1);
+    }
+    println(lruCount(store) == 2);
+    println(orderEquals(lruKeysLruToMru(store), ["b", "d"]));
+
+    var delete_missing = lruDelete(store, "missing");
+    store = delete_missing.0;
+    println(delete_missing.2 == nil);
+    if (delete_missing.2 == nil) {
+        println(!delete_missing.1);
+    }
+
+    var update_b = lruSet(store, "b", 22 as any);
+    store = update_b.0;
+    println(update_b.2 == nil);
+    if (update_b.2 == nil) {
+        println(!update_b.1.inserted);
+        println(update_b.1.updated);
+        println(!update_b.1.evicted);
+    }
+
+    var get_b2 = lruGet(store, "b");
+    store = get_b2.0;
+    println(get_b2.3 == nil);
+    println(get_b2.2);
+    if (get_b2.2) {
+        println((get_b2.1 as int) == 22);
+    }
+
+    var stats_before_clear: LruStats = lruStats(store);
+    println(stats_before_clear.capacity == 3);
+    println(stats_before_clear.count == 2);
+    println(stats_before_clear.totalSets >= 5);
+    println(stats_before_clear.totalEvictions == 1);
+
+    var bad_set = lruSet(store, "", 1 as any);
+    println(bad_set.2 != nil);
+    if (bad_set.2 != nil) {
+        println(bad_set.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_get = lruGet(store, "");
+    println(bad_get.3 != nil);
+    if (bad_get.3 != nil) {
+        println(bad_get.3.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_delete = lruDelete(store, "");
+    println(bad_delete.2 != nil);
+    if (bad_delete.2 != nil) {
+        println(bad_delete.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    store = lruClear(store);
+    println(lruCount(store) == 0);
+    println(len(lruKeysLruToMru(store)) == 0);
+    println(len(lruKeysMruToLru(store)) == 0);
+
+    var stats_after_clear: LruStats = lruStats(store);
+    println(stats_after_clear.count == 0);
+    println(stats_after_clear.lruKey == "");
+    println(stats_after_clear.mruKey == "");
+}

@@ -1,0 +1,9 @@
+func explode(value: int): int {
+    var current: int = value + 1;
+    panic("kaboom");
+    return current;
+}
+
+func main(): void {
+    explode(4);
+}

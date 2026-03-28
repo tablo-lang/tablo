@@ -1,0 +1,148 @@
+import "fixtures/time.tblo";
+
+func main(): void {
+    var p1 = timeParseDuration("1500ms");
+    println(p1.1 == nil);
+    if (p1.1 == nil) {
+        println(p1.0 == 1500);
+    }
+
+    var p2 = timeParseDuration("2s");
+    println(p2.1 == nil);
+    if (p2.1 == nil) {
+        println(p2.0 == 2000);
+    }
+
+    var p3 = timeParseDuration("1m30s");
+    println(p3.1 == nil);
+    if (p3.1 == nil) {
+        println(p3.0 == 90000);
+    }
+
+    var p4 = timeParseDuration("2h 5m 10s 25ms");
+    println(p4.1 == nil);
+    if (p4.1 == nil) {
+        println(p4.0 == 7510025);
+    }
+
+    var p5 = timeParseDuration("-1s");
+    println(p5.1 == nil);
+    if (p5.1 == nil) {
+        println(p5.0 == -1000);
+    }
+
+    var p6 = timeParseDuration("+3d12h");
+    println(p6.1 == nil);
+    if (p6.1 == nil) {
+        println(p6.0 == 302400000);
+    }
+
+    var pe1 = timeParseDuration("");
+    println(pe1.1 != nil);
+    if (pe1.1 != nil) {
+        println(pe1.1.code == ERR_PARSE);
+    }
+
+    var pe2 = timeParseDuration("10");
+    println(pe2.1 != nil);
+    if (pe2.1 != nil) {
+        println(pe2.1.code == ERR_PARSE);
+    }
+
+    var pe3 = timeParseDuration("1x");
+    println(pe3.1 != nil);
+    if (pe3.1 != nil) {
+        println(pe3.1.code == ERR_PARSE);
+    }
+
+    var pe4 = timeParseDuration("ms");
+    println(pe4.1 != nil);
+    if (pe4.1 != nil) {
+        println(pe4.1.code == ERR_PARSE);
+    }
+
+    println(timeFormatDuration(0) == "0ms");
+    println(timeFormatDuration(1500) == "1s500ms");
+    println(timeFormatDuration(90000) == "1m30s");
+    println(timeFormatDuration(7510025) == "2h5m10s25ms");
+    println(timeFormatDuration(-1000) == "-1s");
+    println(timeFormatDuration(302400000) == "3d12h");
+
+    var rt = timeParseDuration("3h15m5s40ms");
+    println(rt.1 == nil);
+    if (rt.1 == nil) {
+        var rt_text: string = timeFormatDuration(rt.0);
+        println(rt_text == "3h15m5s40ms");
+
+        var rt2 = timeParseDuration(rt_text);
+        println(rt2.1 == nil);
+        if (rt2.1 == nil) {
+            println(rt2.0 == rt.0);
+        }
+    }
+
+    var d1 = timeDeadlineAfter(50);
+    println(d1.1 == nil);
+    if (d1.1 == nil) {
+        var rem1: int = timeDeadlineRemaining(d1.0);
+        println(rem1 >= 0 && rem1 <= 50);
+        println(!timeDeadlineExceeded(d1.0) || rem1 == 0);
+    }
+
+    var d0 = timeDeadlineAfter(0);
+    println(d0.1 == nil);
+    if (d0.1 == nil) {
+        println(timeDeadlineRemaining(d0.0) == 0);
+        println(timeDeadlineExceeded(d0.0));
+    }
+
+    var d_bad = timeDeadlineAfter(-1);
+    println(d_bad.1 != nil);
+    if (d_bad.1 != nil) {
+        println(d_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var f1 = timeFormatDateTime([2026, 2, 16, 7, 8, 9, 5]);
+    println(f1.1 == nil);
+    if (f1.1 == nil) {
+        println(f1.0 == "2026-02-16T07:08:09.005");
+    }
+
+    var f_bad_len = timeFormatDateTime([2026, 2, 16]);
+    println(f_bad_len.1 != nil);
+    if (f_bad_len.1 != nil) {
+        println(f_bad_len.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var f_bad_month = timeFormatDateTime([2026, 13, 16, 7, 8, 9, 5]);
+    println(f_bad_month.1 != nil);
+    if (f_bad_month.1 != nil) {
+        println(f_bad_month.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var iso_utc = timeNowIsoUtc();
+    println(iso_utc.1 == nil);
+    if (iso_utc.1 == nil) {
+        var s_utc: string = iso_utc.0;
+        println(len(s_utc) == 23);
+        println(substring(s_utc, 4, 1) == "-");
+        println(substring(s_utc, 7, 1) == "-");
+        println(substring(s_utc, 10, 1) == "T");
+        println(substring(s_utc, 13, 1) == ":");
+        println(substring(s_utc, 16, 1) == ":");
+        println(substring(s_utc, 19, 1) == ".");
+    }
+
+    var iso_local = timeNowIsoLocal();
+    println(iso_local.1 == nil);
+    if (iso_local.1 == nil) {
+        var s_local: string = iso_local.0;
+        println(len(s_local) == 23);
+        println(substring(s_local, 4, 1) == "-");
+        println(substring(s_local, 7, 1) == "-");
+        println(substring(s_local, 10, 1) == "T");
+        println(substring(s_local, 13, 1) == ":");
+        println(substring(s_local, 16, 1) == ":");
+        println(substring(s_local, 19, 1) == ".");
+    }
+}

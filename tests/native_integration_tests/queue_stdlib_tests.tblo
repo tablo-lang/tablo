@@ -1,0 +1,219 @@
+import "fixtures/queue.tblo";
+
+func main(): void {
+    var opened = queueNew(3);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+    var store: QueueStore = opened.0;
+
+    println(queueIsEmpty(store));
+    println(queueLen(store) == 0);
+
+    var bad_open = queueNew(-1);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var seeded = queueNewWithSeed(5, [1 as any, 2 as any, 3 as any]);
+    println(seeded.1 == nil);
+    if (seeded.1 == nil) {
+        println(queueLen(seeded.0) == 3);
+        var seed_arr: array<any> = queueToArray(seeded.0);
+        println(len(seed_arr) == 3);
+        println((seed_arr[0] as int) == 1);
+        println((seed_arr[2] as int) == 3);
+    }
+
+    var over_seeded = queueNewWithSeed(2, [1 as any, 2 as any, 3 as any]);
+    println(over_seeded.1 != nil);
+    if (over_seeded.1 != nil) {
+        println(over_seeded.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var en1 = queueEnqueue(store, "a" as any);
+    store = en1.0;
+    println(en1.1 == nil);
+
+    var en2 = queueEnqueue(store, "b" as any);
+    store = en2.0;
+    println(en2.1 == nil);
+
+    var en3 = queueEnqueue(store, "c" as any);
+    store = en3.0;
+    println(en3.1 == nil);
+    println(queueLen(store) == 3);
+
+    var peek_front = queuePeekFront(store);
+    println(peek_front.1);
+    if (peek_front.1) {
+        println((peek_front.0 as string) == "a");
+    }
+
+    var peek_back = queuePeekBack(store);
+    println(peek_back.1);
+    if (peek_back.1) {
+        println((peek_back.0 as string) == "c");
+    }
+
+    var de1 = queueDequeue(store);
+    store = de1.0;
+    println(de1.2);
+    if (de1.2) {
+        println((de1.1 as string) == "a");
+    }
+
+    var de2 = queueDequeue(store);
+    store = de2.0;
+    println(de2.2);
+    if (de2.2) {
+        println((de2.1 as string) == "b");
+    }
+
+    println(queueLen(store) == 1);
+
+    var pop_back = queuePopBack(store);
+    store = pop_back.0;
+    println(pop_back.2);
+    if (pop_back.2) {
+        println((pop_back.1 as string) == "c");
+    }
+
+    println(queueIsEmpty(store));
+
+    var front1 = queuePushFront(store, 10 as any);
+    store = front1.0;
+    println(front1.1 == nil);
+
+    var back1 = queuePushBack(store, 20 as any);
+    store = back1.0;
+    println(back1.1 == nil);
+
+    var front2 = queuePushFront(store, 5 as any);
+    store = front2.0;
+    println(front2.1 == nil);
+
+    var arr1: array<any> = queueToArray(store);
+    println(len(arr1) == 3);
+    println((arr1[0] as int) == 5);
+    println((arr1[2] as int) == 20);
+
+    var pop_front = queuePopFront(store);
+    store = pop_front.0;
+    println(pop_front.2);
+    if (pop_front.2) {
+        println((pop_front.1 as int) == 5);
+    }
+
+    var bounded_open = queueNew(2);
+    println(bounded_open.1 == nil);
+    if (bounded_open.1 == nil) {
+        var bounded: QueueStore = bounded_open.0;
+
+        var b1 = queueEnqueue(bounded, 1 as any);
+        bounded = b1.0;
+        println(b1.1 == nil);
+
+        var b2 = queueEnqueue(bounded, 2 as any);
+        bounded = b2.0;
+        println(b2.1 == nil);
+
+        var try3 = queueTryEnqueue(bounded, 3 as any);
+        bounded = try3.0;
+        println(!try3.1);
+
+        var stats_try = queueStats(bounded);
+        println(stats_try.droppedCount == 1);
+        println(stats_try.size == 2);
+
+        var drop_old = queueEnqueueDropOldest(bounded, 4 as any);
+        bounded = drop_old.0;
+        println(drop_old.1);
+
+        var bounded_arr: array<any> = queueToArray(bounded);
+        println(len(bounded_arr) == 2);
+        println((bounded_arr[0] as int) == 2);
+        println((bounded_arr[1] as int) == 4);
+
+        var full_front = queuePushFront(bounded, 0 as any);
+        bounded = full_front.0;
+        println(full_front.1 != nil);
+        if (full_front.1 != nil) {
+            println(full_front.1.code == ERR_LIMIT);
+        }
+    }
+
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+
+    var typed_open = queueNew(4);
+    println(typed_open.1 == nil);
+    if (typed_open.1 == nil) {
+        var typed: QueueStore = typed_open.0;
+
+        var te1 = queueEnqueueTyped(typed, {"id": 1, "name": "alice"} as any, schema as any);
+        typed = te1.0;
+        println(te1.1 == nil);
+
+        var te_bad = queueEnqueueTyped(typed, {"id": "oops", "name": "bad"} as any, schema as any);
+        typed = te_bad.0;
+        println(te_bad.1 != nil);
+        if (te_bad.1 != nil) {
+            println(te_bad.1.code == ERR_PARSE);
+        }
+
+        var raw_bad = queueEnqueue(typed, {"id": "x", "name": "raw"} as any);
+        typed = raw_bad.0;
+        println(raw_bad.1 == nil);
+
+        var td1 = queueDequeueTyped(typed, schema as any);
+        typed = td1.0;
+        println(td1.3 == nil);
+        println(td1.2);
+        if (td1.2) {
+            var row1: map<string, any> = td1.1 as map<string, any>;
+            println((mapGetString(row1, "id") as int) == 1);
+        }
+
+        var td2 = queueDequeueTyped(typed, schema as any);
+        typed = td2.0;
+        println(td2.3 != nil);
+        if (td2.3 != nil) {
+            println(td2.3.code == ERR_PARSE);
+        }
+        println(!td2.2);
+        println(queueLen(typed) == 1);
+
+        var raw_pop = queueDequeue(typed);
+        typed = raw_pop.0;
+        println(raw_pop.2);
+        if (raw_pop.2) {
+            var raw_map: map<string, any> = raw_pop.1 as map<string, any>;
+            println((mapGetString(raw_map, "id") as string) == "x");
+        }
+
+        var typed_clear = queueClear(typed);
+        typed = typed_clear.0;
+        println(typed_clear.1 == 0);
+        println(queueIsEmpty(typed));
+    }
+
+    var clear_seeded = queueNewWithSeed(0, [7 as any, 8 as any]);
+    println(clear_seeded.1 == nil);
+    if (clear_seeded.1 == nil) {
+        var clear_store: QueueStore = clear_seeded.0;
+        var cleared = queueClear(clear_store);
+        clear_store = cleared.0;
+        println(cleared.1 == 2);
+        println(queueLen(clear_store) == 0);
+
+        var clear_stats: QueueStats = queueStats(clear_store);
+        println(clear_stats.size == 0);
+        println(clear_stats.head == 0);
+        println(clear_stats.tail == 0);
+    }
+}

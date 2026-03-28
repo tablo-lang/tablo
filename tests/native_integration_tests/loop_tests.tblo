@@ -1,0 +1,45 @@
+func main() {
+    // while + break
+    var i: int = 0;
+    while (true) {
+        i = i + 1;
+        if (i == 3) { break; }
+    }
+    println(i);
+
+    // while + continue
+    var j: int = 0;
+    var sum: int = 0;
+    while (j < 5) {
+        j = j + 1;
+        if (j == 3) { continue; }
+        sum = sum + j;
+    }
+    println(sum);
+
+    // foreach
+    var arr: array<int> = [1, 2, 3];
+    var total: int = 0;
+    foreach (x in arr) {
+        total = total + x;
+    }
+    println(total);
+
+    // foreach + continue/break
+    var total2: int = 0;
+    foreach (x in arr) {
+        if (x == 2) { continue; }
+        if (x == 3) { break; }
+        total2 = total2 + x;
+    }
+    println(total2);
+
+    // foreach range (start inclusive, end exclusive)
+    var range_total: int = 0;
+    foreach (k in 0..6) {
+        if (k == 2) { continue; }
+        if (k == 5) { break; }
+        range_total = range_total + k;
+    }
+    println(range_total);
+}

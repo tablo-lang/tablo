@@ -1,0 +1,196 @@
+import "fixtures/bloom.tblo";
+
+func main(): void {
+    var opened = bloomNew(1024, 5);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+
+    var store: BloomStore = opened.0;
+    println(store.bitLength == 1024);
+    println(store.hashCount == 5);
+    println(store.itemCount == 0);
+    println(bloomSetBitCount(store) == 0);
+
+    var bad_len = bloomNew(7, 3);
+    println(bad_len.1 != nil);
+    if (bad_len.1 != nil) {
+        println(bad_len.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var bad_hash = bloomNew(64, 0);
+    println(bad_hash.1 != nil);
+    if (bad_hash.1 != nil) {
+        println(bad_hash.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var miss_empty = bloomMaybeHas(store, "alpha" as any);
+    println(miss_empty.1 == nil);
+    if (miss_empty.1 == nil) {
+        println(!miss_empty.0);
+    }
+
+    var add_alpha = bloomAdd(store, "alpha" as any);
+    store = add_alpha.0;
+    println(add_alpha.2 == nil);
+    if (add_alpha.2 == nil) {
+        println(add_alpha.1);
+    }
+    println(store.itemCount == 1);
+
+    var has_alpha = bloomMaybeHas(store, "alpha" as any);
+    println(has_alpha.1 == nil);
+    if (has_alpha.1 == nil) {
+        println(has_alpha.0);
+    }
+
+    var add_alpha_dup = bloomAdd(store, "alpha" as any);
+    store = add_alpha_dup.0;
+    println(add_alpha_dup.2 == nil);
+    if (add_alpha_dup.2 == nil) {
+        println(!add_alpha_dup.1);
+    }
+    println(store.itemCount == 1);
+
+    var add_beta = bloomAdd(store, "beta" as any);
+    store = add_beta.0;
+    println(add_beta.2 == nil);
+    if (add_beta.2 == nil) {
+        println(add_beta.1);
+    }
+
+    var add_gamma = bloomAdd(store, "gamma" as any);
+    store = add_gamma.0;
+    println(add_gamma.2 == nil);
+    if (add_gamma.2 == nil) {
+        println(add_gamma.1);
+    }
+
+    println(store.itemCount >= 3);
+    println(bloomSetBitCount(store) > 0);
+
+    var has_beta = bloomMaybeHas(store, "beta" as any);
+    println(has_beta.1 == nil);
+    if (has_beta.1 == nil) {
+        println(has_beta.0);
+    }
+
+    var has_gamma = bloomMaybeHas(store, "gamma" as any);
+    println(has_gamma.1 == nil);
+    if (has_gamma.1 == nil) {
+        println(has_gamma.0);
+    }
+
+    var add_many = bloomAddMany(store,
+                                ["delta" as any,
+                                 "epsilon" as any,
+                                 "zeta" as any,
+                                 "eta" as any]);
+    store = add_many.0;
+    println(add_many.2 == nil);
+    if (add_many.2 == nil) {
+        println(add_many.1 >= 3);
+    }
+
+    var has_delta = bloomMaybeHas(store, "delta" as any);
+    println(has_delta.1 == nil);
+    if (has_delta.1 == nil) {
+        println(has_delta.0);
+    }
+
+    var has_epsilon = bloomMaybeHas(store, "epsilon" as any);
+    println(has_epsilon.1 == nil);
+    if (has_epsilon.1 == nil) {
+        println(has_epsilon.0);
+    }
+
+    var unknown = bloomMaybeHas(store, "definitely-not-present" as any);
+    println(unknown.1 == nil);
+
+    var idx_small = bloomSetBitIndices(store, 5);
+    println(idx_small.2 == nil);
+    if (idx_small.2 == nil) {
+        println(len(idx_small.0) <= 5);
+        println(idx_small.1);
+    }
+
+    var idx_bad = bloomSetBitIndices(store, 0);
+    println(idx_bad.2 != nil);
+    if (idx_bad.2 != nil) {
+        println(idx_bad.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var stats: BloomStats = bloomStats(store);
+    println(stats.bitLength == 1024);
+    println(stats.hashCount == 5);
+    println(stats.itemCount == store.itemCount);
+    println(stats.setBitCount == bloomSetBitCount(store));
+    println(stats.fillPermille > 0);
+    println(stats.approxFalsePositivePermille >= 0);
+    println(stats.approxFalsePositivePermille <= 1000);
+
+    var before_clear: int = bloomSetBitCount(store);
+    var cleared = bloomClear(store);
+    store = cleared.0;
+    println(cleared.1 == before_clear);
+    println(store.itemCount == 0);
+    println(bloomSetBitCount(store) == 0);
+
+    var has_alpha_after_clear = bloomMaybeHas(store, "alpha" as any);
+    println(has_alpha_after_clear.1 == nil);
+    if (has_alpha_after_clear.1 == nil) {
+        println(!has_alpha_after_clear.0);
+    }
+
+    var left_open = bloomNew(512, 4);
+    var right_open = bloomNew(512, 4);
+    println(left_open.1 == nil);
+    println(right_open.1 == nil);
+
+    if (left_open.1 == nil && right_open.1 == nil) {
+        var left: BloomStore = left_open.0;
+        var right: BloomStore = right_open.0;
+
+        left = bloomAdd(left, { "id": 1, "name": "a" } as any).0;
+        left = bloomAdd(left, { "id": 2, "name": "b" } as any).0;
+
+        right = bloomAdd(right, { "id": 3, "name": "c" } as any).0;
+        right = bloomAdd(right, { "id": 4, "name": "d" } as any).0;
+
+        var merged = bloomUnion(left, right);
+        println(merged.1 == nil);
+        if (merged.1 == nil) {
+            var both: BloomStore = merged.0;
+            println(both.bitLength == 512);
+            println(both.hashCount == 4);
+            println(both.itemCount == (left.itemCount + right.itemCount));
+
+            var has_a = bloomMaybeHas(both, { "id": 1, "name": "a" } as any);
+            println(has_a.1 == nil);
+            if (has_a.1 == nil) {
+                println(has_a.0);
+            }
+
+            var has_d = bloomMaybeHas(both, { "id": 4, "name": "d" } as any);
+            println(has_d.1 == nil);
+            if (has_d.1 == nil) {
+                println(has_d.0);
+            }
+
+            var union_stats: BloomStats = bloomStats(both);
+            println(union_stats.setBitCount >= left.bits.setCount);
+            println(union_stats.setBitCount >= right.bits.setCount);
+        }
+
+        var mismatch_open = bloomNew(512, 5);
+        println(mismatch_open.1 == nil);
+        if (mismatch_open.1 == nil) {
+            var mismatch = bloomUnion(left, mismatch_open.0);
+            println(mismatch.1 != nil);
+            if (mismatch.1 != nil) {
+                println(mismatch.1.code == ERR_INVALID_ARGUMENT);
+            }
+        }
+    }
+}

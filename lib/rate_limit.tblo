@@ -1,0 +1,318 @@
+// Rate-limiting helpers for service and API workflows.
+// Provides token-bucket and fixed-window limiters with deterministic *At variants.
+
+record RateLimitTokenBucket {
+    capacity: int,
+    refillPerSecond: int,
+    tokens: int,
+    lastRefillMs: int
+};
+
+record RateLimitFixedWindow {
+    limit: int,
+    windowMs: int,
+    windowStartMs: int,
+    used: int
+};
+
+func rateLimitStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func rateLimitError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return rateLimitStdError(code, message, data);
+}
+
+func rateLimitNormalizeNowMs(now_ms: int): int {
+    if (now_ms < 0) {
+        return 0;
+    }
+    return now_ms;
+}
+
+func rateLimitMinInt(a: int, b: int): int {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+func rateLimitValidateTokenBucketConfig(capacity: int,
+                                        refill_per_second: int,
+                                        initial_tokens: int): Error? {
+    if (capacity < 1 || capacity > 1000000000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "capacity must be between 1 and 1000000000",
+                              "rateLimit.tokenBucket.capacity",
+                              capacity);
+    }
+    if (refill_per_second < 1 || refill_per_second > 1000000000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "refillPerSecond must be between 1 and 1000000000",
+                              "rateLimit.tokenBucket.refillPerSecond",
+                              refill_per_second);
+    }
+    if (initial_tokens < 0 || initial_tokens > capacity) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "initialTokens must be between 0 and capacity",
+                              "rateLimit.tokenBucket.initialTokens",
+                              initial_tokens);
+    }
+    return nil;
+}
+
+func rateLimitValidateTokenBucketPermits(permits: int): Error? {
+    if (permits < 1 || permits > 1000000000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "permits must be between 1 and 1000000000",
+                              "rateLimit.tokenBucket.permits",
+                              permits);
+    }
+    return nil;
+}
+
+func rateLimitTokenBucketNew(capacity: int,
+                             refill_per_second: int): (RateLimitTokenBucket, Error?) {
+    return rateLimitTokenBucketNewAt(capacity,
+                                     refill_per_second,
+                                     capacity,
+                                     timeMonotonicMillis());
+}
+
+func rateLimitTokenBucketNewAt(capacity: int,
+                               refill_per_second: int,
+                               initial_tokens: int,
+                               now_ms: int): (RateLimitTokenBucket, Error?) {
+    var empty: RateLimitTokenBucket = {
+        capacity: 0,
+        refillPerSecond: 0,
+        tokens: 0,
+        lastRefillMs: 0
+    };
+
+    var cfg_err = rateLimitValidateTokenBucketConfig(capacity, refill_per_second, initial_tokens);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var bucket: RateLimitTokenBucket = {
+        capacity: capacity,
+        refillPerSecond: refill_per_second,
+        tokens: initial_tokens,
+        lastRefillMs: rateLimitNormalizeNowMs(now_ms)
+    };
+    return (bucket, nil);
+}
+
+func rateLimitTokenBucketRefillAt(bucket: RateLimitTokenBucket,
+                                  now_ms: int): RateLimitTokenBucket {
+    var next: RateLimitTokenBucket = bucket;
+    var normalized_now: int = rateLimitNormalizeNowMs(now_ms);
+    if (normalized_now < next.lastRefillMs) {
+        return next;
+    }
+
+    var elapsed_ms: int = normalized_now - next.lastRefillMs;
+    if (elapsed_ms <= 0) {
+        return next;
+    }
+
+    var add_tokens: int = (elapsed_ms * next.refillPerSecond) / 1000;
+    if (add_tokens > 0) {
+        next.tokens = rateLimitMinInt(next.capacity, next.tokens + add_tokens);
+        next.lastRefillMs = normalized_now;
+    }
+    return next;
+}
+
+func rateLimitTokenBucketAvailable(bucket: RateLimitTokenBucket): (RateLimitTokenBucket, int) {
+    return rateLimitTokenBucketAvailableAt(bucket, timeMonotonicMillis());
+}
+
+func rateLimitTokenBucketAvailableAt(bucket: RateLimitTokenBucket,
+                                     now_ms: int): (RateLimitTokenBucket, int) {
+    var next: RateLimitTokenBucket = rateLimitTokenBucketRefillAt(bucket, now_ms);
+    return (next, next.tokens);
+}
+
+func rateLimitTokenBucketTryConsume(bucket: RateLimitTokenBucket,
+                                    permits: int): (RateLimitTokenBucket, bool, int, Error?) {
+    return rateLimitTokenBucketTryConsumeAt(bucket, permits, timeMonotonicMillis());
+}
+
+func rateLimitTokenBucketTryConsumeAt(bucket: RateLimitTokenBucket,
+                                      permits: int,
+                                      now_ms: int): (RateLimitTokenBucket, bool, int, Error?) {
+    var permits_err = rateLimitValidateTokenBucketPermits(permits);
+    if (permits_err != nil) {
+        return (bucket, false, 0, permits_err);
+    }
+
+    if (permits > bucket.capacity) {
+        return (bucket,
+                false,
+                0,
+                rateLimitError(ERR_INVALID_ARGUMENT,
+                               "permits cannot exceed bucket capacity",
+                               "rateLimit.tokenBucket.permitsVsCapacity",
+                               {
+                                   "permits": permits,
+                                   "capacity": bucket.capacity
+                               } as any));
+    }
+
+    var next: RateLimitTokenBucket = rateLimitTokenBucketRefillAt(bucket, now_ms);
+    if (next.tokens >= permits) {
+        next.tokens = next.tokens - permits;
+        return (next, true, 0, nil);
+    }
+
+    var deficit: int = permits - next.tokens;
+    var retry_after_ms: int = ((deficit * 1000) + next.refillPerSecond - 1) / next.refillPerSecond;
+    if (retry_after_ms < 1) {
+        retry_after_ms = 1;
+    }
+    return (next, false, retry_after_ms, nil);
+}
+
+func rateLimitValidateFixedWindowConfig(limit: int, window_ms: int): Error? {
+    if (limit < 1 || limit > 1000000000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "limit must be between 1 and 1000000000",
+                              "rateLimit.fixedWindow.limit",
+                              limit);
+    }
+    if (window_ms < 1 || window_ms > 3600000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "windowMs must be between 1 and 3600000",
+                              "rateLimit.fixedWindow.windowMs",
+                              window_ms);
+    }
+    return nil;
+}
+
+func rateLimitValidateFixedWindowPermits(permits: int): Error? {
+    if (permits < 1 || permits > 1000000000) {
+        return rateLimitError(ERR_INVALID_ARGUMENT,
+                              "permits must be between 1 and 1000000000",
+                              "rateLimit.fixedWindow.permits",
+                              permits);
+    }
+    return nil;
+}
+
+func rateLimitFixedWindowNew(limit: int, window_ms: int): (RateLimitFixedWindow, Error?) {
+    return rateLimitFixedWindowNewAt(limit, window_ms, timeMonotonicMillis());
+}
+
+func rateLimitFixedWindowNewAt(limit: int,
+                               window_ms: int,
+                               now_ms: int): (RateLimitFixedWindow, Error?) {
+    var empty: RateLimitFixedWindow = {
+        limit: 0,
+        windowMs: 0,
+        windowStartMs: 0,
+        used: 0
+    };
+
+    var cfg_err = rateLimitValidateFixedWindowConfig(limit, window_ms);
+    if (cfg_err != nil) {
+        return (empty, cfg_err);
+    }
+
+    var normalized_now: int = rateLimitNormalizeNowMs(now_ms);
+    var aligned_start: int = (normalized_now / window_ms) * window_ms;
+
+    var window: RateLimitFixedWindow = {
+        limit: limit,
+        windowMs: window_ms,
+        windowStartMs: aligned_start,
+        used: 0
+    };
+    return (window, nil);
+}
+
+func rateLimitFixedWindowAdvanceAt(window: RateLimitFixedWindow,
+                                   now_ms: int): RateLimitFixedWindow {
+    var next: RateLimitFixedWindow = window;
+    var normalized_now: int = rateLimitNormalizeNowMs(now_ms);
+    if (normalized_now < next.windowStartMs) {
+        return next;
+    }
+
+    var elapsed_ms: int = normalized_now - next.windowStartMs;
+    if (elapsed_ms < next.windowMs) {
+        return next;
+    }
+
+    var steps: int = elapsed_ms / next.windowMs;
+    next.windowStartMs = next.windowStartMs + (steps * next.windowMs);
+    next.used = 0;
+    return next;
+}
+
+func rateLimitFixedWindowRemaining(window: RateLimitFixedWindow): (RateLimitFixedWindow, int, int) {
+    return rateLimitFixedWindowRemainingAt(window, timeMonotonicMillis());
+}
+
+func rateLimitFixedWindowRemainingAt(window: RateLimitFixedWindow,
+                                     now_ms: int): (RateLimitFixedWindow, int, int) {
+    var next: RateLimitFixedWindow = rateLimitFixedWindowAdvanceAt(window, now_ms);
+    var remaining: int = next.limit - next.used;
+    if (remaining < 0) {
+        remaining = 0;
+    }
+
+    var normalized_now: int = rateLimitNormalizeNowMs(now_ms);
+    var reset_after_ms: int = (next.windowStartMs + next.windowMs) - normalized_now;
+    if (reset_after_ms < 0) {
+        reset_after_ms = 0;
+    }
+
+    return (next, remaining, reset_after_ms);
+}
+
+func rateLimitFixedWindowTryConsume(window: RateLimitFixedWindow,
+                                    permits: int): (RateLimitFixedWindow, bool, int, Error?) {
+    return rateLimitFixedWindowTryConsumeAt(window, permits, timeMonotonicMillis());
+}
+
+func rateLimitFixedWindowTryConsumeAt(window: RateLimitFixedWindow,
+                                      permits: int,
+                                      now_ms: int): (RateLimitFixedWindow, bool, int, Error?) {
+    var permits_err = rateLimitValidateFixedWindowPermits(permits);
+    if (permits_err != nil) {
+        return (window, false, 0, permits_err);
+    }
+
+    if (permits > window.limit) {
+        return (window,
+                false,
+                0,
+                rateLimitError(ERR_INVALID_ARGUMENT,
+                               "permits cannot exceed fixed-window limit",
+                               "rateLimit.fixedWindow.permitsVsLimit",
+                               {
+                                   "permits": permits,
+                                   "limit": window.limit
+                               } as any));
+    }
+
+    var next: RateLimitFixedWindow = rateLimitFixedWindowAdvanceAt(window, now_ms);
+    if ((next.used + permits) <= next.limit) {
+        next.used = next.used + permits;
+        return (next, true, 0, nil);
+    }
+
+    var normalized_now: int = rateLimitNormalizeNowMs(now_ms);
+    var retry_after_ms: int = (next.windowStartMs + next.windowMs) - normalized_now;
+    if (retry_after_ms < 1) {
+        retry_after_ms = 1;
+    }
+    return (next, false, retry_after_ms, nil);
+}

@@ -1,0 +1,5 @@
+func main(): void {
+    var r = toBigInt("12x");
+    println(r.1.message);
+    println(r.0);
+}

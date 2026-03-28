@@ -1,0 +1,223 @@
+// Random utility helpers built on top of RNG builtins.
+// Focused on practical app-level tasks: token generation, shuffling, and sampling.
+
+func randomStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func randomError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return randomStdError(code, message, data);
+}
+
+func randomEmptyBytes(): bytes {
+    return bytesWithSize(0, 0).0;
+}
+
+func randomValidateByteCount(byte_count: int, context: string): Error? {
+    if (byte_count < 0 || byte_count > 1048576) {
+        return randomError(ERR_INVALID_ARGUMENT,
+                           "byteCount must be between 0 and 1048576",
+                           context,
+                           byte_count);
+    }
+    return nil;
+}
+
+func randomValidateSampleCount(total: int, count: int, context: string): Error? {
+    if (count < 0 || count > total) {
+        return randomError(ERR_INVALID_ARGUMENT,
+                           "sample count must be between 0 and input length",
+                           context,
+                           {
+                               "count": count,
+                               "total": total
+                           } as any);
+    }
+    return nil;
+}
+
+func randomPseudoBytes(byte_count: int): (bytes, Error?) {
+    var count_err = randomValidateByteCount(byte_count, "random.pseudoBytes.byteCount");
+    if (count_err != nil) {
+        return (randomEmptyBytes(), count_err);
+    }
+
+    var opened = bytesWithSize(byte_count, 0);
+    if (opened.1 != nil) {
+        return (randomEmptyBytes(), wrapError(opened.1, "randomPseudoBytes"));
+    }
+    var out: bytes = opened.0;
+
+    var i: int = 0;
+    while (i < byte_count) {
+        out[i] = randomInt(0, 255);
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func randomSecureBytes(byte_count: int): (bytes, Error?) {
+    var count_err = randomValidateByteCount(byte_count, "random.secureBytes.byteCount");
+    if (count_err != nil) {
+        return (randomEmptyBytes(), count_err);
+    }
+
+    var opened = bytesWithSize(byte_count, 0);
+    if (opened.1 != nil) {
+        return (randomEmptyBytes(), wrapError(opened.1, "randomSecureBytes"));
+    }
+    var out: bytes = opened.0;
+
+    if (byte_count == 0) {
+        return (out, nil);
+    }
+
+    var ints: array<int> = [];
+    var i: int = 0;
+    while (i < byte_count) {
+        push(ints, 0);
+        i = i + 1;
+    }
+
+    var filled = secureRandomFillInt(ints, 0, 255);
+    if (filled.1 != nil) {
+        return (randomEmptyBytes(), wrapError(filled.1, "randomSecureBytes"));
+    }
+    ints = filled.0;
+
+    i = 0;
+    while (i < byte_count) {
+        out[i] = ints[i];
+        i = i + 1;
+    }
+
+    return (out, nil);
+}
+
+func randomTokenHex(byte_count: int): (string, Error?) {
+    var bytes_r = randomSecureBytes(byte_count);
+    if (bytes_r.1 != nil) {
+        return ("", wrapError(bytes_r.1, "randomTokenHex"));
+    }
+
+    var hex_r = bytesToHex(bytes_r.0);
+    if (hex_r.1 != nil) {
+        return ("", wrapError(hex_r.1, "randomTokenHex"));
+    }
+    return (hex_r.0, nil);
+}
+
+func randomTokenHexPseudo(byte_count: int): (string, Error?) {
+    var bytes_r = randomPseudoBytes(byte_count);
+    if (bytes_r.1 != nil) {
+        return ("", wrapError(bytes_r.1, "randomTokenHexPseudo"));
+    }
+
+    var hex_r = bytesToHex(bytes_r.0);
+    if (hex_r.1 != nil) {
+        return ("", wrapError(hex_r.1, "randomTokenHexPseudo"));
+    }
+    return (hex_r.0, nil);
+}
+
+func randomShuffleInts(items: array<int>): array<int> {
+    var out: array<int> = [];
+    var copy_i: int = 0;
+    while (copy_i < len(items)) {
+        push(out, items[copy_i]);
+        copy_i = copy_i + 1;
+    }
+
+    var i: int = len(out) - 1;
+    while (i > 0) {
+        var j: int = randomInt(0, i);
+        var temp: int = out[i];
+        out[i] = out[j];
+        out[j] = temp;
+        i = i - 1;
+    }
+
+    return out;
+}
+
+func randomShuffleStrings(items: array<string>): array<string> {
+    var out: array<string> = [];
+    var copy_i: int = 0;
+    while (copy_i < len(items)) {
+        push(out, items[copy_i]);
+        copy_i = copy_i + 1;
+    }
+
+    var i: int = len(out) - 1;
+    while (i > 0) {
+        var j: int = randomInt(0, i);
+        var temp: string = out[i];
+        out[i] = out[j];
+        out[j] = temp;
+        i = i - 1;
+    }
+
+    return out;
+}
+
+func randomPickInt(items: array<int>): (int, bool) {
+    if (len(items) == 0) {
+        return (0, false);
+    }
+    var index: int = randomInt(0, len(items) - 1);
+    return (items[index], true);
+}
+
+func randomPickString(items: array<string>): (string?, bool) {
+    if (len(items) == 0) {
+        return (nil, false);
+    }
+    var index: int = randomInt(0, len(items) - 1);
+    return (items[index], true);
+}
+
+func randomSampleDistinctInts(items: array<int>, count: int): (array<int>, Error?) {
+    var out: array<int> = [];
+    var count_err = randomValidateSampleCount(len(items), count, "random.sampleDistinctInts.count");
+    if (count_err != nil) {
+        return (out, count_err);
+    }
+
+    if (count == 0) {
+        return (out, nil);
+    }
+
+    var shuffled: array<int> = randomShuffleInts(items);
+    var i: int = 0;
+    while (i < count) {
+        push(out, shuffled[i]);
+        i = i + 1;
+    }
+    return (out, nil);
+}
+
+func randomSampleDistinctStrings(items: array<string>, count: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    var count_err = randomValidateSampleCount(len(items), count, "random.sampleDistinctStrings.count");
+    if (count_err != nil) {
+        return (out, count_err);
+    }
+
+    if (count == 0) {
+        return (out, nil);
+    }
+
+    var shuffled: array<string> = randomShuffleStrings(items);
+    var i: int = 0;
+    while (i < count) {
+        push(out, shuffled[i]);
+        i = i + 1;
+    }
+    return (out, nil);
+}

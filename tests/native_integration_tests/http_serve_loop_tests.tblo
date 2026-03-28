@@ -1,0 +1,496 @@
+import "fixtures/http.tblo";
+
+func loopDelay(ms: int): void {
+    var start: int = timeMonotonicMillis();
+    while (timeSinceMillis(start) < ms) {
+    }
+}
+
+func loopLongPath(extraChars: int): string {
+    var out: string = "/";
+    var i: int = 0;
+    while (i < extraChars) {
+        out = out + "x";
+        i = i + 1;
+    }
+    return out;
+}
+
+func loopMiddleware(req: map<string, any>): any {
+    var path_any: any = mapGet(req, "path");
+    if (path_any != nil && typeOf(path_any) == "string") {
+        var path: string = path_any as string;
+        if (path == "/badmw") {
+            return 123;
+        }
+    }
+
+    mapSet(req, "_loopTag", "loop");
+    return req;
+}
+
+func loopRouteSlow(req: map<string, any>): map<string, any> {
+    loopDelay(200);
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Loop": "slow"
+    };
+    return httpServerResponse(200, "slow", headers);
+}
+
+func loopRouteFast(req: map<string, any>): map<string, any> {
+    var tag: string = mapGet(req, "_loopTag") as string;
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Loop": tag
+    };
+    return httpServerResponse(200, "fast", headers);
+}
+
+func loopWorker(): void {
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/slow", loopRouteSlow as any);
+    httpServerRoute(routes, "GET", "/fast", loopRouteFast as any);
+    httpServerRoute(routes, "GET", "/badmw", loopRouteFast as any);
+
+    var middleware: array<any> = [loopMiddleware as any];
+    var _ = httpServerWorkerServeLoop(routes, middleware, 50);
+}
+
+func loopStopSender(): int {
+    var arg_schema: map<string, any> = {
+        "stopChannelId": "int",
+        "delayMs": "int"
+    };
+    var arg_r = syncThreadArgTyped(arg_schema as any);
+    if (arg_r.1 != nil) {
+        return -1;
+    }
+
+    var arg: map<string, any> = arg_r.0 as map<string, any>;
+    var stop_channel_id: int = mapGet(arg, "stopChannelId") as int;
+    var delay_ms: int = mapGet(arg, "delayMs") as int;
+
+    if (delay_ms > 0) {
+        loopDelay(delay_ms);
+    }
+
+    var send_r = syncChannelSend(stop_channel_id, true as any, 5000);
+    if (send_r.1 != nil) {
+        return -2;
+    }
+    return 1;
+}
+
+func maybeCountStatus(response: string, status200: int, status503: int): (int, int) {
+    var out200: int = status200;
+    var out503: int = status503;
+    if (startsWith(response, "HTTP/1.1 200")) {
+        out200 = out200 + 1;
+    }
+    if (startsWith(response, "HTTP/1.1 503")) {
+        out503 = out503 + 1;
+    }
+    return (out200, out503);
+}
+
+func loopRunDeadlineTests(server: HttpServer): void {
+    // Request deadline should convert long in-flight work into a 504 response.
+    var c_deadline = tcpConnect("127.0.0.1", server.port);
+    println(c_deadline.1 == nil);
+    if (c_deadline.1 == nil) {
+        var client_deadline = c_deadline.0;
+        var send_deadline = tcpSend(client_deadline, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send_deadline.1 == nil);
+
+        var serve_deadline = httpServerServeLoopWithDeadline(server, "loopWorker", 1, 2, 60);
+        println(serve_deadline.1 == nil);
+        if (serve_deadline.1 == nil) {
+            println(serve_deadline.0 == 1);
+        }
+
+        var recv_deadline = tcpReceive(client_deadline, 4096);
+        println(recv_deadline.1 == nil);
+        if (recv_deadline.1 == nil) {
+            println(startsWith(recv_deadline.0, "HTTP/1.1 504"));
+            println(find(recv_deadline.0, "Gateway Timeout") >= 0);
+        }
+        tcpClose(client_deadline);
+    }
+
+    var bad_deadline = httpServerServeLoopWithDeadline(server, "loopWorker", 1, 1, 700000);
+    println(bad_deadline.1 != nil);
+    if (bad_deadline.1 != nil) {
+        println(bad_deadline.1.code == ERR_INVALID_ARGUMENT);
+        println(find(bad_deadline.1.message, "requestDeadlineMs") >= 0);
+    }
+}
+
+func loopRunControlledDeadlineTests(server: HttpServer): void {
+    // Controlled loop variant should also enforce request deadlines.
+    var c_deadline_ctrl = tcpConnect("127.0.0.1", server.port);
+    println(c_deadline_ctrl.1 == nil);
+    if (c_deadline_ctrl.1 == nil) {
+        var client_deadline_ctrl = c_deadline_ctrl.0;
+        var send_deadline_ctrl = tcpSend(client_deadline_ctrl, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send_deadline_ctrl.1 == nil);
+
+        var serve_deadline_ctrl = httpServerServeLoopControlledWithDeadline(server,
+                                                                            "loopWorker",
+                                                                            1,
+                                                                            2,
+                                                                            -1,
+                                                                            1,
+                                                                            60);
+        println(serve_deadline_ctrl.1 == nil);
+        if (serve_deadline_ctrl.1 == nil) {
+            println(serve_deadline_ctrl.0 == 1);
+        }
+
+        var recv_deadline_ctrl = tcpReceive(client_deadline_ctrl, 4096);
+        println(recv_deadline_ctrl.1 == nil);
+        if (recv_deadline_ctrl.1 == nil) {
+            println(startsWith(recv_deadline_ctrl.0, "HTTP/1.1 504"));
+            println(find(recv_deadline_ctrl.0, "Gateway Timeout") >= 0);
+        }
+        tcpClose(client_deadline_ctrl);
+    }
+
+    var bad_ctrl_deadline = httpServerServeLoopControlledWithDeadline(server, "loopWorker", 1, 1, -1, 1, 700000);
+    println(bad_ctrl_deadline.1 != nil);
+    if (bad_ctrl_deadline.1 != nil) {
+        println(bad_ctrl_deadline.1.code == ERR_INVALID_ARGUMENT);
+        println(find(bad_ctrl_deadline.1.message, "requestDeadlineMs") >= 0);
+    }
+}
+
+func main(): void {
+    var ports: array<int> = [19301, 19302, 19303, 19304, 19305];
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+
+    foreach (p in ports) {
+        var s = httpServerStart("127.0.0.1", p, 80, 4096);
+        if (s.1 == nil) {
+            server = s.0;
+            started = true;
+            break;
+        }
+    }
+
+    println(started);
+    if (!started) {
+        return;
+    }
+
+    // Idle graceful stop when no requests are pending.
+    var idle = httpServerServeLoop(server, "loopWorker", 2, 2);
+    println(idle.1 == nil);
+    if (idle.1 == nil) {
+        println(idle.0 == 0);
+    }
+
+    // Stop-channel controlled loop should stop when a signal message is sent.
+    var stop_ch = syncChannelCreate(2);
+    println(stop_ch.1 == nil);
+    if (stop_ch.1 == nil) {
+        var stop_channel_id: int = stop_ch.0;
+        var stop_arg: map<string, any> = {
+            "stopChannelId": stop_channel_id,
+            "delayMs": 20
+        };
+        var stop_spawn = syncThreadSpawnTyped("loopStopSender",
+                                              stop_arg as any,
+                                              {"stopChannelId": "int", "delayMs": "int"} as any,
+                                              -1,
+                                              -1);
+        println(stop_spawn.1 == nil);
+        if (stop_spawn.1 == nil) {
+            var controlled = httpServerServeLoopControlled(server, "loopWorker", 1, 1, stop_channel_id, 25);
+            println(controlled.1 == nil);
+            if (controlled.1 == nil) {
+                println(controlled.0 == 0);
+            }
+
+            var stop_join = syncThreadJoinTyped(stop_spawn.0 as int, "int", 5000);
+            println(stop_join.1 == nil);
+            if (stop_join.1 == nil) {
+                println((stop_join.0 as int) == 1);
+            }
+        }
+
+        var stop_ch_close = syncChannelClose(stop_channel_id);
+        println(stop_ch_close.1 == nil);
+    }
+
+    // Closing the stop channel should also request graceful stop.
+    var stop_ch2 = syncChannelCreate(1);
+    println(stop_ch2.1 == nil);
+    if (stop_ch2.1 == nil) {
+        var stop_channel_id2: int = stop_ch2.0;
+        var stop_ch2_close = syncChannelClose(stop_channel_id2);
+        println(stop_ch2_close.1 == nil);
+
+        var controlled_closed = httpServerServeLoopControlled(server, "loopWorker", 1, 1, stop_channel_id2, 25);
+        println(controlled_closed.1 == nil);
+        if (controlled_closed.1 == nil) {
+            println(controlled_closed.0 == 0);
+        }
+    }
+
+    // Controlled loop argument validation and unknown stop-channel behavior.
+    var bad_stop_id = httpServerServeLoopControlled(server, "loopWorker", 1, 1, -2, 25);
+    println(bad_stop_id.1 != nil);
+    if (bad_stop_id.1 != nil) {
+        println(bad_stop_id.1.code == ERR_INVALID_ARGUMENT);
+        println(find(bad_stop_id.1.message, "stopChannelId") >= 0);
+    }
+
+    var bad_timeout_ch = syncChannelCreate(1);
+    println(bad_timeout_ch.1 == nil);
+    if (bad_timeout_ch.1 == nil) {
+        var bad_timeout = httpServerServeLoopControlled(server, "loopWorker", 1, 1, bad_timeout_ch.0 as int, 0);
+        println(bad_timeout.1 != nil);
+        if (bad_timeout.1 != nil) {
+            println(bad_timeout.1.code == ERR_INVALID_ARGUMENT);
+            println(find(bad_timeout.1.message, "stopPollTimeoutMs") >= 0);
+        }
+
+        var bad_timeout_close = syncChannelClose(bad_timeout_ch.0 as int);
+        println(bad_timeout_close.1 == nil);
+    }
+
+    var unknown_stop = httpServerServeLoopControlled(server, "loopWorker", 1, 1, 2147480000, 25);
+    println(unknown_stop.1 != nil);
+    if (unknown_stop.1 != nil) {
+        println(unknown_stop.1.code == ERR_INVALID_ARGUMENT);
+        println(find(unknown_stop.1.message, "Unknown channel id") >= 0);
+    }
+
+    // Slow worker request should still complete even if worker-channel receives time out in-between.
+    var c1 = tcpConnect("127.0.0.1", server.port);
+    println(c1.1 == nil);
+    if (c1.1 == nil) {
+        var client1 = c1.0;
+        var send1 = tcpSend(client1, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send1.1 == nil);
+
+        var serve_slow = httpServerServeThreadPool(server, "loopWorker", 1, 1, 2);
+        println(serve_slow.1 == nil);
+        if (serve_slow.1 == nil) {
+            println(serve_slow.0 == 1);
+        }
+
+        var recv1 = tcpReceive(client1, 4096);
+        println(recv1.1 == nil);
+        if (recv1.1 == nil) {
+            println(startsWith(recv1.0, "HTTP/1.1 200"));
+            println(find(recv1.0, "X-Loop: slow") >= 0);
+        }
+        tcpClose(client1);
+    }
+
+    loopRunDeadlineTests(server);
+    loopRunControlledDeadlineTests(server);
+
+    // Queue saturation should produce explicit 503 backpressure responses.
+    var c2 = tcpConnect("127.0.0.1", server.port);
+    var c3 = tcpConnect("127.0.0.1", server.port);
+    var c4 = tcpConnect("127.0.0.1", server.port);
+    println(c2.1 == nil);
+    println(c3.1 == nil);
+    println(c4.1 == nil);
+
+    if (c2.1 == nil) {
+        var send2 = tcpSend(c2.0, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send2.1 == nil);
+    }
+    if (c3.1 == nil) {
+        var send3 = tcpSend(c3.0, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send3.1 == nil);
+    }
+    if (c4.1 == nil) {
+        var send4 = tcpSend(c4.0, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send4.1 == nil);
+    }
+
+    // Give the OS accept queue a brief window to enqueue all pending clients.
+    loopDelay(40);
+
+    var serve_bp = httpServerServeLoop(server, "loopWorker", 1, 1);
+    println(serve_bp.1 == nil);
+    if (serve_bp.1 == nil) {
+        println(serve_bp.0 >= 1);
+    }
+
+    var count200: int = 0;
+    var count503: int = 0;
+    if (c2.1 == nil) {
+        var recv2 = tcpReceive(c2.0, 4096);
+        if (recv2.1 == nil) {
+            var counts2 = maybeCountStatus(recv2.0, count200, count503);
+            count200 = counts2.0;
+            count503 = counts2.1;
+        }
+        tcpClose(c2.0);
+    }
+    if (c3.1 == nil) {
+        var recv3 = tcpReceive(c3.0, 4096);
+        if (recv3.1 == nil) {
+            var counts3 = maybeCountStatus(recv3.0, count200, count503);
+            count200 = counts3.0;
+            count503 = counts3.1;
+        }
+        tcpClose(c3.0);
+    }
+    if (c4.1 == nil) {
+        var recv4 = tcpReceive(c4.0, 4096);
+        if (recv4.1 == nil) {
+            var counts4 = maybeCountStatus(recv4.0, count200, count503);
+            count200 = counts4.0;
+            count503 = counts4.1;
+        }
+        tcpClose(c4.0);
+    }
+    println(count200 >= 1);
+    println(count503 >= 1);
+
+    // Middleware failure must be translated to 500 response.
+    var c5 = tcpConnect("127.0.0.1", server.port);
+    println(c5.1 == nil);
+    if (c5.1 == nil) {
+        var client5 = c5.0;
+        var send5 = tcpSend(client5, "GET /badmw HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send5.1 == nil);
+
+        var serve_badmw = httpServerServeThreadPool(server, "loopWorker", 1, 1, 2);
+        println(serve_badmw.1 == nil);
+        if (serve_badmw.1 == nil) {
+            println(serve_badmw.0 == 1);
+        }
+
+        var recv5 = tcpReceive(client5, 4096);
+        println(recv5.1 == nil);
+        if (recv5.1 == nil) {
+            println(startsWith(recv5.0, "HTTP/1.1 500"));
+            println(find(recv5.0, "middleware must return map<string, any>") >= 0);
+        }
+        tcpClose(client5);
+    }
+
+    // Stop-channel shutdown should still drain an in-flight slow request.
+    var c6 = tcpConnect("127.0.0.1", server.port);
+    println(c6.1 == nil);
+    if (c6.1 == nil) {
+        var client6 = c6.0;
+        var send6 = tcpSend(client6, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        println(send6.1 == nil);
+
+        var stop_ch3 = syncChannelCreate(1);
+        println(stop_ch3.1 == nil);
+        if (stop_ch3.1 == nil) {
+            var stop_id3: int = stop_ch3.0;
+            var stop_arg3: map<string, any> = {
+                "stopChannelId": stop_id3,
+                "delayMs": 120
+            };
+            var stop_spawn3 = syncThreadSpawnTyped("loopStopSender",
+                                                   stop_arg3 as any,
+                                                   {"stopChannelId": "int", "delayMs": "int"} as any,
+                                                   -1,
+                                                   -1);
+            println(stop_spawn3.1 == nil);
+            if (stop_spawn3.1 == nil) {
+                var stop_busy = httpServerServeLoopControlled(server, "loopWorker", 1, 2, stop_id3, 20);
+                println(stop_busy.1 == nil);
+                if (stop_busy.1 == nil) {
+                    println(stop_busy.0 == 1);
+                }
+
+                var stop_join3 = syncThreadJoinTyped(stop_spawn3.0 as int, "int", 5000);
+                println(stop_join3.1 == nil);
+                if (stop_join3.1 == nil) {
+                    println((stop_join3.0 as int) == 1);
+                }
+            }
+
+            var stop_close3 = syncChannelClose(stop_id3);
+            println(stop_close3.1 == nil);
+        }
+
+        var recv6 = tcpReceive(client6, 4096);
+        println(recv6.1 == nil);
+        if (recv6.1 == nil) {
+            println(startsWith(recv6.0, "HTTP/1.1 200"));
+            println(find(recv6.0, "X-Loop: slow") >= 0);
+        }
+        tcpClose(client6);
+    }
+
+    // Closing listener should make serve loop stop cleanly.
+    httpServerClose(server);
+    var closed = httpServerServeLoop(server, "loopWorker", 1, 1);
+    println(closed.1 == nil);
+    if (closed.1 == nil) {
+        println(closed.0 == 0);
+    }
+
+    // Small maxRequestBytes should reject oversized requests with ERR_LIMIT.
+    var limit_ports: array<int> = [19321, 19322, 19323, 19324, 19325];
+    var limit_server: HttpServer = httpServerEmpty();
+    var limit_started: bool = false;
+    foreach (p2 in limit_ports) {
+        var s2 = httpServerStart("127.0.0.1", p2, 120, 96);
+        if (s2.1 == nil) {
+            limit_server = s2.0;
+            limit_started = true;
+            break;
+        }
+    }
+    println(limit_started);
+    if (limit_started) {
+        var limit_routes: map<string, any> = {};
+        httpServerRoute(limit_routes, "GET", "/fast", loopRouteFast as any);
+        var limit_mw: array<any> = [loopMiddleware as any];
+
+        var over = tcpConnect("127.0.0.1", limit_server.port);
+        println(over.1 == nil);
+        if (over.1 == nil) {
+            var long_path: string = loopLongPath(180);
+            var over_req: string = "GET " + long_path + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            var over_send = tcpSend(over.0, over_req);
+            println(over_send.1 == nil);
+
+            var over_serve = httpServerServeOne(limit_server, limit_routes, limit_mw);
+            println(over_serve.1 != nil);
+            if (over_serve.1 != nil) {
+                println(over_serve.1.code == ERR_LIMIT);
+                println(find(over_serve.1.message, "maxBytes") >= 0);
+            }
+            tcpClose(over.0);
+        }
+
+        var ok = tcpConnect("127.0.0.1", limit_server.port);
+        println(ok.1 == nil);
+        if (ok.1 == nil) {
+            var ok_send = tcpSend(ok.0, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            println(ok_send.1 == nil);
+
+            var ok_serve = httpServerServeOne(limit_server, limit_routes, limit_mw);
+            println(ok_serve.1 == nil);
+            if (ok_serve.1 == nil) {
+                println(ok_serve.0);
+            }
+
+            var ok_recv = tcpReceive(ok.0, 4096);
+            println(ok_recv.1 == nil);
+            if (ok_recv.1 == nil) {
+                println(startsWith(ok_recv.0, "HTTP/1.1 200"));
+                println(find(ok_recv.0, "fast") >= 0);
+            }
+            tcpClose(ok.0);
+        }
+
+        httpServerClose(limit_server);
+    }
+}

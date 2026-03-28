@@ -1,0 +1,204 @@
+import "fixtures/msgpack.tblo";
+
+func expectIntRoundtrip(value: int): bool {
+    var enc = msgpackEncode(value);
+    if (enc.1 != nil) {
+        return false;
+    }
+
+    var dec = msgpackDecode(enc.0);
+    if (dec.1 != nil) {
+        return false;
+    }
+
+    if (dec.0 == nil || typeOf(dec.0) != "int") {
+        return false;
+    }
+
+    return (dec.0 as int) == value;
+}
+
+func main(): void {
+    var nil_enc = msgpackEncode(nil);
+    println(nil_enc.1 == nil);
+    if (nil_enc.1 == nil) println(bytesToHex(nil_enc.0).0 == "c0");
+
+    var nil_dec = msgpackDecode(nil_enc.0);
+    println(nil_dec.1 == nil);
+    println(nil_dec.0 == nil);
+
+    var t_enc = msgpackEncode(true);
+    println(t_enc.1 == nil);
+    if (t_enc.1 == nil) println(bytesToHex(t_enc.0).0 == "c3");
+    var t_dec = msgpackDecode(t_enc.0);
+    println(t_dec.1 == nil);
+    if (t_dec.1 == nil && t_dec.0 != nil) println(t_dec.0 as bool);
+
+    var f_enc = msgpackEncode(false);
+    println(f_enc.1 == nil);
+    if (f_enc.1 == nil) println(bytesToHex(f_enc.0).0 == "c2");
+    var f_dec = msgpackDecode(f_enc.0);
+    println(f_dec.1 == nil);
+    if (f_dec.1 == nil && f_dec.0 != nil) println(!(f_dec.0 as bool));
+
+    println(expectIntRoundtrip(0));
+    println(expectIntRoundtrip(127));
+    println(expectIntRoundtrip(-1));
+    println(expectIntRoundtrip(-32));
+    println(expectIntRoundtrip(-33));
+    println(expectIntRoundtrip(255));
+    println(expectIntRoundtrip(256));
+    println(expectIntRoundtrip(-128));
+    println(expectIntRoundtrip(-129));
+    println(expectIntRoundtrip(2147483647));
+    println(expectIntRoundtrip(-2147483648));
+
+    var s_enc = msgpackEncode("abc");
+    println(s_enc.1 == nil);
+    if (s_enc.1 == nil) println(bytesToHex(s_enc.0).0 == "a3616263");
+    var s_dec = msgpackDecode(s_enc.0);
+    println(s_dec.1 == nil);
+    if (s_dec.1 == nil && s_dec.0 != nil) println((s_dec.0 as string) == "abc");
+
+    var raw: bytes = hexToBytes("00 ff 10").0;
+    var b_enc = msgpackEncode(raw);
+    println(b_enc.1 == nil);
+    if (b_enc.1 == nil) println(bytesToHex(b_enc.0).0 == "c40300ff10");
+
+    var b_dec = msgpackDecode(b_enc.0);
+    println(b_dec.1 == nil);
+    if (b_dec.1 == nil && b_dec.0 != nil && typeOf(b_dec.0) == "bytes") {
+        println(bytesToHex(b_dec.0 as bytes).0 == "00ff10");
+    }
+
+    var arr_enc = msgpackEncodeArray([1 as any, "x" as any, true as any]);
+    println(arr_enc.1 == nil);
+    if (arr_enc.1 == nil) println(bytesToHex(arr_enc.0).0 == "9301a178c3");
+
+    var arr_dec = msgpackDecodeAsArray(arr_enc.0);
+    println(arr_dec.1 == nil);
+    if (arr_dec.1 == nil) {
+        var count: int = 0;
+        var ok0: bool = false;
+        var ok1: bool = false;
+        var ok2: bool = false;
+        foreach (item in arr_dec.0) {
+            if (count == 0 && typeOf(item) == "int" && (item as int) == 1) {
+                ok0 = true;
+            }
+            if (count == 1 && typeOf(item) == "string" && (item as string) == "x") {
+                ok1 = true;
+            }
+            if (count == 2 && typeOf(item) == "bool" && (item as bool)) {
+                ok2 = true;
+            }
+            count = count + 1;
+        }
+        println(count == 3);
+        println(ok0);
+        println(ok1);
+        println(ok2);
+    }
+
+    var payload: map<string, any> = {};
+    mapSetString(payload, "name", "tablo");
+    mapSetString(payload, "port", 8080);
+    mapSetString(payload, "ok", true);
+    mapSetString(payload, "raw", raw);
+    mapSetString(payload, "tags", ["lang" as any, "vm" as any]);
+
+    var meta: map<string, any> = {};
+    mapSetString(meta, "env", "dev");
+    mapSetString(meta, "workers", 4);
+    mapSetString(payload, "meta", meta as any);
+
+    var m_enc = msgpackEncodeMap(payload);
+    println(m_enc.1 == nil);
+
+    var m_dec = msgpackDecodeAsMap(m_enc.0);
+    println(m_dec.1 == nil);
+    if (m_dec.1 == nil) {
+        println(mapGetString(m_dec.0, "name") == "tablo");
+        println((mapGetString(m_dec.0, "port") as int) == 8080);
+        println((mapGetString(m_dec.0, "ok") as bool));
+
+        var raw_any: any = mapGetString(m_dec.0, "raw");
+        println(typeOf(raw_any) == "bytes");
+        if (typeOf(raw_any) == "bytes") {
+            println(bytesToHex(raw_any as bytes).0 == "00ff10");
+        }
+
+        var tags_any: any = mapGetString(m_dec.0, "tags");
+        println(typeOf(tags_any) == "array");
+        if (typeOf(tags_any) == "array") {
+            var tags: array<any> = tags_any as array<any>;
+            var t_count: int = 0;
+            var t0: bool = false;
+            var t1: bool = false;
+            foreach (tag in tags) {
+                if (t_count == 0 && typeOf(tag) == "string" && (tag as string) == "lang") {
+                    t0 = true;
+                }
+                if (t_count == 1 && typeOf(tag) == "string" && (tag as string) == "vm") {
+                    t1 = true;
+                }
+                t_count = t_count + 1;
+            }
+            println(t_count == 2);
+            println(t0);
+            println(t1);
+        }
+
+        var meta_any: any = mapGetString(m_dec.0, "meta");
+        println(typeOf(meta_any) == "map");
+        if (typeOf(meta_any) == "map") {
+            var meta_map: map<string, any> = meta_any as map<string, any>;
+            println(mapGetString(meta_map, "env") == "dev");
+            println((mapGetString(meta_map, "workers") as int) == 4);
+        }
+    }
+
+    var to_hex = msgpackEncodeToHex([1 as any, 2 as any, 3 as any]);
+    println(to_hex.1 == nil);
+    if (to_hex.1 == nil) println(to_hex.0 == "93010203");
+
+    var from_hex = msgpackDecodeFromHex("93010203");
+    println(from_hex.1 == nil);
+    if (from_hex.1 == nil && from_hex.0 != nil && typeOf(from_hex.0) == "array") {
+        var fh: array<any> = from_hex.0 as array<any>;
+        var fh_count: int = 0;
+        var ok_last: bool = false;
+        foreach (v in fh) {
+            if (fh_count == 2 && typeOf(v) == "int" && (v as int) == 3) {
+                ok_last = true;
+            }
+            fh_count = fh_count + 1;
+        }
+        println(fh_count == 3);
+        println(ok_last);
+    }
+
+    var bad_marker = msgpackDecodeFromHex("c1");
+    println(bad_marker.1 != nil);
+    if (bad_marker.1 != nil) println(bad_marker.1.code == ERR_PARSE);
+
+    var bad_ascii = msgpackDecodeFromHex("a1ff");
+    println(bad_ascii.1 != nil);
+    if (bad_ascii.1 != nil) println(bad_ascii.1.code == ERR_PARSE);
+
+    var trailing = msgpackDecodeFromHex("c001");
+    println(trailing.1 != nil);
+    if (trailing.1 != nil) println(trailing.1.code == ERR_PARSE);
+
+    var non_string_key = msgpackDecodeFromHex("810102");
+    println(non_string_key.1 != nil);
+    if (non_string_key.1 != nil) println(non_string_key.1.code == ERR_PARSE);
+
+    var map_type_fail = msgpackDecodeAsMap(hexToBytes("9101").0);
+    println(map_type_fail.1 != nil);
+    if (map_type_fail.1 != nil) println(map_type_fail.1.code == ERR_PARSE);
+
+    var unsupported = msgpackEncode(1.5);
+    println(unsupported.1 != nil);
+    if (unsupported.1 != nil) println(unsupported.1.code == ERR_INVALID_ARGUMENT);
+}

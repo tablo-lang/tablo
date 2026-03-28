@@ -1,0 +1,21 @@
+func main(): void {
+    println(typeOf(tlsIsAvailable()));
+
+    var badHost = tlsConnect("", 443, 1000);
+    println(badHost.1 != nil && badHost.1.code == ERR_INVALID_ARGUMENT);
+
+    var badPort = tlsConnect("localhost", 0, 1000);
+    println(badPort.1 != nil && badPort.1.code == ERR_INVALID_ARGUMENT);
+
+    var badTimeout = tlsConnect("localhost", 443, 0);
+    println(badTimeout.1 != nil && badTimeout.1.code == ERR_INVALID_ARGUMENT);
+
+    var sendBad = tlsSend(nil, "hello");
+    println(sendBad.1 != nil && sendBad.1.code == ERR_INVALID_ARGUMENT);
+
+    var recvBad = tlsReceive(nil, 32);
+    println(recvBad.1 != nil && recvBad.1.code == ERR_INVALID_ARGUMENT);
+
+    var closeBad = tlsClose(nil);
+    println(closeBad.1 != nil && closeBad.1.code == ERR_INVALID_ARGUMENT);
+}

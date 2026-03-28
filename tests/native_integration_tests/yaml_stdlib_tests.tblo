@@ -1,0 +1,161 @@
+import "fixtures/yaml.tblo";
+
+func main(): void {
+    var doc_text: string = "# service config\n" +
+                           "name: tablo\n" +
+                           "port: 8080\n" +
+                           "enabled: true\n" +
+                           "tags: [lang, vm, \"2026\"]\n" +
+                           "server:\n" +
+                           "  host: \"127.0.0.1\"\n" +
+                           "  workers: 4\n" +
+                           "  tls:\n" +
+                           "    enabled: false\n" +
+                           "routes:\n" +
+                           "  - /health\n" +
+                           "  - /ready\n" +
+                           "quoted:\n" +
+                           "  \"dotted.key\": ok\n";
+
+    var parsed = yamlParse(doc_text);
+    println(parsed.1 == nil);
+
+    if (parsed.1 == nil) {
+        var name_r = yamlGetString(parsed.0, "name");
+        println(name_r.1 == nil);
+        if (name_r.1 == nil && name_r.0 != nil) println(name_r.0 == "tablo");
+
+        var port_r = yamlGetInt(parsed.0, "port");
+        println(port_r.1 == nil);
+        if (port_r.1 == nil && port_r.0 != nil) println(port_r.0 == 8080);
+
+        var enabled_r = yamlGetBool(parsed.0, "enabled");
+        println(enabled_r.1 == nil);
+        if (enabled_r.1 == nil && enabled_r.0 != nil) println(enabled_r.0);
+
+        var host_r = yamlGetString(parsed.0, "server.host");
+        println(host_r.1 == nil);
+        if (host_r.1 == nil && host_r.0 != nil) println(host_r.0 == "127.0.0.1");
+
+        var workers_r = yamlGetInt(parsed.0, "server.workers");
+        println(workers_r.1 == nil);
+        if (workers_r.1 == nil && workers_r.0 != nil) println(workers_r.0 == 4);
+
+        var tls_r = yamlGetBool(parsed.0, "server.tls.enabled");
+        println(tls_r.1 == nil);
+        if (tls_r.1 == nil && tls_r.0 != nil) println(!tls_r.0);
+
+        var tags_r = yamlGetArray(parsed.0, "tags");
+        println(tags_r.1 == nil);
+        if (tags_r.1 == nil && tags_r.0 != nil) {
+            var tags: array<any> = tags_r.0 as array<any>;
+            var count: int = 0;
+            var first_ok: bool = false;
+            var third_ok: bool = false;
+            foreach (item in tags) {
+                if (count == 0 && typeOf(item) == "string" && (item as string) == "lang") {
+                    first_ok = true;
+                }
+                if (count == 2 && typeOf(item) == "string" && (item as string) == "2026") {
+                    third_ok = true;
+                }
+                count = count + 1;
+            }
+            println(count == 3);
+            println(first_ok);
+            println(third_ok);
+        }
+
+        var routes_r = yamlGetArray(parsed.0, "routes");
+        println(routes_r.1 == nil);
+        if (routes_r.1 == nil && routes_r.0 != nil) {
+            var routes: array<any> = routes_r.0 as array<any>;
+            var rc: int = 0;
+            var r0: bool = false;
+            var r1: bool = false;
+            foreach (route_any in routes) {
+                if (rc == 0 && typeOf(route_any) == "string" && (route_any as string) == "/health") {
+                    r0 = true;
+                }
+                if (rc == 1 && typeOf(route_any) == "string" && (route_any as string) == "/ready") {
+                    r1 = true;
+                }
+                rc = rc + 1;
+            }
+            println(rc == 2);
+            println(r0);
+            println(r1);
+        }
+
+        var quoted_r = yamlGetString(parsed.0, "quoted.\"dotted.key\"");
+        println(quoted_r.1 == nil);
+        if (quoted_r.1 == nil && quoted_r.0 != nil) println(quoted_r.0 == "ok");
+
+        var missing_r = yamlGetString(parsed.0, "missing.value");
+        println(missing_r.1 == nil);
+        println(missing_r.0 == nil);
+
+        var bad_get = yamlGetInt(parsed.0, "name");
+        println(bad_get.1 != nil);
+        if (bad_get.1 != nil) println(bad_get.1.code == ERR_PARSE);
+
+        var encoded = yamlStringify(parsed.0);
+        println(encoded.1 == nil);
+        if (encoded.1 == nil) {
+            var roundtrip = yamlParse(encoded.0);
+            println(roundtrip.1 == nil);
+            if (roundtrip.1 == nil) {
+                var round_port = yamlGetInt(roundtrip.0, "port");
+                println(round_port.1 == nil);
+                if (round_port.1 == nil && round_port.0 != nil) println(round_port.0 == 8080);
+
+                var round_tls = yamlGetBool(roundtrip.0, "server.tls.enabled");
+                println(round_tls.1 == nil);
+                if (round_tls.1 == nil && round_tls.0 != nil) println(!round_tls.0);
+            }
+        }
+    }
+
+    var inline = yamlParse("arr: [1, true, \"x\", [2, 3]]\n");
+    println(inline.1 == nil);
+    if (inline.1 == nil) {
+        var arr_r = yamlGetArray(inline.0, "arr");
+        println(arr_r.1 == nil);
+        if (arr_r.1 == nil && arr_r.0 != nil) {
+            var arr: array<any> = arr_r.0 as array<any>;
+            var count2: int = 0;
+            var nested_ok: bool = false;
+            foreach (item2 in arr) {
+                if (count2 == 3 && typeOf(item2) == "array") {
+                    var nested: array<any> = item2 as array<any>;
+                    var nc: int = 0;
+                    foreach (n in nested) {
+                        if (nc == 1 && typeOf(n) == "int" && (n as int) == 3) {
+                            nested_ok = true;
+                        }
+                        nc = nc + 1;
+                    }
+                }
+                count2 = count2 + 1;
+            }
+            println(count2 == 4);
+            println(nested_ok);
+        }
+    }
+
+    var dup = yamlParse("a: 1\na: 2\n");
+    println(dup.1 != nil);
+    if (dup.1 != nil) println(dup.1.code == ERR_PARSE);
+
+    var bad_seq = yamlParse("items:\n  -\n");
+    println(bad_seq.1 != nil);
+    if (bad_seq.1 != nil) println(bad_seq.1.code == ERR_PARSE);
+
+    var bad_array = yamlParse("items: [1,,2]\n");
+    println(bad_array.1 != nil);
+    if (bad_array.1 != nil) println(bad_array.1.code == ERR_PARSE);
+
+    var root_seq = yamlParse("- one\n- two\n");
+    println(root_seq.1 != nil);
+    if (root_seq.1 != nil) println(root_seq.1.code == ERR_PARSE);
+}

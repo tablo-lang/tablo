@@ -1,0 +1,165 @@
+import "fixtures/pool.tblo";
+
+func main(): void {
+    var opened = poolNew(2, 4);
+    println(opened.1 == nil);
+    if (opened.1 != nil) {
+        return;
+    }
+    var store: PoolStore = opened.0;
+
+    println(poolIdleCount(store) == 0);
+    println(poolInUseCount(store) == 0);
+    println(poolTotalCount(store) == 0);
+
+    var bad_open = poolNew(3, 2);
+    println(bad_open.1 != nil);
+    if (bad_open.1 != nil) {
+        println(bad_open.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var seeded = poolNewWithSeed(3, 5, ["a" as any, "b" as any]);
+    println(seeded.1 == nil);
+    if (seeded.1 == nil) {
+        println(poolIdleCount(seeded.0) == 2);
+        var stats_seed: PoolStats = poolStats(seeded.0);
+        println(stats_seed.createdCount == 2);
+    }
+
+    var ac1 = poolAcquire(store, {"id": 1, "name": "one"} as any);
+    store = ac1.0;
+    println(ac1.3 == nil);
+    println(!ac1.2);
+    if (ac1.3 == nil) {
+        var lease1: PoolLease = ac1.1;
+        println(lease1.id >= 1);
+        var row1: map<string, any> = lease1.value as map<string, any>;
+        println((mapGetString(row1, "id") as int) == 1);
+    }
+
+    var ac2 = poolAcquire(store, {"id": 2, "name": "two"} as any);
+    store = ac2.0;
+    println(ac2.3 == nil);
+    println(!ac2.2);
+
+    var ac3 = poolAcquire(store, {"id": 3, "name": "three"} as any);
+    store = ac3.0;
+    println(ac3.3 == nil);
+    println(!ac3.2);
+
+    var ac4 = poolAcquire(store, {"id": 4, "name": "four"} as any);
+    store = ac4.0;
+    println(ac4.3 == nil);
+    println(!ac4.2);
+
+    var ac5 = poolAcquire(store, {"id": 5, "name": "five"} as any);
+    store = ac5.0;
+    println(ac5.3 != nil);
+    if (ac5.3 != nil) {
+        println(ac5.3.code == ERR_LIMIT);
+    }
+
+    var lease1: PoolLease = ac1.1;
+    var lease2: PoolLease = ac2.1;
+    var lease3: PoolLease = ac3.1;
+    var lease4: PoolLease = ac4.1;
+
+    var r1 = poolRelease(store, lease1, {"id": 101, "name": "reuse-a"} as any);
+    store = r1.0;
+    println(r1.2 == nil);
+    println(r1.1);
+
+    var r2 = poolRelease(store, lease2, {"id": 102, "name": "reuse-b"} as any);
+    store = r2.0;
+    println(r2.2 == nil);
+    println(r2.1);
+
+    // Idle is full (maxIdle=2); this release is dropped.
+    var r3 = poolRelease(store, lease3, {"id": 103, "name": "drop-c"} as any);
+    store = r3.0;
+    println(r3.2 == nil);
+    println(!r3.1);
+
+    var ac6 = poolAcquire(store, {"id": 999, "name": "new-x"} as any);
+    store = ac6.0;
+    println(ac6.3 == nil);
+    println(ac6.2); // reused
+    if (ac6.3 == nil) {
+        var reused_map: map<string, any> = ac6.1.value as map<string, any>;
+        println((mapGetString(reused_map, "id") as int) == 102); // LIFO reuse
+    }
+
+    var discard = poolDiscard(store, lease4);
+    store = discard.0;
+    println(discard.1 == nil);
+
+    var release_unknown = poolRelease(store, lease4, {"id": 4, "name": "x"} as any);
+    store = release_unknown.0;
+    println(release_unknown.2 != nil);
+    if (release_unknown.2 != nil) {
+        println(release_unknown.2.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var schema: map<string, any> = {
+        "id": "int",
+        "name": "string"
+    };
+    var typed_open = poolNew(2, 2);
+    println(typed_open.1 == nil);
+    if (typed_open.1 == nil) {
+        var typed: PoolStore = typed_open.0;
+
+        var ta1 = poolAcquireTyped(typed, {"id": 1, "name": "alice"} as any, schema as any);
+        typed = ta1.0;
+        println(ta1.3 == nil);
+        if (ta1.3 == nil) {
+            var ta1_release = poolReleaseTyped(typed,
+                                               ta1.1,
+                                               {"id": 2, "name": "bob"} as any,
+                                               schema as any);
+            typed = ta1_release.0;
+            println(ta1_release.2 == nil);
+            println(ta1_release.1);
+        }
+
+        var ta2 = poolAcquireTyped(typed, {"id": 3, "name": "carol"} as any, schema as any);
+        typed = ta2.0;
+        println(ta2.3 == nil);
+        println(ta2.2); // should reuse from idle
+        if (ta2.3 == nil) {
+            var val2: map<string, any> = ta2.1.value as map<string, any>;
+            println((mapGetString(val2, "id") as int) == 2);
+        }
+
+        if (ta2.3 == nil) {
+            var bad_release = poolReleaseTyped(typed,
+                                               ta2.1,
+                                               {"id": "oops", "name": "bad"} as any,
+                                               schema as any);
+            typed = bad_release.0;
+            println(bad_release.2 != nil);
+            if (bad_release.2 != nil) {
+                println(bad_release.2.code == ERR_PARSE);
+            }
+        }
+
+        var typed_stats = poolStats(typed);
+        println(typed_stats.droppedCount >= 1);
+    }
+
+    var ids = poolBorrowedLeaseIds(store);
+    println(len(ids) == poolInUseCount(store));
+
+    var cleared = poolClearIdle(store);
+    store = cleared.0;
+    println(cleared.1 >= 0);
+    println(poolIdleCount(store) == 0);
+
+    var stats: PoolStats = poolStats(store);
+    println(stats.maxIdle == 2);
+    println(stats.maxTotal == 4);
+    println(stats.createdCount >= 4);
+    println(stats.acquiredCount >= 5);
+    println(stats.releasedCount >= 4);
+    println(stats.droppedCount >= 2);
+}

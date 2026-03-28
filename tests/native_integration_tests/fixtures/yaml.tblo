@@ -1,0 +1,1451 @@
+// YAML helpers for configuration-centric workflows.
+// Supports a strict subset: mappings, nested mappings, sequences, quoted/plain scalars, and inline arrays.
+
+record YamlLine {
+    indent: int,
+    content: string,
+    line: int
+}
+
+func yamlStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func yamlError(code: int,
+               message: string,
+               context: string,
+               line: int,
+               column: int,
+               detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "line": line,
+        "column": column
+    };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return yamlStdError(code, message, data);
+}
+
+func yamlIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func yamlIsBareKeyChar(ch: string): bool {
+    if (ch == "") {
+        return false;
+    }
+    return find("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", ch) >= 0;
+}
+
+func yamlSkipSpaces(text: string, start: int): int {
+    var i: int = start;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch != " " && ch != "\t") {
+            break;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+func yamlCopyPath(parts: array<string>): array<string> {
+    var out: array<string> = [];
+    foreach (part in parts) {
+        push(out, part);
+    }
+    return out;
+}
+
+func yamlJoinPath(parts: array<string>): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(parts)) {
+        if (i > 0) {
+            out = out + ".";
+        }
+        out = out + parts[i];
+        i = i + 1;
+    }
+    return out;
+}
+
+func yamlTrimTrailingSpaces(text: string): string {
+    var end: int = len(text);
+    while (end > 0) {
+        var ch: string = substring(text, end - 1, 1);
+        if (ch != " " && ch != "\t") {
+            break;
+        }
+        end = end - 1;
+    }
+    return substring(text, 0, end);
+}
+
+func yamlCountIndent(raw_line: string, line_no: int): (int, Error?) {
+    var indent: int = 0;
+    while (indent < len(raw_line)) {
+        var ch: string = substring(raw_line, indent, 1);
+        if (ch == " ") {
+            indent = indent + 1;
+            continue;
+        }
+        if (ch == "\t") {
+            return (0,
+                    yamlError(ERR_PARSE,
+                              "tabs are not allowed for YAML indentation",
+                              "yaml.parse.indent.tab",
+                              line_no,
+                              indent + 1,
+                              raw_line));
+        }
+        break;
+    }
+    return (indent, nil);
+}
+
+func yamlStripInlineComment(line: string): string {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+    var bracket_depth: int = 0;
+    var i: int = 0;
+    while (i < len(line)) {
+        var ch: string = substring(line, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+        } else if (ch == "'") {
+            in_single = true;
+        } else if (ch == "[") {
+            bracket_depth = bracket_depth + 1;
+        } else if (ch == "]") {
+            if (bracket_depth > 0) {
+                bracket_depth = bracket_depth - 1;
+            }
+        } else if (ch == "#" && bracket_depth == 0) {
+            return yamlTrimTrailingSpaces(substring(line, 0, i));
+        }
+
+        i = i + 1;
+    }
+
+    return yamlTrimTrailingSpaces(line);
+}
+
+func yamlParseDoubleQuoted(input: string,
+                           start: int,
+                           line: int,
+                           column: int,
+                           context: string): (string, int, Error?) {
+    if (start >= len(input)) {
+        return ("",
+                start,
+                yamlError(ERR_PARSE,
+                          "expected opening double quote",
+                          context + ".doubleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    if (substring(input, start, 1) != "\"") {
+        return ("",
+                start,
+                yamlError(ERR_PARSE,
+                          "expected opening double quote",
+                          context + ".doubleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "\"") {
+            return (out, i + 1, nil);
+        }
+
+        if (ch == "\\") {
+            if ((i + 1) >= len(input)) {
+                return ("",
+                        i,
+                        yamlError(ERR_PARSE,
+                                  "trailing escape sequence",
+                                  context + ".doubleQuote.escape",
+                                  line,
+                                  column + i,
+                                  input));
+            }
+
+            var esc: string = substring(input, i + 1, 1);
+            if (esc == "n") {
+                out = out + "\n";
+            } else if (esc == "r") {
+                out = out + "\r";
+            } else if (esc == "t") {
+                out = out + "\t";
+            } else if (esc == "\"") {
+                out = out + "\"";
+            } else if (esc == "\\") {
+                out = out + "\\";
+            } else {
+                return ("",
+                        i,
+                        yamlError(ERR_PARSE,
+                                  "unsupported escape sequence",
+                                  context + ".doubleQuote.escape",
+                                  line,
+                                  column + i,
+                                  esc));
+            }
+
+            i = i + 2;
+            continue;
+        }
+
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            yamlError(ERR_PARSE,
+                      "unterminated double-quoted string",
+                      context + ".doubleQuote.unterminated",
+                      line,
+                      column + i,
+                      input));
+}
+
+func yamlParseSingleQuoted(input: string,
+                           start: int,
+                           line: int,
+                           column: int,
+                           context: string): (string, int, Error?) {
+    if (start >= len(input)) {
+        return ("",
+                start,
+                yamlError(ERR_PARSE,
+                          "expected opening single quote",
+                          context + ".singleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    if (substring(input, start, 1) != "'") {
+        return ("",
+                start,
+                yamlError(ERR_PARSE,
+                          "expected opening single quote",
+                          context + ".singleQuote.open",
+                          line,
+                          column,
+                          input));
+    }
+
+    var out: string = "";
+    var i: int = start + 1;
+    while (i < len(input)) {
+        var ch: string = substring(input, i, 1);
+        if (ch == "'") {
+            return (out, i + 1, nil);
+        }
+        out = out + ch;
+        i = i + 1;
+    }
+
+    return ("",
+            i,
+            yamlError(ERR_PARSE,
+                      "unterminated single-quoted string",
+                      context + ".singleQuote.unterminated",
+                      line,
+                      column + i,
+                      input));
+}
+func yamlLooksLikeInt(text: string): bool {
+    var s: string = trim(text);
+    if (s == "") {
+        return false;
+    }
+
+    var i: int = 0;
+    if (startsWith(s, "+") || startsWith(s, "-")) {
+        i = 1;
+    }
+    if (i >= len(s)) {
+        return false;
+    }
+
+    var has_digit: bool = false;
+    var prev_underscore: bool = false;
+    while (i < len(s)) {
+        var ch: string = substring(s, i, 1);
+        if (ch == "_") {
+            if (!has_digit || prev_underscore || i == (len(s) - 1)) {
+                return false;
+            }
+            prev_underscore = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (!yamlIsDigit(ch)) {
+            return false;
+        }
+
+        has_digit = true;
+        prev_underscore = false;
+        i = i + 1;
+    }
+
+    return has_digit;
+}
+
+func yamlRemoveUnderscores(text: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch != "_") {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func yamlParseIntValue(value: string,
+                       line: int,
+                       column: int,
+                       context: string): (int, Error?) {
+    var s: string = trim(value);
+    if (!yamlLooksLikeInt(s)) {
+        return (0,
+                yamlError(ERR_PARSE,
+                          "invalid integer value",
+                          context + ".int.invalid",
+                          line,
+                          column,
+                          value));
+    }
+
+    var sign: int = 1;
+    if (startsWith(s, "-")) {
+        sign = -1;
+    }
+
+    var clean: string = yamlRemoveUnderscores(s);
+    if (startsWith(clean, "+")) {
+        clean = substring(clean, 1, len(clean) - 1);
+    }
+
+    var parsed: int = toInt(clean);
+    if (sign < 0 && !startsWith(clean, "-")) {
+        parsed = 0 - parsed;
+    }
+    return (parsed, nil);
+}
+
+func yamlParseScalar(value: string,
+                     line: int,
+                     column: int,
+                     context: string): (any, Error?) {
+    var s: string = trim(value);
+    if (s == "") {
+        return ("", nil);
+    }
+
+    if (startsWith(s, "\"")) {
+        var quoted = yamlParseDoubleQuoted(s, 0, line, column, context + ".scalar");
+        if (quoted.2 != nil) {
+            return (nil, quoted.2);
+        }
+        var tail: string = trim(substring(s, quoted.1, len(s) - quoted.1));
+        if (tail != "") {
+            return (nil,
+                    yamlError(ERR_PARSE,
+                              "unexpected trailing text after quoted scalar",
+                              context + ".scalar.trailing",
+                              line,
+                              column + quoted.1,
+                              tail));
+        }
+        return (quoted.0, nil);
+    }
+
+    if (startsWith(s, "'")) {
+        var literal = yamlParseSingleQuoted(s, 0, line, column, context + ".scalar");
+        if (literal.2 != nil) {
+            return (nil, literal.2);
+        }
+        var literal_tail: string = trim(substring(s, literal.1, len(s) - literal.1));
+        if (literal_tail != "") {
+            return (nil,
+                    yamlError(ERR_PARSE,
+                              "unexpected trailing text after quoted scalar",
+                              context + ".scalar.trailing",
+                              line,
+                              column + literal.1,
+                              literal_tail));
+        }
+        return (literal.0, nil);
+    }
+
+    if (startsWith(s, "[")) {
+        var arr = yamlParseInlineArray(s, line, column, context + ".scalar");
+        if (arr.1 != nil) {
+            return (nil, arr.1);
+        }
+        return (arr.0 as any, nil);
+    }
+
+    if (s == "true") {
+        return (true, nil);
+    }
+    if (s == "false") {
+        return (false, nil);
+    }
+
+    if (yamlLooksLikeInt(s)) {
+        var parsed = yamlParseIntValue(s, line, column, context + ".scalar");
+        if (parsed.1 != nil) {
+            return (nil, parsed.1);
+        }
+        return (parsed.0, nil);
+    }
+
+    return (s, nil);
+}
+
+func yamlParseInlineArray(text: string,
+                          line: int,
+                          column: int,
+                          context: string): (array<any>, Error?) {
+    var s: string = trim(text);
+    var out: array<any> = [];
+    if (!startsWith(s, "[") || !endsWith(s, "]")) {
+        return (out,
+                yamlError(ERR_PARSE,
+                          "inline array must be enclosed in []",
+                          context + ".array.bounds",
+                          line,
+                          column,
+                          text));
+    }
+
+    var inner: string = substring(s, 1, len(s) - 2);
+    var i: int = 0;
+    var token_start: int = 0;
+    var depth: int = 0;
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+
+    while (i < len(inner)) {
+        var ch: string = substring(inner, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+            i = i + 1;
+            continue;
+        }
+        if (ch == "'") {
+            in_single = true;
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "[") {
+            depth = depth + 1;
+            i = i + 1;
+            continue;
+        }
+        if (ch == "]") {
+            if (depth == 0) {
+                return (out,
+                        yamlError(ERR_PARSE,
+                                  "inline array has unmatched ']'",
+                                  context + ".array.bracket",
+                                  line,
+                                  column + i,
+                                  text));
+            }
+            depth = depth - 1;
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "," && depth == 0) {
+            var part: string = trim(substring(inner, token_start, i - token_start));
+            if (part == "") {
+                return (out,
+                        yamlError(ERR_PARSE,
+                                  "inline array contains empty element",
+                                  context + ".array.empty",
+                                  line,
+                                  column + i,
+                                  text));
+            }
+
+            var item = yamlParseScalar(part, line, column + token_start + 1, context + ".array");
+            if (item.1 != nil) {
+                return (out, item.1);
+            }
+            push(out, item.0);
+            token_start = i + 1;
+        }
+
+        i = i + 1;
+    }
+
+    if (in_double || in_single || depth != 0) {
+        return (out,
+                yamlError(ERR_PARSE,
+                          "unterminated inline array",
+                          context + ".array.unterminated",
+                          line,
+                          column,
+                          text));
+    }
+
+    var tail: string = trim(substring(inner, token_start, len(inner) - token_start));
+    if (tail != "") {
+        var last_item = yamlParseScalar(tail, line, column + token_start + 1, context + ".array");
+        if (last_item.1 != nil) {
+            return (out, last_item.1);
+        }
+        push(out, last_item.0);
+    } else {
+        var inner_trimmed: string = trim(inner);
+        if (inner_trimmed != "" && !endsWith(inner_trimmed, ",")) {
+            return (out,
+                    yamlError(ERR_PARSE,
+                              "inline array parse failed near end",
+                              context + ".array.tail",
+                              line,
+                              column + len(text),
+                              text));
+        }
+    }
+
+    return (out, nil);
+}
+
+func yamlFindTopLevelColon(text: string): int {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    var escaped: bool = false;
+    var bracket_depth: int = 0;
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+
+        if (in_double) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == "\\") {
+                escaped = true;
+            } else if (ch == "\"") {
+                in_double = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (in_single) {
+            if (ch == "'") {
+                in_single = false;
+            }
+            i = i + 1;
+            continue;
+        }
+
+        if (ch == "\"") {
+            in_double = true;
+        } else if (ch == "'") {
+            in_single = true;
+        } else if (ch == "[") {
+            bracket_depth = bracket_depth + 1;
+        } else if (ch == "]") {
+            if (bracket_depth > 0) {
+                bracket_depth = bracket_depth - 1;
+            }
+        } else if (ch == ":" && bracket_depth == 0) {
+            return i;
+        }
+
+        i = i + 1;
+    }
+
+    return -1;
+}
+
+func yamlParseKeyText(raw_key: string,
+                      line: int,
+                      column: int,
+                      context: string): (string, Error?) {
+    var key: string = trim(raw_key);
+    if (key == "") {
+        return ("",
+                yamlError(ERR_PARSE,
+                          "mapping key cannot be empty",
+                          context + ".key.empty",
+                          line,
+                          column,
+                          raw_key));
+    }
+
+    if (startsWith(key, "\"")) {
+        var quoted = yamlParseDoubleQuoted(key, 0, line, column, context + ".key");
+        if (quoted.2 != nil) {
+            return ("", quoted.2);
+        }
+        var tail: string = trim(substring(key, quoted.1, len(key) - quoted.1));
+        if (tail != "") {
+            return ("",
+                    yamlError(ERR_PARSE,
+                              "unexpected trailing text after quoted key",
+                              context + ".key.trailing",
+                              line,
+                              column + quoted.1,
+                              tail));
+        }
+        return (quoted.0, nil);
+    }
+
+    if (startsWith(key, "'")) {
+        var literal = yamlParseSingleQuoted(key, 0, line, column, context + ".key");
+        if (literal.2 != nil) {
+            return ("", literal.2);
+        }
+        var tail2: string = trim(substring(key, literal.1, len(key) - literal.1));
+        if (tail2 != "") {
+            return ("",
+                    yamlError(ERR_PARSE,
+                              "unexpected trailing text after quoted key",
+                              context + ".key.trailing",
+                              line,
+                              column + literal.1,
+                              tail2));
+        }
+        return (literal.0, nil);
+    }
+
+    return (key, nil);
+}
+func yamlIsSeqMarker(content: string): bool {
+    if (!startsWith(content, "-")) {
+        return false;
+    }
+    if (len(content) == 1) {
+        return true;
+    }
+    return substring(content, 1, 1) == " ";
+}
+
+func yamlBuildLogicalLines(text: string): (array<YamlLine>, Error?) {
+    var out: array<YamlLine> = [];
+    if (text == "") {
+        return (out, nil);
+    }
+
+    var raw_lines: array<string> = split(text, "\n");
+    var line_no: int = 1;
+    foreach (raw in raw_lines) {
+        var line: string = raw;
+        if (endsWith(line, "\r")) {
+            line = substring(line, 0, len(line) - 1);
+        }
+
+        var indent_r = yamlCountIndent(line, line_no);
+        if (indent_r.1 != nil) {
+            return (out, indent_r.1);
+        }
+        var indent: int = indent_r.0;
+
+        var body: string = "";
+        if (indent < len(line)) {
+            body = substring(line, indent, len(line) - indent);
+        }
+
+        body = yamlStripInlineComment(body);
+        body = trim(body);
+        if (body != "") {
+            var item: YamlLine = {
+                indent: indent,
+                content: body,
+                line: line_no
+            };
+            push(out, item);
+        }
+
+        line_no = line_no + 1;
+    }
+
+    return (out, nil);
+}
+
+func yamlParseBlock(lines: array<YamlLine>,
+                    index: int,
+                    indent: int,
+                    context: string): (any, int, Error?) {
+    if (index >= len(lines)) {
+        return ({} as any, index, nil);
+    }
+
+    var first: YamlLine = lines[index];
+    if (first.indent < indent) {
+        return ({} as any,
+                index,
+                yamlError(ERR_PARSE,
+                          "unexpected dedent while parsing block",
+                          context + ".block.dedent",
+                          first.line,
+                          1,
+                          first.content));
+    }
+    if (first.indent > indent) {
+        return ({} as any,
+                index,
+                yamlError(ERR_PARSE,
+                          "unexpected extra indentation",
+                          context + ".block.indent",
+                          first.line,
+                          first.indent + 1,
+                          first.content));
+    }
+
+    if (yamlIsSeqMarker(first.content)) {
+        var seq_r = yamlParseSequence(lines, index, indent, context + ".sequence");
+        return (seq_r.0 as any, seq_r.1, seq_r.2);
+    }
+
+    var map_r = yamlParseMap(lines, index, indent, context + ".map");
+    return (map_r.0 as any, map_r.1, map_r.2);
+}
+
+func yamlParseSequence(lines: array<YamlLine>,
+                       index: int,
+                       indent: int,
+                       context: string): (array<any>, int, Error?) {
+    var out: array<any> = [];
+    var i: int = index;
+
+    while (i < len(lines)) {
+        var ln: YamlLine = lines[i];
+        if (ln.indent < indent) {
+            break;
+        }
+        if (ln.indent > indent) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "unexpected indentation inside sequence",
+                              context + ".indent",
+                              ln.line,
+                              ln.indent + 1,
+                              ln.content));
+        }
+
+        if (!yamlIsSeqMarker(ln.content)) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "mixed mapping and sequence entries at same indentation",
+                              context + ".mixed",
+                              ln.line,
+                              ln.indent + 1,
+                              ln.content));
+        }
+
+        var item_text: string = "";
+        if (len(ln.content) > 1) {
+            item_text = trim(substring(ln.content, 2, len(ln.content) - 2));
+        }
+
+        if (item_text == "") {
+            i = i + 1;
+            if (i >= len(lines)) {
+                return (out,
+                        i,
+                        yamlError(ERR_PARSE,
+                                  "sequence item requires value or nested block",
+                                  context + ".item.empty",
+                                  ln.line,
+                                  ln.indent + 1,
+                                  ln.content));
+            }
+
+            if (lines[i].indent <= indent) {
+                return (out,
+                        i,
+                        yamlError(ERR_PARSE,
+                                  "sequence item requires value or nested block",
+                                  context + ".item.empty",
+                                  ln.line,
+                                  ln.indent + 1,
+                                  ln.content));
+            }
+
+            var child_indent: int = lines[i].indent;
+            var child = yamlParseBlock(lines, i, child_indent, context + ".item");
+            if (child.2 != nil) {
+                return (out, child.1, child.2);
+            }
+
+            push(out, child.0);
+            i = child.1;
+            continue;
+        }
+
+        var scalar = yamlParseScalar(item_text, ln.line, ln.indent + 3, context + ".item.scalar");
+        if (scalar.1 != nil) {
+            return (out, i, scalar.1);
+        }
+
+        push(out, scalar.0);
+        i = i + 1;
+    }
+
+    return (out, i, nil);
+}
+
+func yamlParseMap(lines: array<YamlLine>,
+                  index: int,
+                  indent: int,
+                  context: string): (map<string, any>, int, Error?) {
+    var out: map<string, any> = {};
+    var i: int = index;
+
+    while (i < len(lines)) {
+        var ln: YamlLine = lines[i];
+        if (ln.indent < indent) {
+            break;
+        }
+        if (ln.indent > indent) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "unexpected indentation inside mapping",
+                              context + ".indent",
+                              ln.line,
+                              ln.indent + 1,
+                              ln.content));
+        }
+
+        if (yamlIsSeqMarker(ln.content)) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "sequence marker not allowed at mapping indentation",
+                              context + ".sequenceMarker",
+                              ln.line,
+                              ln.indent + 1,
+                              ln.content));
+        }
+
+        var colon: int = yamlFindTopLevelColon(ln.content);
+        if (colon < 0) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "expected key: value entry",
+                              context + ".entry.colon",
+                              ln.line,
+                              ln.indent + 1,
+                              ln.content));
+        }
+
+        var key_raw: string = trim(substring(ln.content, 0, colon));
+        var value_raw: string = trim(substring(ln.content, colon + 1, len(ln.content) - (colon + 1)));
+
+        var key_r = yamlParseKeyText(key_raw, ln.line, ln.indent + 1, context + ".entry");
+        if (key_r.1 != nil) {
+            return (out, i, key_r.1);
+        }
+
+        var key: string = key_r.0;
+        if (mapHasString(out, key)) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "duplicate key in mapping",
+                              context + ".entry.duplicate",
+                              ln.line,
+                              ln.indent + 1,
+                              key));
+        }
+
+        if (value_raw != "") {
+            var scalar = yamlParseScalar(value_raw, ln.line, ln.indent + colon + 2, context + ".entry.scalar");
+            if (scalar.1 != nil) {
+                return (out, i, scalar.1);
+            }
+
+            mapSetString(out, key, scalar.0);
+            i = i + 1;
+            continue;
+        }
+
+        i = i + 1;
+        if (i >= len(lines)) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "mapping key requires nested block when value is omitted",
+                              context + ".entry.nested",
+                              ln.line,
+                              ln.indent + colon + 2,
+                              key));
+        }
+
+        if (lines[i].indent <= indent) {
+            return (out,
+                    i,
+                    yamlError(ERR_PARSE,
+                              "mapping key requires nested block when value is omitted",
+                              context + ".entry.nested",
+                              ln.line,
+                              ln.indent + colon + 2,
+                              key));
+        }
+
+        var child_indent: int = lines[i].indent;
+        var child = yamlParseBlock(lines, i, child_indent, context + ".entry.child");
+        if (child.2 != nil) {
+            return (out, child.1, child.2);
+        }
+
+        mapSetString(out, key, child.0);
+        i = child.1;
+    }
+
+    return (out, i, nil);
+}
+
+func yamlParse(text: string): (map<string, any>, Error?) {
+    var lines_r = yamlBuildLogicalLines(text);
+    if (lines_r.1 != nil) {
+        return ({}, lines_r.1);
+    }
+
+    var lines: array<YamlLine> = lines_r.0;
+    if (len(lines) == 0) {
+        return ({}, nil);
+    }
+
+    var root_indent: int = lines[0].indent;
+    var root = yamlParseBlock(lines, 0, root_indent, "yaml.parse");
+    if (root.2 != nil) {
+        return ({}, root.2);
+    }
+
+    if (root.1 != len(lines)) {
+        var next_line: YamlLine = lines[root.1];
+        return ({},
+                yamlError(ERR_PARSE,
+                          "unexpected trailing YAML content",
+                          "yaml.parse.trailing",
+                          next_line.line,
+                          next_line.indent + 1,
+                          next_line.content));
+    }
+
+    if (typeOf(root.0) != "map") {
+        return ({},
+                yamlError(ERR_PARSE,
+                          "YAML root must be a mapping",
+                          "yaml.parse.root.type",
+                          lines[0].line,
+                          lines[0].indent + 1,
+                          typeOf(root.0)));
+    }
+
+    return (root.0 as map<string, any>, nil);
+}
+func yamlSplitPath(path: string, line: int, context: string): (array<string>, Error?) {
+    var out: array<string> = [];
+    var i: int = 0;
+    while (i < len(path)) {
+        i = yamlSkipSpaces(path, i);
+        if (i >= len(path)) {
+            break;
+        }
+
+        var part: string = "";
+        var ch: string = substring(path, i, 1);
+        if (ch == "\"") {
+            var quoted = yamlParseDoubleQuoted(path, i, line, i + 1, context + ".path");
+            if (quoted.2 != nil) {
+                return (out, quoted.2);
+            }
+            part = quoted.0;
+            i = quoted.1;
+        } else if (ch == "'") {
+            var literal = yamlParseSingleQuoted(path, i, line, i + 1, context + ".path");
+            if (literal.2 != nil) {
+                return (out, literal.2);
+            }
+            part = literal.0;
+            i = literal.1;
+        } else {
+            var start: int = i;
+            while (i < len(path)) {
+                if (!yamlIsBareKeyChar(substring(path, i, 1))) {
+                    break;
+                }
+                i = i + 1;
+            }
+            if (i == start) {
+                return (out,
+                        yamlError(ERR_PARSE,
+                                  "invalid key-path segment",
+                                  context + ".path.segment",
+                                  line,
+                                  start + 1,
+                                  path));
+            }
+            part = substring(path, start, i - start);
+        }
+
+        if (part == "") {
+            return (out,
+                    yamlError(ERR_PARSE,
+                              "empty key-path segment",
+                              context + ".path.empty",
+                              line,
+                              i + 1,
+                              path));
+        }
+        push(out, part);
+
+        i = yamlSkipSpaces(path, i);
+        if (i >= len(path)) {
+            break;
+        }
+        if (substring(path, i, 1) != ".") {
+            return (out,
+                    yamlError(ERR_PARSE,
+                              "expected '.' between key-path segments",
+                              context + ".path.dot",
+                              line,
+                              i + 1,
+                              path));
+        }
+        i = i + 1;
+    }
+
+    if (len(out) == 0) {
+        return (out,
+                yamlError(ERR_PARSE,
+                          "path cannot be empty",
+                          context + ".path.empty",
+                          line,
+                          1,
+                          path));
+    }
+
+    return (out, nil);
+}
+
+func yamlGet(doc: map<string, any>, path: string): (any, Error?) {
+    var parts_r = yamlSplitPath(path, -1, "yaml.get");
+    if (parts_r.1 != nil) {
+        return (nil, parts_r.1);
+    }
+
+    var current: any = doc as any;
+    var i: int = 0;
+    while (i < len(parts_r.0)) {
+        if (typeOf(current) != "map") {
+            return (nil,
+                    yamlError(ERR_PARSE,
+                              "encountered non-map while traversing path",
+                              "yaml.get.path.type",
+                              -1,
+                              1,
+                              yamlJoinPath(parts_r.0)));
+        }
+
+        var table: map<string, any> = current as map<string, any>;
+        var key: string = parts_r.0[i];
+        if (!mapHasString(table, key)) {
+            return (nil, nil);
+        }
+
+        current = mapGetString(table, key);
+        i = i + 1;
+    }
+
+    return (current, nil);
+}
+
+func yamlGetString(doc: map<string, any>, path: string): (string?, Error?) {
+    var got = yamlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "string") {
+        return (nil,
+                yamlError(ERR_PARSE,
+                          "value is not a string",
+                          "yaml.getString.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as string, nil);
+}
+
+func yamlGetInt(doc: map<string, any>, path: string): (int?, Error?) {
+    var got = yamlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "int") {
+        return (nil,
+                yamlError(ERR_PARSE,
+                          "value is not an int",
+                          "yaml.getInt.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as int, nil);
+}
+
+func yamlGetBool(doc: map<string, any>, path: string): (bool?, Error?) {
+    var got = yamlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "bool") {
+        return (nil,
+                yamlError(ERR_PARSE,
+                          "value is not a bool",
+                          "yaml.getBool.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as bool, nil);
+}
+
+func yamlGetArray(doc: map<string, any>, path: string): (array<any>?, Error?) {
+    var got = yamlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "array") {
+        return (nil,
+                yamlError(ERR_PARSE,
+                          "value is not an array",
+                          "yaml.getArray.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as array<any>, nil);
+}
+
+func yamlGetTable(doc: map<string, any>, path: string): (map<string, any>?, Error?) {
+    var got = yamlGet(doc, path);
+    if (got.1 != nil) {
+        return (nil, got.1);
+    }
+    if (got.0 == nil) {
+        return (nil, nil);
+    }
+    if (typeOf(got.0) != "map") {
+        return (nil,
+                yamlError(ERR_PARSE,
+                          "value is not a mapping",
+                          "yaml.getTable.type",
+                          -1,
+                          1,
+                          path));
+    }
+    return (got.0 as map<string, any>, nil);
+}
+
+func yamlLooksLikeBareKey(text: string): bool {
+    if (text == "") {
+        return false;
+    }
+
+    var i: int = 0;
+    while (i < len(text)) {
+        if (!yamlIsBareKeyChar(substring(text, i, 1))) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func yamlEscapeString(text: string): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch == "\\") {
+            out = out + "\\\\";
+        } else if (ch == "\"") {
+            out = out + "\\\"";
+        } else if (ch == "\n") {
+            out = out + "\\n";
+        } else if (ch == "\r") {
+            out = out + "\\r";
+        } else if (ch == "\t") {
+            out = out + "\\t";
+        } else {
+            out = out + ch;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+func yamlNeedsQuotedString(text: string): bool {
+    if (text == "") {
+        return true;
+    }
+
+    if (trim(text) != text) {
+        return true;
+    }
+
+    if (startsWith(text, "-") ||
+        startsWith(text, "[") ||
+        startsWith(text, "{") ||
+        text == "true" ||
+        text == "false" ||
+        yamlLooksLikeInt(text)) {
+        return true;
+    }
+
+    var i: int = 0;
+    while (i < len(text)) {
+        var ch: string = substring(text, i, 1);
+        if (ch == ":" || ch == "#" || ch == "," || ch == "[" || ch == "]" || ch == "\n" || ch == "\r" || ch == "\t") {
+            return true;
+        }
+        i = i + 1;
+    }
+
+    return false;
+}
+
+func yamlFormatKey(key: string): string {
+    if (yamlLooksLikeBareKey(key)) {
+        return key;
+    }
+    return "\"" + yamlEscapeString(key) + "\"";
+}
+
+func yamlIndent(level: int): string {
+    var out: string = "";
+    var i: int = 0;
+    while (i < level) {
+        out = out + " ";
+        i = i + 1;
+    }
+    return out;
+}
+
+func yamlStringifyInlineArray(items: array<any>, depth: int): (string, Error?) {
+    var out: string = "[";
+    var i: int = 0;
+    foreach (item in items) {
+        if (i > 0) {
+            out = out + ", ";
+        }
+        var encoded = yamlStringifyScalar(item, depth + 1);
+        if (encoded.1 != nil) {
+            return ("", encoded.1);
+        }
+        out = out + encoded.0;
+        i = i + 1;
+    }
+    out = out + "]";
+    return (out, nil);
+}
+
+func yamlStringifyScalar(value: any, depth: int): (string, Error?) {
+    if (depth > 64) {
+        return ("",
+                yamlError(ERR_LIMIT,
+                          "YAML stringify nesting depth exceeded",
+                          "yaml.stringify.depth",
+                          -1,
+                          1,
+                          depth));
+    }
+
+    if (value == nil) {
+        return ("",
+                yamlError(ERR_INVALID_ARGUMENT,
+                          "YAML stringify does not support nil values",
+                          "yaml.stringify.nil",
+                          -1,
+                          1,
+                          nil));
+    }
+
+    var t: string = typeOf(value);
+    if (t == "string") {
+        var s: string = value as string;
+        if (yamlNeedsQuotedString(s)) {
+            return ("\"" + yamlEscapeString(s) + "\"", nil);
+        }
+        return (s, nil);
+    }
+    if (t == "int") {
+        return (str(value as int), nil);
+    }
+    if (t == "bool") {
+        if (value as bool) {
+            return ("true", nil);
+        }
+        return ("false", nil);
+    }
+    if (t == "array") {
+        return yamlStringifyInlineArray(value as array<any>, depth + 1);
+    }
+
+    return ("",
+            yamlError(ERR_INVALID_ARGUMENT,
+                      "unsupported scalar type for YAML stringify",
+                      "yaml.stringify.scalar.type",
+                      -1,
+                      1,
+                      t));
+}
+
+func yamlStringifyMapInternal(table: map<string, any>, indent: int, depth: int): (string, Error?) {
+    if (depth > 64) {
+        return ("",
+                yamlError(ERR_LIMIT,
+                          "YAML stringify nesting depth exceeded",
+                          "yaml.stringify.map.depth",
+                          -1,
+                          1,
+                          depth));
+    }
+
+    var out: string = "";
+    foreach (key_any in keys(table)) {
+        if (key_any == nil || typeOf(key_any) != "string") {
+            return ("",
+                    yamlError(ERR_INVALID_ARGUMENT,
+                              "mapping key must be a string",
+                              "yaml.stringify.key.type",
+                              -1,
+                              1,
+                              key_any));
+        }
+
+        var key: string = key_any as string;
+        var value: any = mapGetString(table, key);
+        if (value == nil) {
+            return ("",
+                    yamlError(ERR_INVALID_ARGUMENT,
+                              "YAML stringify does not support nil mapping values",
+                              "yaml.stringify.value.nil",
+                              -1,
+                              1,
+                              key));
+        }
+
+        var key_text: string = yamlFormatKey(key);
+        if (typeOf(value) == "map") {
+            out = out + yamlIndent(indent) + key_text + ":\n";
+            var child = yamlStringifyMapInternal(value as map<string, any>, indent + 2, depth + 1);
+            if (child.1 != nil) {
+                return ("", child.1);
+            }
+            out = out + child.0;
+        } else {
+            var scalar = yamlStringifyScalar(value, depth + 1);
+            if (scalar.1 != nil) {
+                return ("", scalar.1);
+            }
+            out = out + yamlIndent(indent) + key_text + ": " + scalar.0 + "\n";
+        }
+    }
+
+    return (out, nil);
+}
+
+func yamlStringify(doc: map<string, any>): (string, Error?) {
+    var encoded = yamlStringifyMapInternal(doc, 0, 0);
+    if (encoded.1 != nil) {
+        return ("", encoded.1);
+    }
+
+    var out: string = encoded.0;
+    while (endsWith(out, "\n")) {
+        out = substring(out, 0, len(out) - 1);
+    }
+    return (out, nil);
+}

@@ -1,0 +1,218 @@
+import "fixtures/concurrency.tblo";
+
+func workerSignalReady(): void {
+    var outbox_id: int = concurrencyThreadOutboxId();
+    if (outbox_id < 0) {
+        return;
+    }
+
+    var outbox: ConcurrencyChannel = {
+        id: outbox_id,
+        schema: nil
+    };
+    var _send_err = concurrencyChannelSend(outbox, "ready" as any, 5000);
+}
+
+func workerTypedIncrement(): int {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return -1000;
+    }
+
+    var n: int = arg_r.0 as int;
+    var outbox_id: int = concurrencyThreadOutboxId();
+    if (outbox_id >= 0) {
+        var outbox: ConcurrencyChannel = {
+            id: outbox_id,
+            schema: { "n": "int" } as any
+        };
+        var send_err = concurrencyChannelSend(outbox, { "n": n } as any, 5000);
+        if (send_err != nil) {
+            return -1001;
+        }
+    }
+
+    return n + 1;
+}
+
+func main(): void {
+    var channel_r = concurrencyChannelOpen(8);
+    println(channel_r.1 == nil);
+    if (channel_r.1 == nil) {
+        var channel: ConcurrencyChannel = channel_r.0;
+
+        var send_err = concurrencyChannelSend(channel, "ping" as any, 5000);
+        println(send_err == nil);
+
+        var recv_r = concurrencyChannelRecv(channel, 5000);
+        println(recv_r.1 == nil);
+        if (recv_r.1 == nil) {
+            println((recv_r.0 as string) == "ping");
+        }
+
+        var close_r = concurrencyChannelClose(channel);
+        println(close_r.1 == nil);
+        if (close_r.1 == nil) {
+            println(close_r.0);
+        }
+    }
+
+    var typed_schema: map<string, any> = {
+        "kind": "string",
+        "n": "int"
+    };
+    var typed_channel_r = concurrencyChannelOpenTyped(4, typed_schema as any);
+    println(typed_channel_r.1 == nil);
+    if (typed_channel_r.1 == nil) {
+        var typed_channel: ConcurrencyChannel = typed_channel_r.0;
+
+        var typed_send_err = concurrencyChannelSend(typed_channel,
+                                                    { "kind": "evt", "n": 7 } as any,
+                                                    5000);
+        println(typed_send_err == nil);
+
+        var typed_recv_r = concurrencyChannelRecv(typed_channel, 5000);
+        println(typed_recv_r.1 == nil);
+        if (typed_recv_r.1 == nil) {
+            var typed_msg: map<string, any> = typed_recv_r.0 as map<string, any>;
+            println((mapGet(typed_msg, "kind") as string) == "evt");
+            println((mapGet(typed_msg, "n") as int) == 7);
+        }
+
+        var typed_bad_err = concurrencyChannelSend(typed_channel,
+                                                   { "kind": "evt", "n": "bad" } as any,
+                                                   5000);
+        println(typed_bad_err != nil);
+
+        var typed_close_r = concurrencyChannelClose(typed_channel);
+        println(typed_close_r.1 == nil);
+    }
+
+    var shared_schema: map<string, any> = { "count": "int" };
+    var shared_r = concurrencySharedCreateTyped({ "count": 1 } as any, shared_schema as any);
+    println(shared_r.1 == nil);
+    if (shared_r.1 == nil) {
+        var shared: ConcurrencyShared = shared_r.0;
+
+        var shared_get_1 = concurrencySharedGet(shared);
+        println(shared_get_1.1 == nil);
+        if (shared_get_1.1 == nil) {
+            var shared_map_1: map<string, any> = shared_get_1.0 as map<string, any>;
+            println((mapGet(shared_map_1, "count") as int) == 1);
+        }
+
+        var shared_set_ok = concurrencySharedSet(shared, { "count": 2 } as any);
+        println(shared_set_ok.1 == nil);
+
+        var shared_get_2 = concurrencySharedGet(shared);
+        println(shared_get_2.1 == nil);
+        if (shared_get_2.1 == nil) {
+            var shared_map_2: map<string, any> = shared_get_2.0 as map<string, any>;
+            println((mapGet(shared_map_2, "count") as int) == 2);
+        }
+
+        var shared_set_bad = concurrencySharedSet(shared, { "count": "oops" } as any);
+        println(shared_set_bad.1 != nil);
+    }
+
+    var mailbox_r = concurrencyMailboxOpen(4);
+    println(mailbox_r.1 == nil);
+    if (mailbox_r.1 == nil) {
+        var mailbox: ConcurrencyMailbox = mailbox_r.0;
+
+        var spawned = concurrencyThreadSpawn("workerSignalReady", -1, mailbox.outboxChannelId);
+        println(spawned.1 == nil);
+        if (spawned.1 == nil) {
+            var outbox: ConcurrencyChannel = {
+                id: mailbox.outboxChannelId,
+                schema: nil
+            };
+            var msg_r = concurrencyChannelRecv(outbox, 5000);
+            println(msg_r.1 == nil);
+            if (msg_r.1 == nil) {
+                println((msg_r.0 as string) == "ready");
+            }
+
+            var join_r = concurrencyThreadJoinDone(spawned.0, 5000);
+            println(join_r.1 == nil);
+            if (join_r.1 == nil) {
+                println(join_r.0);
+            }
+        }
+
+        var mailbox_close_err = concurrencyMailboxClose(mailbox);
+        println(mailbox_close_err == nil);
+    }
+
+    var typed_outbox_r = concurrencyChannelOpenTyped(4, { "n": "int" } as any);
+    println(typed_outbox_r.1 == nil);
+    if (typed_outbox_r.1 == nil) {
+        var typed_outbox: ConcurrencyChannel = typed_outbox_r.0;
+        var typed_spawn_r = concurrencyThreadSpawnTyped("workerTypedIncrement",
+                                                        7 as any,
+                                                        "int",
+                                                        -1,
+                                                        typed_outbox.id,
+                                                        "int");
+        println(typed_spawn_r.1 == nil);
+        if (typed_spawn_r.1 == nil) {
+            var typed_msg_r = concurrencyChannelRecv(typed_outbox, 5000);
+            println(typed_msg_r.1 == nil);
+            if (typed_msg_r.1 == nil) {
+                var typed_msg: map<string, any> = typed_msg_r.0 as map<string, any>;
+                println((mapGet(typed_msg, "n") as int) == 7);
+            }
+
+            var typed_join_r = concurrencyThreadJoinValue(typed_spawn_r.0, 5000);
+            println(typed_join_r.1 == nil);
+            if (typed_join_r.1 == nil) {
+                println((typed_join_r.0 as int) == 8);
+            }
+        }
+
+        var typed_outbox_close = concurrencyChannelClose(typed_outbox);
+        println(typed_outbox_close.1 == nil);
+    }
+
+    var arc_r = concurrencyArcCreate(5 as any);
+    println(arc_r.1 == nil);
+    if (arc_r.1 == nil) {
+        var arc: ConcurrencyArc = arc_r.0;
+        var arc_clone_r = concurrencyArcClone(arc);
+        println(arc_clone_r.1 == nil);
+        if (arc_clone_r.1 == nil) {
+            var guard_r = concurrencyArcAcquire(arc_clone_r.0);
+            println(guard_r.1 == nil);
+            if (guard_r.1 == nil) {
+                var guard: ConcurrencyGuard = guard_r.0;
+                var guard_read_r = concurrencyArcRead(guard);
+                println(guard_read_r.1 == nil);
+                if (guard_read_r.1 == nil) {
+                    println((guard_read_r.0 as int) == 5);
+                }
+
+                var guard_write_r = concurrencyArcWrite(guard, 9 as any);
+                println(guard_write_r.1 == nil);
+
+                var guard_release_r = concurrencyArcRelease(guard);
+                println(guard_release_r.1 == nil);
+            }
+        }
+
+        var guard_r2 = concurrencyArcAcquire(arc);
+        println(guard_r2.1 == nil);
+        if (guard_r2.1 == nil) {
+            var guard2: ConcurrencyGuard = guard_r2.0;
+            var guard_read_r2 = concurrencyArcRead(guard2);
+            println(guard_read_r2.1 == nil);
+            if (guard_read_r2.1 == nil) {
+                println((guard_read_r2.0 as int) == 9);
+            }
+            var guard_release_r2 = concurrencyArcRelease(guard2);
+            println(guard_release_r2.1 == nil);
+        }
+    }
+
+    println(concurrencyThreadInboxId() == -1);
+    println(concurrencyThreadOutboxId() == -1);
+}

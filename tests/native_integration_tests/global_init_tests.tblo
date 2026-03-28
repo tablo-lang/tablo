@@ -1,0 +1,6 @@
+var g: int = 1;
+g = g + 1;
+
+func main() {
+    println(g);
+}

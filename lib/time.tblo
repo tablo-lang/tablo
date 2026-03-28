@@ -1,0 +1,262 @@
+// Time helpers for durations, deadlines, and ISO-like date-time formatting.
+
+var TIME_MS_PER_SECOND: int = 1000;
+var TIME_MS_PER_MINUTE: int = 60 * TIME_MS_PER_SECOND;
+var TIME_MS_PER_HOUR: int = 60 * TIME_MS_PER_MINUTE;
+var TIME_MS_PER_DAY: int = 24 * TIME_MS_PER_HOUR;
+
+func timeStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func timeError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return timeStdError(code, message, data);
+}
+
+func timeIsDigit(ch: string): bool {
+    return find("0123456789", ch) >= 0;
+}
+
+func timeIsSpace(ch: string): bool {
+    return ch == " " || ch == "\t" || ch == "\n" || ch == "\r";
+}
+
+func timePadInt(value: int, width: int): string {
+    var out: string = str(value);
+    while (len(out) < width) {
+        out = "0" + out;
+    }
+    return out;
+}
+
+func timeParseDuration(text: string): (int, Error?) {
+    var input: string = trim(text);
+    if (input == "") {
+        return (0, timeError(ERR_PARSE, "timeParseDuration: empty input", "timeParseDuration.empty", text));
+    }
+
+    var sign: int = 1;
+    var i: int = 0;
+    if (startsWith(input, "-")) {
+        sign = -1;
+        i = 1;
+    } else if (startsWith(input, "+")) {
+        i = 1;
+    }
+
+    var total_ms: int = 0;
+    var seen_segment: bool = false;
+
+    while (i < len(input)) {
+        while (i < len(input) && timeIsSpace(substring(input, i, 1))) {
+            i = i + 1;
+        }
+        if (i >= len(input)) {
+            break;
+        }
+
+        var num_start: int = i;
+        while (i < len(input) && timeIsDigit(substring(input, i, 1))) {
+            i = i + 1;
+        }
+        if (i == num_start) {
+            return (0,
+                    timeError(ERR_PARSE,
+                              "timeParseDuration: expected number",
+                              "timeParseDuration.number",
+                              input));
+        }
+
+        var number_text: string = substring(input, num_start, i - num_start);
+        var number: int = toInt(number_text);
+
+        while (i < len(input) && timeIsSpace(substring(input, i, 1))) {
+            i = i + 1;
+        }
+        if (i >= len(input)) {
+            return (0,
+                    timeError(ERR_PARSE,
+                              "timeParseDuration: missing duration unit",
+                              "timeParseDuration.unit",
+                              number_text));
+        }
+
+        var unit_ms: int = 0;
+        if ((i + 1) < len(input) && substring(input, i, 2) == "ms") {
+            unit_ms = 1;
+            i = i + 2;
+        } else {
+            var unit: string = substring(input, i, 1);
+            if (unit == "s") {
+                unit_ms = TIME_MS_PER_SECOND;
+            } else if (unit == "m") {
+                unit_ms = TIME_MS_PER_MINUTE;
+            } else if (unit == "h") {
+                unit_ms = TIME_MS_PER_HOUR;
+            } else if (unit == "d") {
+                unit_ms = TIME_MS_PER_DAY;
+            } else {
+                return (0,
+                        timeError(ERR_PARSE,
+                                  "timeParseDuration: unsupported unit",
+                                  "timeParseDuration.unit",
+                                  unit));
+            }
+            i = i + 1;
+        }
+
+        total_ms = total_ms + (number * unit_ms);
+        seen_segment = true;
+    }
+
+    if (!seen_segment) {
+        return (0,
+                timeError(ERR_PARSE,
+                          "timeParseDuration: no duration segments",
+                          "timeParseDuration.segments",
+                          input));
+    }
+
+    if (sign < 0) {
+        total_ms = 0 - total_ms;
+    }
+    return (total_ms, nil);
+}
+
+func timeFormatDuration(duration_ms: int): string {
+    if (duration_ms == 0) {
+        return "0ms";
+    }
+
+    var sign: string = "";
+    var remaining: int = duration_ms;
+    if (remaining < 0) {
+        sign = "-";
+        remaining = 0 - remaining;
+    }
+
+    var days: int = remaining / TIME_MS_PER_DAY;
+    remaining = remaining % TIME_MS_PER_DAY;
+
+    var hours: int = remaining / TIME_MS_PER_HOUR;
+    remaining = remaining % TIME_MS_PER_HOUR;
+
+    var minutes: int = remaining / TIME_MS_PER_MINUTE;
+    remaining = remaining % TIME_MS_PER_MINUTE;
+
+    var seconds: int = remaining / TIME_MS_PER_SECOND;
+    remaining = remaining % TIME_MS_PER_SECOND;
+
+    var millis: int = remaining;
+
+    var out: string = "";
+    if (days > 0) {
+        out = out + str(days) + "d";
+    }
+    if (hours > 0) {
+        out = out + str(hours) + "h";
+    }
+    if (minutes > 0) {
+        out = out + str(minutes) + "m";
+    }
+    if (seconds > 0) {
+        out = out + str(seconds) + "s";
+    }
+    if (millis > 0) {
+        out = out + str(millis) + "ms";
+    }
+
+    if (out == "") {
+        out = "0ms";
+    }
+    return sign + out;
+}
+
+func timeDeadlineAfter(timeout_ms: int): (int, Error?) {
+    if (timeout_ms < 0) {
+        return (0,
+                timeError(ERR_INVALID_ARGUMENT,
+                          "timeDeadlineAfter: timeout must be >= 0",
+                          "timeDeadlineAfter.timeout",
+                          timeout_ms));
+    }
+
+    var now_ms: int = timeMonotonicMillis();
+    return (now_ms + timeout_ms, nil);
+}
+
+func timeDeadlineRemaining(deadline_ms: int): int {
+    var remaining: int = deadline_ms - timeMonotonicMillis();
+    if (remaining < 0) {
+        return 0;
+    }
+    return remaining;
+}
+
+func timeDeadlineExceeded(deadline_ms: int): bool {
+    return timeDeadlineRemaining(deadline_ms) == 0;
+}
+
+func timeFormatDateTime(parts: array<int>): (string, Error?) {
+    if (len(parts) != 7) {
+        return ("",
+                timeError(ERR_INVALID_ARGUMENT,
+                          "timeFormatDateTime: expected 7 fields (Y,M,D,h,m,s,ms)",
+                          "timeFormatDateTime.length",
+                          len(parts)));
+    }
+
+    var year: int = parts[0];
+    var month: int = parts[1];
+    var day: int = parts[2];
+    var hour: int = parts[3];
+    var minute: int = parts[4];
+    var second: int = parts[5];
+    var millis: int = parts[6];
+
+    if (year < 0) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: year must be >= 0", "timeFormatDateTime.year", year));
+    }
+    if (month < 1 || month > 12) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: month out of range", "timeFormatDateTime.month", month));
+    }
+    if (day < 1 || day > 31) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: day out of range", "timeFormatDateTime.day", day));
+    }
+    if (hour < 0 || hour > 23) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: hour out of range", "timeFormatDateTime.hour", hour));
+    }
+    if (minute < 0 || minute > 59) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: minute out of range", "timeFormatDateTime.minute", minute));
+    }
+    if (second < 0 || second > 59) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: second out of range", "timeFormatDateTime.second", second));
+    }
+    if (millis < 0 || millis > 999) {
+        return ("", timeError(ERR_INVALID_ARGUMENT, "timeFormatDateTime: millis out of range", "timeFormatDateTime.millis", millis));
+    }
+
+    var out: string =
+        timePadInt(year, 4) + "-" +
+        timePadInt(month, 2) + "-" +
+        timePadInt(day, 2) + "T" +
+        timePadInt(hour, 2) + ":" +
+        timePadInt(minute, 2) + ":" +
+        timePadInt(second, 2) + "." +
+        timePadInt(millis, 3);
+
+    return (out, nil);
+}
+
+func timeNowIsoUtc(): (string, Error?) {
+    return timeFormatDateTime(utcDateTime());
+}
+
+func timeNowIsoLocal(): (string, Error?) {
+    return timeFormatDateTime(localDateTime());
+}

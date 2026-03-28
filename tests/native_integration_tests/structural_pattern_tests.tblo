@@ -1,0 +1,137 @@
+record Point {
+    x: int,
+    y: int
+}
+
+record Flagged {
+    flag: bool,
+    code: int
+}
+
+enum Wrapped {
+    Pair((int, int)),
+    Pointed(Point),
+    Empty
+}
+
+enum Result[T, E] {
+    Ok(T),
+    Err(E)
+}
+
+func tupleSum(pair: (int, int)): int {
+    match (pair) {
+        (left, right): return left + right;
+    }
+}
+
+func pointCode(point: Point): int {
+    return match (point) {
+        { x: 1, y: y }: y,
+        { x: x, y: y }: x + y,
+        else: 0
+    };
+}
+
+func pointHead(point: Point): int {
+    match (point) {
+        Point { x, .. }: return x;
+    }
+}
+
+func tupleExprSum(pair: (int, int)): int {
+    return match (pair) {
+        (left, right): left + right
+    };
+}
+
+func pointExprHead(point: Point): int {
+    return match (point) {
+        Point { x, .. }: x
+    };
+}
+
+func tuplePartition(pair: (bool, int)): int {
+    return match (pair) {
+        (true, value): value,
+        (false, value): value + 10
+    };
+}
+
+func pointPartition(point: Point): int {
+    return match (point) {
+        Point { x: 1, .. }: 100,
+        Point { x, .. }: x
+    };
+}
+
+func tupleMatrixPartition(pair: (bool, int)): int {
+    return match (pair) {
+        (true, 1): 11,
+        (true, value): value,
+        (false, 1): 21,
+        (false, value): value + 10
+    };
+}
+
+func flaggedMatrixPartition(value: Flagged): int {
+    return match (value) {
+        Flagged { flag: true, code: 1 }: 11,
+        Flagged { flag: true, code }: code,
+        Flagged { flag: false, code: 1 }: 21,
+        Flagged { flag: false, code }: code + 10
+    };
+}
+
+func unwrapPair(value: Wrapped): int {
+    if let Wrapped.Pair((left, right)) = value {
+        return left * right;
+    } else {
+        return -1;
+    }
+}
+
+func unwrapPoint(value: Wrapped): int {
+    return match (value) {
+        Wrapped.Pointed({ x: x, y: y }): x - y,
+        else: 0
+    };
+}
+
+func unwrapTypedPoint(value: Wrapped): int {
+    return match (value) {
+        Wrapped.Pointed(Point { x, .. }): x,
+        else: -1
+    };
+}
+
+func classifyResult(value: Result[int, string]): int {
+    return match (value) {
+        Result.Ok(1): 101,
+        Result.Ok(payload): payload,
+        Result.Err(message): -1
+    };
+}
+
+func main() {
+    println(tupleSum((3, 4)));
+    println(pointCode({ x: 1, y: 9 }));
+    println(pointCode({ x: 2, y: 5 }));
+    println(pointHead({ x: 4, y: 6 }));
+    println(tupleExprSum((5, 7)));
+    println(pointExprHead({ x: 6, y: 9 }));
+    println(tuplePartition((false, 5)));
+    println(pointPartition({ x: 1, y: 4 }));
+    println(pointPartition({ x: 7, y: 2 }));
+    println(tupleMatrixPartition((true, 1)));
+    println(tupleMatrixPartition((false, 4)));
+    println(flaggedMatrixPartition({ flag: true, code: 1 }));
+    println(flaggedMatrixPartition({ flag: false, code: 4 }));
+    println(unwrapPair(Wrapped.Pair((2, 6))));
+    println(unwrapPair(Wrapped.Empty));
+    println(unwrapPoint(Wrapped.Pointed({ x: 8, y: 3 })));
+    println(unwrapTypedPoint(Wrapped.Pointed({ x: 8, y: 3 })));
+    println(classifyResult(Result.Ok<int, string>(1)));
+    println(classifyResult(Result.Ok<int, string>(9)));
+    println(classifyResult(Result.Err<int, string>("boom")));
+}

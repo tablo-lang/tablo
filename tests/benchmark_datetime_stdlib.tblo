@@ -1,0 +1,128 @@
+// Datetime stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_datetime_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_datetime_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/datetime.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchDatetimeParseRfc3339(iters: int): void {
+    var text: string = "2026-02-17T10:20:30.123+02:30";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = datetimeParseRfc3339(text);
+        if (r_w.1 != nil) panic("datetimeParseRfc3339 warmup failed: " + r_w.1.message);
+        sink = sink + r_w.0.minute + r_w.0.second;
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = datetimeParseRfc3339(text);
+        if (r.1 != nil) panic("datetimeParseRfc3339 failed: " + r.1.message);
+        sink = sink + r.0.hour + r.0.offsetMinutes;
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf datetimeParseRfc3339", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchDatetimeFormatRfc3339(iters: int): void {
+    var parts: DateTimeParts = {
+        year: 2026,
+        month: 2,
+        day: 17,
+        hour: 10,
+        minute: 20,
+        second: 30,
+        millis: 123,
+        offsetMinutes: 150
+    };
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = datetimeFormatRfc3339(parts);
+        if (r_w.1 != nil) panic("datetimeFormatRfc3339 warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = datetimeFormatRfc3339(parts);
+        if (r.1 != nil) panic("datetimeFormatRfc3339 failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf datetimeFormatRfc3339", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchDatetimeNowLocalRfc3339(iters: int): void {
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = datetimeNowLocalRfc3339();
+        if (r_w.1 != nil) panic("datetimeNowLocalRfc3339 warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = datetimeNowLocalRfc3339();
+        if (r.1 != nil) panic("datetimeNowLocalRfc3339 failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf datetimeNowLocalRfc3339", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Datetime Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchDatetimeParseRfc3339(130000 * scale);
+    benchDatetimeFormatRfc3339(160000 * scale);
+    benchDatetimeNowLocalRfc3339(110000 * scale);
+
+    println("Datetime stdlib benchmark complete!");
+}

@@ -1,0 +1,72 @@
+func main() {
+    // push test
+    var arr: array<int> = [1, 2];
+    push(arr, 3);
+    println(len(arr));
+
+    // arrayWithSize test
+    var pre: array<int> = arrayWithSize(5, 0).0;
+    println(len(pre));
+    println(pre[0]);
+    println(pre[4]);
+    pre[2] = 42;
+    println(pre[2]);
+    pre[1] = 256;
+    println(pre[1]);
+    pre[3] = -1;
+    println(pre[3]);
+    push(pre, 300);
+    println(len(pre));
+    println(pre[5]);
+
+    // pop test
+    var arr2: array<int> = [1, 2, 3];
+    var x: int = pop(arr2);
+    println(x);
+    println(len(arr2));
+
+    // keys test
+    var arr3: array<int> = [10, 20, 30];
+    var keys_arr: array<int> = keys(arr3);
+    println(len(keys_arr));
+
+    // values test
+    var arr4: array<int> = [1, 2, 3];
+    var vals: array<int> = values(arr4);
+    println(len(vals));
+
+    // copyInto test
+    var src: array<int> = [7, 8, 9];
+    var dst: array<int> = [0, 0, 0];
+    copyInto(dst, src);
+    println(dst[0]);
+    println(dst[1]);
+    println(dst[2]);
+
+    // reversePrefix test
+    var rp: array<int> = [0, 1, 2, 3, 4];
+    reversePrefix(rp, 3);
+    println(rp[0]);
+    println(rp[1]);
+    println(rp[2]);
+    println(rp[3]);
+    println(rp[4]);
+
+    // rotatePrefixLeft test
+    var rot: array<int> = [0, 1, 2, 3, 4];
+    rotatePrefixLeft(rot, 3);
+    println(rot[0]);
+    println(rot[1]);
+    println(rot[2]);
+    println(rot[3]);
+    println(rot[4]);
+
+    // rotatePrefixRight test
+    var rotr: array<int> = [0, 1, 2, 3, 4];
+    rotatePrefixRight(rotr, 3);
+    println(rotr[0]);
+    println(rotr[1]);
+    println(rotr[2]);
+    println(rotr[3]);
+    println(rotr[4]);
+}

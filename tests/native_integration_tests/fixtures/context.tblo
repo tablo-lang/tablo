@@ -1,0 +1,338 @@
+// Context helpers for cancellation and deadlines across stdlib operations.
+// Inspired by Go context behavior, adapted to TabloLang runtime primitives.
+
+record Context {
+    cancelStateId: int,
+    deadlineMs: int,
+    parent: any
+};
+
+func contextStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func contextError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return contextStdError(code, message, data);
+}
+
+func contextWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return contextStdError(err.code, err.message, data);
+}
+
+func contextStateSchema(): map<string, any> {
+    var schema: map<string, any> = {
+        "cancelled": "bool",
+        "cancelCode": "int",
+        "cancelMessage": "string",
+        "cancelData": "any",
+        "cancelledAtMs": "int"
+    };
+    return schema;
+}
+
+func contextDefaultState(): map<string, any> {
+    var state: map<string, any> = {
+        "cancelled": false,
+        "cancelCode": ERR_LIMIT,
+        "cancelMessage": "context canceled",
+        "cancelData": nil,
+        "cancelledAtMs": 0
+    };
+    return state;
+}
+
+func contextDefault(): Context {
+    var ctx: Context = {
+        cancelStateId: -1,
+        deadlineMs: 0,
+        parent: nil
+    };
+    return ctx;
+}
+
+func contextParent(ctx: Context): Context? {
+    if (ctx.parent == nil) {
+        return nil;
+    }
+    return ctx.parent as Context;
+}
+
+func contextBackground(): Context {
+    return contextDefault();
+}
+
+func contextStateCreate(): (int, Error?) {
+    var created = syncSharedCreateTyped(contextDefaultState() as any, contextStateSchema() as any);
+    if (created.1 != nil) {
+        return (-1,
+                contextWrapError(created.1,
+                                 "context.state.create",
+                                 nil));
+    }
+    return (created.0 as int, nil);
+}
+
+func contextReadState(ctx: Context): (map<string, any>, Error?) {
+    if (ctx.cancelStateId < 0) {
+        return (contextDefaultState(), nil);
+    }
+
+    var got = syncSharedGetTyped(ctx.cancelStateId, contextStateSchema() as any);
+    if (got.1 != nil) {
+        return (contextDefaultState(),
+                contextWrapError(got.1,
+                                 "context.state.read",
+                                 { "cancelStateId": ctx.cancelStateId } as any));
+    }
+    return (got.0 as map<string, any>, nil);
+}
+
+func contextWriteState(ctx: Context, state: map<string, any>): Error? {
+    if (ctx.cancelStateId < 0) {
+        return contextError(ERR_INVALID_ARGUMENT,
+                            "context is not cancelable",
+                            "context.state.write",
+                            nil);
+    }
+
+    var set_r = syncSharedSetTyped(ctx.cancelStateId, state as any, contextStateSchema() as any);
+    if (set_r.1 != nil) {
+        return contextWrapError(set_r.1,
+                                "context.state.write",
+                                { "cancelStateId": ctx.cancelStateId } as any);
+    }
+    return nil;
+}
+
+func contextStateCancelled(state: map<string, any>): bool {
+    var cancelled_any: any = mapGetString(state, "cancelled");
+    if (cancelled_any == nil) {
+        return false;
+    }
+    return cancelled_any as bool;
+}
+
+func contextStateError(state: map<string, any>): Error {
+    var code: int = ERR_LIMIT;
+    var message: string = "context canceled";
+    var data: any = nil;
+
+    var code_any: any = mapGetString(state, "cancelCode");
+    if (code_any != nil && typeOf(code_any) == "int") {
+        code = code_any as int;
+    }
+
+    var message_any: any = mapGetString(state, "cancelMessage");
+    if (message_any != nil && typeOf(message_any) == "string") {
+        var parsed_message: string = message_any as string;
+        if (parsed_message != "") {
+            message = parsed_message;
+        }
+    }
+
+    var data_any: any = mapGetString(state, "cancelData");
+    if (data_any != nil) {
+        data = data_any;
+    }
+
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func contextEffectiveDeadlineMs(ctx: Context): int {
+    var effective: int = ctx.deadlineMs;
+    var parent_ctx = contextParent(ctx);
+    if (parent_ctx != nil) {
+        var parent_deadline: int = contextEffectiveDeadlineMs(parent_ctx as Context);
+        if (effective <= 0) {
+            effective = parent_deadline;
+        } else if (parent_deadline > 0 && parent_deadline < effective) {
+            effective = parent_deadline;
+        }
+    }
+    return effective;
+}
+
+func contextDeadlineMs(ctx: Context): int {
+    return contextEffectiveDeadlineMs(ctx);
+}
+
+func contextRemainingMs(ctx: Context): int {
+    var deadline_ms: int = contextDeadlineMs(ctx);
+    if (deadline_ms <= 0) {
+        return -1;
+    }
+
+    var remaining: int = deadline_ms - timeMonotonicMillis();
+    if (remaining < 0) {
+        return 0;
+    }
+    return remaining;
+}
+
+func contextWithCancel(parent: Context): (Context, Error?) {
+    var created = contextStateCreate();
+    var empty: Context = contextDefault();
+    if (created.1 != nil) {
+        return (empty, created.1);
+    }
+
+    var ctx: Context = {
+        cancelStateId: created.0,
+        deadlineMs: 0,
+        parent: parent as any
+    };
+    return (ctx, nil);
+}
+
+func contextWithDeadlineMs(parent: Context, deadline_ms: int): (Context, Error?) {
+    if (deadline_ms <= 0) {
+        var empty: Context = contextDefault();
+        return (empty,
+                contextError(ERR_INVALID_ARGUMENT,
+                             "deadlineMs must be > 0",
+                             "context.withDeadlineMs.deadlineMs",
+                             deadline_ms));
+    }
+
+    var child = contextWithCancel(parent);
+    if (child.1 != nil) {
+        return child;
+    }
+
+    var ctx: Context = child.0;
+    var parent_deadline: int = contextEffectiveDeadlineMs(parent);
+    if (parent_deadline > 0 && parent_deadline < deadline_ms) {
+        ctx.deadlineMs = parent_deadline;
+    } else {
+        ctx.deadlineMs = deadline_ms;
+    }
+    return (ctx, nil);
+}
+
+func contextWithTimeoutMs(parent: Context, timeout_ms: int): (Context, Error?) {
+    if (timeout_ms < 0) {
+        var empty: Context = contextDefault();
+        return (empty,
+                contextError(ERR_INVALID_ARGUMENT,
+                             "timeoutMs must be >= 0",
+                             "context.withTimeoutMs.timeoutMs",
+                             timeout_ms));
+    }
+
+    var now_ms: int = timeMonotonicMillis();
+    var deadline_ms: int = now_ms + timeout_ms;
+    if (timeout_ms == 0) {
+        deadline_ms = now_ms;
+    }
+    return contextWithDeadlineMs(parent, deadline_ms);
+}
+
+func contextCancel(ctx: Context, reason: Error?): Error? {
+    if (ctx.cancelStateId < 0) {
+        return contextError(ERR_INVALID_ARGUMENT,
+                            "context is not cancelable",
+                            "context.cancel",
+                            nil);
+    }
+
+    var state_r = contextReadState(ctx);
+    if (state_r.1 != nil) {
+        return state_r.1;
+    }
+
+    var state: map<string, any> = state_r.0;
+    if (contextStateCancelled(state)) {
+        return nil;
+    }
+
+    var code: int = ERR_LIMIT;
+    var message: string = "context canceled";
+    var data: any = nil;
+    if (reason != nil) {
+        code = reason.code;
+        if (reason.message != "") {
+            message = reason.message;
+        }
+        data = reason.data;
+    }
+
+    state = {
+        "cancelled": true,
+        "cancelCode": code,
+        "cancelMessage": message,
+        "cancelData": data,
+        "cancelledAtMs": timeMonotonicMillis()
+    };
+    return contextWriteState(ctx, state);
+}
+
+func contextErr(ctx: Context): Error? {
+    var parent_ctx = contextParent(ctx);
+    if (parent_ctx != nil) {
+        var parent_err = contextErr(parent_ctx as Context);
+        if (parent_err != nil) {
+            return parent_err;
+        }
+    }
+
+    var deadline_ms: int = contextEffectiveDeadlineMs(ctx);
+    if (deadline_ms > 0 && timeMonotonicMillis() >= deadline_ms) {
+        return contextError(ERR_LIMIT,
+                            "context deadline exceeded",
+                            "context.deadline",
+                            { "deadlineMs": deadline_ms } as any);
+    }
+
+    var state_r = contextReadState(ctx);
+    if (state_r.1 != nil) {
+        return state_r.1;
+    }
+
+    var state: map<string, any> = state_r.0;
+    if (!contextStateCancelled(state)) {
+        return nil;
+    }
+    return contextStateError(state);
+}
+
+func contextDone(ctx: Context): bool {
+    return contextErr(ctx) != nil;
+}
+
+func contextTimeoutSliceMs(ctx: Context, max_ms: int): int {
+    var cap_ms: int = max_ms;
+    if (cap_ms < 1) {
+        cap_ms = 1;
+    }
+
+    var err = contextErr(ctx);
+    if (err != nil) {
+        return 0;
+    }
+
+    var remaining: int = contextRemainingMs(ctx);
+    if (remaining < 0) {
+        return cap_ms;
+    }
+    if (remaining < 1) {
+        return 1;
+    }
+    if (remaining < cap_ms) {
+        return remaining;
+    }
+    return cap_ms;
+}

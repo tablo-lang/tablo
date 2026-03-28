@@ -1,0 +1,83 @@
+import "fixtures/sort.tblo";
+
+func main(): void {
+    var src_i: array<int> = [5, 1, 4, 2, 3, 2];
+    var asc_i: array<int> = sortIntsAsc(src_i);
+    println(len(asc_i) == 6);
+    println(sortIsSortedIntsAsc(asc_i));
+    println(asc_i[0] == 1);
+    println(asc_i[1] == 2);
+    println(asc_i[5] == 5);
+    println(src_i[0] == 5);
+
+    var desc_i: array<int> = sortIntsDesc(src_i);
+    println(len(desc_i) == 6);
+    println(desc_i[0] == 5);
+    println(desc_i[5] == 1);
+
+    var asc_d: array<double> = sortDoublesAsc([3.2, 1.1, 2.2, 2.1]);
+    println(len(asc_d) == 4);
+    println(sortIsSortedDoublesAsc(asc_d));
+    println(asc_d[0] == 1.1);
+    println(asc_d[3] == 3.2);
+
+    var desc_d: array<double> = sortDoublesDesc([3.2, 1.1, 2.2, 2.1]);
+    println(desc_d[0] == 3.2);
+    println(desc_d[3] == 1.1);
+
+    var sorted_dup: array<int> = [1, 2, 2, 2, 4, 5];
+    println(sortLowerBoundInts(sorted_dup, 2) == 1);
+    println(sortUpperBoundInts(sorted_dup, 2) == 4);
+    println(sortLowerBoundInts(sorted_dup, 3) == 4);
+    println(sortUpperBoundInts(sorted_dup, 3) == 4);
+
+    var bs_i_hit = sortBinarySearchInts(sorted_dup, 4);
+    println(bs_i_hit.1);
+    println(bs_i_hit.0 == 4);
+
+    var bs_i_miss = sortBinarySearchInts(sorted_dup, 3);
+    println(!bs_i_miss.1);
+    println(bs_i_miss.0 == -1);
+
+    var top_small = sortTopKSmallestInts([9, 1, 7, 3, 5, 2], 3);
+    println(top_small.1 == nil);
+    if (top_small.1 == nil) {
+        println(len(top_small.0) == 3);
+        println(top_small.0[0] == 1);
+        println(top_small.0[1] == 2);
+        println(top_small.0[2] == 3);
+    }
+
+    var top_large = sortTopKLargestInts([9, 1, 7, 3, 5, 2], 3);
+    println(top_large.1 == nil);
+    if (top_large.1 == nil) {
+        println(len(top_large.0) == 3);
+        println(top_large.0[0] == 9);
+        println(top_large.0[1] == 7);
+        println(top_large.0[2] == 5);
+    }
+
+    var top_zero = sortTopKLargestInts([1, 2, 3], 0);
+    println(top_zero.1 == nil);
+    if (top_zero.1 == nil) {
+        println(len(top_zero.0) == 0);
+    }
+
+    var top_bad = sortTopKLargestInts([1, 2, 3], 4);
+    println(top_bad.1 != nil);
+    if (top_bad.1 != nil) {
+        println(top_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var uniq_i: array<int> = sortUniqueInts([3, 1, 3, 2, 2, 5]);
+    println(len(uniq_i) == 4);
+    println(uniq_i[0] == 1);
+    println(uniq_i[1] == 2);
+    println(uniq_i[2] == 3);
+    println(uniq_i[3] == 5);
+
+    println(sortIsSortedIntsAsc([1, 2, 3]));
+    println(!sortIsSortedIntsAsc([2, 1, 3]));
+    println(sortIsSortedDoublesAsc([1.0, 2.0, 2.0]));
+    println(!sortIsSortedDoublesAsc([1.0, 0.5, 2.0]));
+}

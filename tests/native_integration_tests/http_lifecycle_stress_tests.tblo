@@ -1,0 +1,485 @@
+import "fixtures/http.tblo";
+
+func lifecycleDelay(ms: int): void {
+    var start: int = timeMonotonicMillis();
+    while (timeSinceMillis(start) < ms) {
+    }
+}
+
+func lifecycleRoute(req: map<string, any>): map<string, any> {
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Lifecycle": "ok"
+    };
+    return httpServerResponse(200, "lifecycle-ok", headers);
+}
+
+func lifecycleSlowRoute(req: map<string, any>): map<string, any> {
+    lifecycleDelay(80);
+    var headers: map<string, string> = {
+        "Content-Type": "text/plain",
+        "X-Lifecycle": "slow"
+    };
+    return httpServerResponse(200, "lifecycle-slow", headers);
+}
+
+func lifecycleWorker(): void {
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/ok", lifecycleRoute as any);
+    httpServerRoute(routes, "GET", "/slow", lifecycleSlowRoute as any);
+    var middleware: array<any> = [];
+    var _ = httpServerWorkerServeLoop(routes, middleware, 5000);
+}
+
+func lifecycleServerThread(): int {
+    var arg_schema: map<string, any> = {
+        "mode": "string",
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "workerCount": "int",
+        "queueCapacity": "int",
+        "acceptTimeoutMs": "int",
+        "maxRequestBytes": "int",
+        "stopChannelId": "int",
+        "stopPollTimeoutMs": "int"
+    };
+    var arg_r = syncThreadArgTyped(arg_schema as any);
+    if (arg_r.1 != nil) {
+        return -100;
+    }
+    var arg: map<string, any> = arg_r.0 as map<string, any>;
+
+    var mode: string = mapGet(arg, "mode") as string;
+    var base_port: int = mapGet(arg, "basePort") as int;
+    var max_tries: int = mapGet(arg, "maxTries") as int;
+    var request_count: int = mapGet(arg, "requestCount") as int;
+    var worker_count: int = mapGet(arg, "workerCount") as int;
+    var queue_capacity: int = mapGet(arg, "queueCapacity") as int;
+    var accept_timeout_ms: int = mapGet(arg, "acceptTimeoutMs") as int;
+    var max_request_bytes: int = mapGet(arg, "maxRequestBytes") as int;
+    var stop_channel_id: int = mapGet(arg, "stopChannelId") as int;
+    var stop_poll_timeout_ms: int = mapGet(arg, "stopPollTimeoutMs") as int;
+
+    var selected_port: int = -1;
+    var server: HttpServer = httpServerEmpty();
+    var started: bool = false;
+    var t: int = 0;
+    while (t < max_tries) {
+        var p: int = base_port + t;
+        var start_r = httpServerStart("127.0.0.1", p, accept_timeout_ms, max_request_bytes);
+        if (start_r.1 == nil) {
+            server = start_r.0;
+            selected_port = p;
+            started = true;
+            break;
+        }
+        t = t + 1;
+    }
+
+    var outbox: int = syncThreadOutbox();
+    if (outbox >= 0) {
+        var ready_port: int = selected_port;
+        if (!started) {
+            ready_port = -1;
+        }
+        var _ready_send = syncChannelSend(outbox, ready_port as any, 5000);
+    }
+
+    if (!started) {
+        return -101;
+    }
+
+    var routes: map<string, any> = {};
+    httpServerRoute(routes, "GET", "/ok", lifecycleRoute as any);
+    httpServerRoute(routes, "GET", "/slow", lifecycleSlowRoute as any);
+    var middleware: array<any> = [];
+
+    if (mode == "many") {
+        var serve_many = httpServerServeMany(server, routes, middleware, request_count);
+        httpServerClose(server);
+        if (serve_many.1 != nil) {
+            return -300;
+        }
+        return serve_many.0;
+    }
+
+    if (mode == "threadpool") {
+        var serve_pool = httpServerServeThreadPool(server,
+                                                   "lifecycleWorker",
+                                                   request_count,
+                                                   worker_count,
+                                                   queue_capacity);
+        httpServerClose(server);
+        if (serve_pool.1 != nil) {
+            return -301;
+        }
+        return serve_pool.0;
+    }
+
+    if (mode == "controlled") {
+        var serve_ctrl = httpServerServeThreadPoolControlled(server,
+                                                             "lifecycleWorker",
+                                                             0,
+                                                             worker_count,
+                                                             queue_capacity,
+                                                             stop_channel_id,
+                                                             stop_poll_timeout_ms);
+        httpServerClose(server);
+        if (serve_ctrl.1 != nil) {
+            return -302;
+        }
+        return serve_ctrl.0;
+    }
+
+    httpServerClose(server);
+    return -102;
+}
+
+func lifecycleCloseClients(clients: array<any>): void {
+    var i: int = 0;
+    while (i < len(clients)) {
+        tcpClose(clients[i]);
+        i = i + 1;
+    }
+}
+
+func lifecycleCheckResponse(resp: string): bool {
+    if (!startsWith(resp, "HTTP/1.1 200")) {
+        return false;
+    }
+    if (find(resp, "lifecycle-ok") < 0) {
+        return false;
+    }
+    if (find(resp, "X-Lifecycle: ok") < 0) {
+        return false;
+    }
+    return true;
+}
+
+func lifecycleCheckSlowResponse(resp: string): bool {
+    if (!startsWith(resp, "HTTP/1.1 200")) {
+        return false;
+    }
+    if (find(resp, "lifecycle-slow") < 0) {
+        return false;
+    }
+    if (find(resp, "X-Lifecycle: slow") < 0) {
+        return false;
+    }
+    return true;
+}
+
+func runLifecycleCycle(mode: string,
+                       base_port: int,
+                       request_count: int,
+                       worker_count: int,
+                       queue_capacity: int): bool {
+    var outbox_r = syncChannelCreate(4);
+    if (outbox_r.1 != nil) {
+        return false;
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var arg: map<string, any> = {
+        "mode": mode,
+        "basePort": base_port,
+        "maxTries": 8,
+        "requestCount": request_count,
+        "workerCount": worker_count,
+        "queueCapacity": queue_capacity,
+        "acceptTimeoutMs": 120,
+        "maxRequestBytes": 4096,
+        "stopChannelId": -1,
+        "stopPollTimeoutMs": 20
+    };
+    var arg_schema: map<string, any> = {
+        "mode": "string",
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "workerCount": "int",
+        "queueCapacity": "int",
+        "acceptTimeoutMs": "int",
+        "maxRequestBytes": "int",
+        "stopChannelId": "int",
+        "stopPollTimeoutMs": "int"
+    };
+
+    var spawn_r = syncThreadSpawnTyped("lifecycleServerThread",
+                                       arg as any,
+                                       arg_schema as any,
+                                       -1,
+                                       outbox_id);
+    if (spawn_r.1 != nil) {
+        var _close_1 = syncChannelClose(outbox_id);
+        return false;
+    }
+
+    var thread_id: int = spawn_r.0 as int;
+    var ready_r = syncChannelRecv(outbox_id, 5000);
+    if (ready_r.1 != nil) {
+        var _join_1 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_2 = syncChannelClose(outbox_id);
+        return false;
+    }
+
+    var port: int = ready_r.0 as int;
+    if (port <= 0) {
+        var _join_2 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_3 = syncChannelClose(outbox_id);
+        return false;
+    }
+
+    var clients: array<any> = [];
+    var connected: bool = true;
+    var i: int = 0;
+    while (i < request_count) {
+        var connect_r = tcpConnect("127.0.0.1", port);
+        if (connect_r.1 != nil) {
+            connected = false;
+            break;
+        }
+
+        var client = connect_r.0;
+        push(clients, client);
+        var send_r = tcpSend(client, "GET /ok HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        if (send_r.1 != nil) {
+            connected = false;
+            break;
+        }
+        i = i + 1;
+    }
+
+    if (!connected) {
+        lifecycleCloseClients(clients);
+        var _join_3 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_4 = syncChannelClose(outbox_id);
+        return false;
+    }
+
+    var responses_ok: bool = true;
+    var r: int = 0;
+    while (r < len(clients)) {
+        var recv_r = tcpReceive(clients[r], 4096);
+        if (recv_r.1 != nil) {
+            responses_ok = false;
+        } else {
+            if (!lifecycleCheckResponse(recv_r.0)) {
+                responses_ok = false;
+            }
+        }
+        tcpClose(clients[r]);
+        r = r + 1;
+    }
+
+    var join_r = syncThreadJoinTyped(thread_id, "int", 5000);
+    var close_r = syncChannelClose(outbox_id);
+    if (join_r.1 != nil) {
+        return false;
+    }
+    if (close_r.1 != nil) {
+        return false;
+    }
+    if (!responses_ok) {
+        return false;
+    }
+    return (join_r.0 as int) == request_count;
+}
+
+func runLifecycleControlledDrainCycle(base_port: int, worker_count: int, queue_capacity: int): bool {
+    var stop_ch_r = syncChannelCreate(2);
+    if (stop_ch_r.1 != nil) {
+        return false;
+    }
+    var stop_channel_id: int = stop_ch_r.0;
+
+    var outbox_r = syncChannelCreate(4);
+    if (outbox_r.1 != nil) {
+        var _close_stop_1 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+    var outbox_id: int = outbox_r.0;
+
+    var arg: map<string, any> = {
+        "mode": "controlled",
+        "basePort": base_port,
+        "maxTries": 8,
+        "requestCount": 0,
+        "workerCount": worker_count,
+        "queueCapacity": queue_capacity,
+        "acceptTimeoutMs": 120,
+        "maxRequestBytes": 4096,
+        "stopChannelId": stop_channel_id,
+        "stopPollTimeoutMs": 15
+    };
+    var arg_schema: map<string, any> = {
+        "mode": "string",
+        "basePort": "int",
+        "maxTries": "int",
+        "requestCount": "int",
+        "workerCount": "int",
+        "queueCapacity": "int",
+        "acceptTimeoutMs": "int",
+        "maxRequestBytes": "int",
+        "stopChannelId": "int",
+        "stopPollTimeoutMs": "int"
+    };
+
+    var spawn_r = syncThreadSpawnTyped("lifecycleServerThread",
+                                       arg as any,
+                                       arg_schema as any,
+                                       -1,
+                                       outbox_id);
+    if (spawn_r.1 != nil) {
+        var _close_out_1 = syncChannelClose(outbox_id);
+        var _close_stop_2 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    var thread_id: int = spawn_r.0 as int;
+    var ready_r = syncChannelRecv(outbox_id, 5000);
+    if (ready_r.1 != nil) {
+        var _join_1 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_2 = syncChannelClose(outbox_id);
+        var _close_stop_3 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    var port: int = ready_r.0 as int;
+    if (port <= 0) {
+        var _join_2 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_3 = syncChannelClose(outbox_id);
+        var _close_stop_4 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    var connect_r = tcpConnect("127.0.0.1", port);
+    if (connect_r.1 != nil) {
+        var _join_3 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_4 = syncChannelClose(outbox_id);
+        var _close_stop_5 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+    var client = connect_r.0;
+
+    var send_r = tcpSend(client, "GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    if (send_r.1 != nil) {
+        tcpClose(client);
+        var _join_4 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_5 = syncChannelClose(outbox_id);
+        var _close_stop_6 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    lifecycleDelay(40);
+    var stop_send = syncChannelSend(stop_channel_id, true as any, 5000);
+    if (stop_send.1 != nil) {
+        tcpClose(client);
+        var _join_5 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_6 = syncChannelClose(outbox_id);
+        var _close_stop_7 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    var recv_r = tcpReceive(client, 4096);
+    tcpClose(client);
+    if (recv_r.1 != nil) {
+        var _join_6 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_7 = syncChannelClose(outbox_id);
+        var _close_stop_8 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+    if (!lifecycleCheckSlowResponse(recv_r.0)) {
+        var _join_7 = syncThreadJoinTyped(thread_id, "int", 5000);
+        var _close_out_8 = syncChannelClose(outbox_id);
+        var _close_stop_9 = syncChannelClose(stop_channel_id);
+        return false;
+    }
+
+    var join_r = syncThreadJoinTyped(thread_id, "int", 5000);
+    var close_out = syncChannelClose(outbox_id);
+    var close_stop = syncChannelClose(stop_channel_id);
+    if (join_r.1 != nil) {
+        return false;
+    }
+    if (close_out.1 != nil) {
+        return false;
+    }
+    if (close_stop.1 != nil) {
+        return false;
+    }
+    return (join_r.0 as int) == 1;
+}
+
+func runLifecycleCycles(mode: string,
+                        cycle_count: int,
+                        base_port: int,
+                        request_count: int,
+                        worker_count: int,
+                        queue_capacity: int): (bool, int) {
+    var i: int = 0;
+    while (i < cycle_count) {
+        var ok = runLifecycleCycle(mode,
+                                   base_port + (i * 8),
+                                   request_count,
+                                   worker_count,
+                                   queue_capacity);
+        if (!ok) {
+            return (false, i);
+        }
+        i = i + 1;
+    }
+    return (true, i);
+}
+
+func runLifecycleControlledDrainCycles(cycle_count: int,
+                                       base_port: int,
+                                       worker_count: int,
+                                       queue_capacity: int): (bool, int) {
+    var i: int = 0;
+    while (i < cycle_count) {
+        var ok = runLifecycleControlledDrainCycle(base_port + (i * 8),
+                                                  worker_count,
+                                                  queue_capacity);
+        if (!ok) {
+            return (false, i);
+        }
+        i = i + 1;
+    }
+    return (true, i);
+}
+
+func main(): void {
+    var cycles_many: int = 12;
+    var cycles_pool: int = 12;
+    var cycles_controlled: int = 8;
+    var requests_per_cycle: int = 4;
+
+    var many = runLifecycleCycles("many",
+                                  cycles_many,
+                                  19451,
+                                  requests_per_cycle,
+                                  1,
+                                  1);
+    println(many.0);
+    println(many.1 == cycles_many);
+
+    var pool = runLifecycleCycles("threadpool",
+                                  cycles_pool,
+                                  19551,
+                                  requests_per_cycle,
+                                  2,
+                                  8);
+    println(pool.0);
+    println(pool.1 == cycles_pool);
+
+    var controlled = runLifecycleControlledDrainCycles(cycles_controlled,
+                                                       19651,
+                                                       2,
+                                                       8);
+    println(controlled.0);
+    println(controlled.1 == cycles_controlled);
+
+    println(many.0 && pool.0 && controlled.0);
+}

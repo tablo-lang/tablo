@@ -1,0 +1,5 @@
+func compute(value: int): int {
+    var adjusted: int = value + 2;
+    println(adjusted);
+    return adjusted;
+}

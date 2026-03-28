@@ -1,0 +1,204 @@
+import "fixtures/task.tblo";
+
+func taskWorkerOk(): map<string, any> {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return taskResultErr(ERR_PARSE, "taskWorkerOk arg parse failed", arg_r.1 as any);
+    }
+
+    var n: int = arg_r.0 as int;
+    return taskResultOk((n + 1) as any);
+}
+
+func taskWorkerFail(): map<string, any> {
+    var arg_r = syncThreadArgTyped("int");
+    if (arg_r.1 != nil) {
+        return taskResultErr(ERR_PARSE, "taskWorkerFail arg parse failed", arg_r.1 as any);
+    }
+
+    var n: int = arg_r.0 as int;
+    return taskResultErr(ERR_PARSE, "worker fail " + str(n), n as any);
+}
+
+func taskWorkerSlowMaybeCanceled(): map<string, any> {
+    var arg_r = syncThreadArgTyped({
+        "cancelStateId": "int",
+        "deadlineMs": "int",
+        "steps": "int"
+    } as any);
+    if (arg_r.1 != nil) {
+        return taskResultErr(ERR_PARSE, "taskWorkerSlowMaybeCanceled arg parse failed", arg_r.1 as any);
+    }
+
+    var payload: map<string, any> = arg_r.0 as map<string, any>;
+    var ctx: Context = {
+        cancelStateId: mapGetString(payload, "cancelStateId") as int,
+        deadlineMs: mapGetString(payload, "deadlineMs") as int,
+        parent: nil
+    };
+    var steps: int = mapGetString(payload, "steps") as int;
+
+    var i: int = 0;
+    while (i < steps) {
+        if (contextDone(ctx)) {
+            return taskResultErr(ERR_LIMIT, "worker canceled", i as any);
+        }
+        i = i + 1;
+    }
+    return taskResultOk(i as any);
+}
+
+func taskWorkerInvalidEnvelope(): any {
+    return "invalid-envelope";
+}
+
+func main(): void {
+    var bg: Context = contextBackground();
+
+    var g1_r = taskGroupNew(bg);
+    println(g1_r.1 == nil);
+    if (g1_r.1 == nil) {
+        var g1: TaskGroup = g1_r.0;
+
+        var g1_timeout_r = taskGroupSetJoinTimeoutMs(g1, 3000);
+        println(g1_timeout_r.1 == nil);
+        if (g1_timeout_r.1 == nil) {
+            g1 = g1_timeout_r.0;
+        }
+
+        var g1_spawn1 = taskGroupSpawn(g1, "taskWorkerOk", 1 as any, "int");
+        println(g1_spawn1.1 == nil);
+        if (g1_spawn1.1 == nil) {
+            g1 = g1_spawn1.0;
+        }
+
+        var g1_spawn2 = taskGroupSpawn(g1, "taskWorkerOk", 5 as any, "int");
+        println(g1_spawn2.1 == nil);
+        if (g1_spawn2.1 == nil) {
+            g1 = g1_spawn2.0;
+        }
+
+        var g1_wait = taskGroupWait(g1);
+        println(g1_wait.1 == nil);
+        if (g1_wait.1 == nil) {
+            var g1_done: TaskGroup = g1_wait.0;
+            var g1_results: array<any> = taskGroupResults(g1_done);
+            println(len(g1_results) == 2);
+            if (len(g1_results) == 2) {
+                println((g1_results[0] as int) == 2);
+                println((g1_results[1] as int) == 6);
+            } else {
+                println(false);
+                println(false);
+            }
+        } else {
+            println(false);
+            println(false);
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var g2_r = taskGroupNew(bg);
+    println(g2_r.1 == nil);
+    if (g2_r.1 == nil) {
+        var g2: TaskGroup = g2_r.0;
+        var g2_ctx: Context = taskGroupContext(g2);
+
+        var g2_fail = taskGroupSpawn(g2, "taskWorkerFail", 9 as any, "int");
+        println(g2_fail.1 == nil);
+        if (g2_fail.1 == nil) {
+            g2 = g2_fail.0;
+        }
+
+        var g2_slow = taskGroupSpawn(g2,
+                                     "taskWorkerSlowMaybeCanceled",
+                                     {
+                                         "cancelStateId": g2_ctx.cancelStateId,
+                                         "deadlineMs": g2_ctx.deadlineMs,
+                                         "steps": 500000
+                                     } as any,
+                                     {
+                                         "cancelStateId": "int",
+                                         "deadlineMs": "int",
+                                         "steps": "int"
+                                     } as any);
+        println(g2_slow.1 == nil);
+        if (g2_slow.1 == nil) {
+            g2 = g2_slow.0;
+        }
+
+        var g2_wait = taskGroupWait(g2);
+        println(g2_wait.1 != nil);
+        if (g2_wait.1 != nil) {
+            println(g2_wait.1.code == ERR_PARSE);
+        } else {
+            println(false);
+        }
+
+        var g2_done: TaskGroup = g2_wait.0;
+        println(contextDone(taskGroupContext(g2_done)));
+        println(taskGroupFirstError(g2_done) != nil);
+        var g2_first = taskGroupFirstError(g2_done);
+        if (g2_first != nil) {
+            println(g2_first.code == ERR_PARSE);
+            println(find(g2_first.message, "worker fail") >= 0);
+        } else {
+            println(false);
+            println(false);
+        }
+
+        var g2_after = taskGroupSpawn(g2_done, "taskWorkerOk", 1 as any, "int");
+        println(g2_after.1 != nil);
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var g3_r = taskGroupNew(bg);
+    println(g3_r.1 == nil);
+    if (g3_r.1 == nil) {
+        var g3: TaskGroup = g3_r.0;
+        var g3_spawn = taskGroupSpawn(g3, "taskWorkerInvalidEnvelope", nil, "any");
+        println(g3_spawn.1 == nil);
+        if (g3_spawn.1 == nil) {
+            g3 = g3_spawn.0;
+        }
+        var g3_wait = taskGroupWait(g3);
+        println(g3_wait.1 != nil);
+        if (g3_wait.1 != nil) {
+            println(g3_wait.1.code == ERR_PARSE);
+        } else {
+            println(false);
+        }
+    } else {
+        println(false);
+        println(false);
+        println(false);
+        println(false);
+    }
+
+    var sample_err: Error = {
+        code: ERR_IO,
+        message: "sample io failure",
+        data: 7 as any
+    };
+    var sample_env = taskResultErrFromError(sample_err as any);
+    println(!(mapGetString(sample_env, "ok") as bool));
+    var sample_payload: map<string, any> = mapGetString(sample_env, "error") as map<string, any>;
+    println((mapGetString(sample_payload, "code") as int) == ERR_IO);
+}

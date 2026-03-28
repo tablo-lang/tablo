@@ -1,0 +1,2 @@
+var imported: int = 7;
+imported = imported + 1;

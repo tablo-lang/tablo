@@ -1,0 +1,5 @@
+import "../nope.tblo";
+
+func main() {
+    println(1);
+}

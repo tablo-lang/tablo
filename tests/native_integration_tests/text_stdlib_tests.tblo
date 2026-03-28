@@ -1,0 +1,88 @@
+import "fixtures/text.tblo";
+
+func main(): void {
+    println(textToLowerAscii("HeLLo-123") == "hello-123");
+    println(textToUpperAscii("HeLLo-123") == "HELLO-123");
+
+    println(textNormalizeSpaces("  hello   world\tfrom\ntablo  ") == "hello world from tablo");
+    println(textNormalizeSpaces("single") == "single");
+    println(textNormalizeSpaces("\t\n") == "");
+
+    var w1 = textSplitWordsAscii("HelloWorld API-server v2");
+    println(join(w1, "|") == "hello|world|api|server|v2");
+
+    var w2 = textSplitWordsAscii("XMLHttpRequest");
+    println(join(w2, "|") == "xml|http|request");
+
+    var w3 = textSplitWordsAscii("__..!!");
+    println(len(w3) == 0);
+
+    println(textWordCountAscii("HelloWorld API-server v2") == 5);
+    println(textWordCountAscii("__..!!") == 0);
+
+    var s1 = textSlugifyAscii("Hello, World! 2026", "-");
+    println(s1.1 == nil);
+    if (s1.1 == nil) {
+        println(s1.0 == "hello-world-2026");
+    }
+
+    var s2 = textSlugifyAscii("HelloWorld API server", "_");
+    println(s2.1 == nil);
+    if (s2.1 == nil) {
+        println(s2.0 == "hello_world_api_server");
+    }
+
+    var s3 = textSlugifyAscii("...", "-");
+    println(s3.1 == nil);
+    if (s3.1 == nil) {
+        println(s3.0 == "");
+    }
+
+    var s_bad1 = textSlugifyAscii("hello", "");
+    println(s_bad1.1 != nil);
+    if (s_bad1.1 != nil) {
+        println(s_bad1.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var s_bad2 = textSlugifyAscii("hello", " ");
+    println(s_bad2.1 != nil);
+    if (s_bad2.1 != nil) {
+        println(s_bad2.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    println(textSnakeCaseAscii("HelloWorld API server") == "hello_world_api_server");
+    println(textKebabCaseAscii("HelloWorld API server") == "hello-world-api-server");
+    println(textCamelCaseAscii("hello world API response") == "helloWorldApiResponse");
+    println(textPascalCaseAscii("hello world API response") == "HelloWorldApiResponse");
+    println(textTitleCaseAscii("hello world API response") == "Hello World Api Response");
+
+    var t1 = textTruncateAscii("hello", 10);
+    println(t1.1 == nil);
+    if (t1.1 == nil) {
+        println(t1.0 == "hello");
+    }
+
+    var t2 = textTruncateAscii("hello world", 5);
+    println(t2.1 == nil);
+    if (t2.1 == nil) {
+        println(t2.0 == "he...");
+    }
+
+    var t3 = textTruncateAscii("hello", 3);
+    println(t3.1 == nil);
+    if (t3.1 == nil) {
+        println(t3.0 == "...");
+    }
+
+    var t4 = textTruncateAscii("hello", 2);
+    println(t4.1 == nil);
+    if (t4.1 == nil) {
+        println(t4.0 == "..");
+    }
+
+    var t_bad = textTruncateAscii("hello", -1);
+    println(t_bad.1 != nil);
+    if (t_bad.1 != nil) {
+        println(t_bad.1.code == ERR_INVALID_ARGUMENT);
+    }
+}

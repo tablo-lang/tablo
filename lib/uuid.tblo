@@ -1,0 +1,287 @@
+// UUID helpers for backend/service workflows.
+// Supports parse/normalize, bytes conversion, and RFC4122 v4 generation.
+
+func uuidStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func uuidError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    return uuidStdError(code, message, data);
+}
+
+func uuidWrapError(err: Error?, context: string, detail: any): Error? {
+    if (err == nil) {
+        return nil;
+    }
+
+    var data: map<string, any> = { "context": context };
+    if (detail != nil) {
+        mapSetString(data, "detail", detail);
+    }
+    if (err.data != nil) {
+        mapSetString(data, "cause", err.data);
+    }
+
+    var message: string = context;
+    if (err.message != "") {
+        message = context + ": " + err.message;
+    }
+    return uuidStdError(err.code, message, data);
+}
+
+func uuidNil(): string {
+    return "00000000-0000-0000-0000-000000000000";
+}
+
+func uuidHexLower(ch: string): string {
+    if (ch == "A") return "a";
+    if (ch == "B") return "b";
+    if (ch == "C") return "c";
+    if (ch == "D") return "d";
+    if (ch == "E") return "e";
+    if (ch == "F") return "f";
+    return ch;
+}
+
+func uuidIsHexChar(ch: string): bool {
+    if (len(ch) != 1) {
+        return false;
+    }
+    return find("0123456789abcdefABCDEF", ch) >= 0;
+}
+
+func uuidCanonicalFromCompact(compact_hex: string): (string, Error?) {
+    if (len(compact_hex) != 32) {
+        return ("",
+                uuidError(ERR_INVALID_ARGUMENT,
+                          "uuidCanonicalFromCompact expects 32 hex chars",
+                          "uuidCanonicalFromCompact.length",
+                          len(compact_hex)));
+    }
+
+    var out: string =
+        substring(compact_hex, 0, 8) + "-" +
+        substring(compact_hex, 8, 4) + "-" +
+        substring(compact_hex, 12, 4) + "-" +
+        substring(compact_hex, 16, 4) + "-" +
+        substring(compact_hex, 20, 12);
+    return (out, nil);
+}
+
+func uuidCompactHex(value: string): (string, Error?) {
+    var raw: string = trim(value);
+    if (raw == "") {
+        return ("",
+                uuidError(ERR_INVALID_ARGUMENT,
+                          "uuid cannot be empty",
+                          "uuidCompactHex.empty",
+                          value));
+    }
+
+    var raw_len: int = len(raw);
+    if (raw_len != 32 && raw_len != 36) {
+        return ("",
+                uuidError(ERR_PARSE,
+                          "uuid must be 32 or 36 characters",
+                          "uuidCompactHex.length",
+                          raw_len));
+    }
+
+    if (raw_len == 36) {
+        if (substring(raw, 8, 1) != "-" ||
+            substring(raw, 13, 1) != "-" ||
+            substring(raw, 18, 1) != "-" ||
+            substring(raw, 23, 1) != "-") {
+            return ("",
+                    uuidError(ERR_PARSE,
+                              "uuid dashes must appear at positions 8,13,18,23",
+                              "uuidCompactHex.dashes",
+                              raw));
+        }
+    } else {
+        if (find(raw, "-") >= 0) {
+            return ("",
+                    uuidError(ERR_PARSE,
+                              "uuid with dashes must be 36 characters",
+                              "uuidCompactHex.dashedLength",
+                              raw));
+        }
+    }
+
+    var out: string = "";
+    var i: int = 0;
+    while (i < raw_len) {
+        var ch: string = substring(raw, i, 1);
+        if (ch == "-") {
+            i = i + 1;
+            continue;
+        }
+        if (!uuidIsHexChar(ch)) {
+            var invalid_data: map<string, any> = {
+                "value": raw,
+                "index": i,
+                "char": ch
+            };
+            return ("",
+                    uuidError(ERR_PARSE,
+                              "uuid contains non-hex character",
+                              "uuidCompactHex.hex",
+                              invalid_data));
+        }
+        out = out + uuidHexLower(ch);
+        i = i + 1;
+    }
+
+    if (len(out) != 32) {
+        return ("",
+                uuidError(ERR_PARSE,
+                          "uuid must contain exactly 32 hex digits",
+                          "uuidCompactHex.hexLength",
+                          len(out)));
+    }
+    return (out, nil);
+}
+
+func uuidIsValid(value: string): bool {
+    var parsed = uuidCompactHex(value);
+    return parsed.1 == nil;
+}
+
+func uuidIsCanonical(value: string): bool {
+    var raw: string = trim(value);
+    if (len(raw) != 36) {
+        return false;
+    }
+    var norm = uuidNormalize(raw);
+    if (norm.1 != nil) {
+        return false;
+    }
+    return raw == norm.0;
+}
+
+func uuidNormalize(value: string): (string, Error?) {
+    var compact = uuidCompactHex(value);
+    if (compact.1 != nil) {
+        return ("", uuidWrapError(compact.1, "uuidNormalize", value));
+    }
+    return uuidCanonicalFromCompact(compact.0);
+}
+
+func uuidToBytes(value: string): (bytes, Error?) {
+    var empty = bytesWithSize(0, 0);
+    if (empty.1 != nil) {
+        return (bytesWithSize(0, 0).0,
+                uuidWrapError(empty.1, "uuidToBytes.bytesWithSize", value));
+    }
+
+    var compact = uuidCompactHex(value);
+    if (compact.1 != nil) {
+        return (empty.0, uuidWrapError(compact.1, "uuidToBytes.uuidCompactHex", value));
+    }
+
+    var decoded = hexToBytes(compact.0);
+    if (decoded.1 != nil) {
+        return (empty.0, uuidWrapError(decoded.1, "uuidToBytes.hexToBytes", value));
+    }
+    if (len(decoded.0) != 16) {
+        return (empty.0,
+                uuidError(ERR_PARSE,
+                          "uuid decoded byte length must be 16",
+                          "uuidToBytes.length",
+                          len(decoded.0)));
+    }
+    return (decoded.0, nil);
+}
+
+func uuidFromBytes(data: bytes): (string, Error?) {
+    if (len(data) != 16) {
+        return ("",
+                uuidError(ERR_INVALID_ARGUMENT,
+                          "uuidFromBytes expects exactly 16 bytes",
+                          "uuidFromBytes.length",
+                          len(data)));
+    }
+
+    var encoded = bytesToHex(data);
+    if (encoded.1 != nil) {
+        return ("", uuidWrapError(encoded.1, "uuidFromBytes.bytesToHex", len(data)));
+    }
+    return uuidCanonicalFromCompact(encoded.0);
+}
+
+func uuidVersion(value: string): (int, Error?) {
+    var parsed = uuidToBytes(value);
+    if (parsed.1 != nil) {
+        return (0, uuidWrapError(parsed.1, "uuidVersion", value));
+    }
+    var version: int = parsed.0[6] / 16;
+    return (version, nil);
+}
+
+func uuidVariant(value: string): (string, Error?) {
+    var parsed = uuidToBytes(value);
+    if (parsed.1 != nil) {
+        return ("", uuidWrapError(parsed.1, "uuidVariant", value));
+    }
+    var octet: int = parsed.0[8];
+    if (octet < 128) {
+        return ("ncs", nil);
+    }
+    if (octet < 192) {
+        return ("rfc4122", nil);
+    }
+    if (octet < 224) {
+        return ("microsoft", nil);
+    }
+    return ("future", nil);
+}
+
+func uuidV4(): (string, Error?) {
+    var out = bytesWithSize(16, 0);
+    if (out.1 != nil) {
+        return ("", uuidWrapError(out.1, "uuidV4.bytesWithSize", nil));
+    }
+
+    var data: bytes = out.0;
+    var i: int = 0;
+    while (i < 16) {
+        var r = secureRandomInt(0, 255);
+        if (r.1 != nil) {
+            return ("", uuidWrapError(r.1, "uuidV4.secureRandomInt", i));
+        }
+        data[i] = r.0;
+        i = i + 1;
+    }
+
+    // Set version to 4 and variant to RFC4122 (10xx).
+    data[6] = (data[6] % 16) + 64;
+    data[8] = (data[8] % 64) + 128;
+    return uuidFromBytes(data);
+}
+
+func uuidV4Batch(count: int): (array<string>, Error?) {
+    var out: array<string> = [];
+    if (count < 0) {
+        return (out,
+                uuidError(ERR_INVALID_ARGUMENT,
+                          "uuidV4Batch count must be >= 0",
+                          "uuidV4Batch.count",
+                          count));
+    }
+
+    var i: int = 0;
+    while (i < count) {
+        var one = uuidV4();
+        if (one.1 != nil) {
+            return (out, uuidWrapError(one.1, "uuidV4Batch.uuidV4", i));
+        }
+        push(out, one.0);
+        i = i + 1;
+    }
+    return (out, nil);
+}

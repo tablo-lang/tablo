@@ -1,0 +1,976 @@
+{
+  "defaults": {
+    "program": "tests/benchmark_perf_gates.tblo",
+    "samples": 5,
+    "warmup_runs": 0,
+    "min_samples": 4,
+    "transient_retries": 1
+  },
+  "metrics": [
+    {
+      "label": "perf jsonParse",
+      "kind": "ops",
+      "min_rate": 390000
+    },
+    {
+      "label": "perf jsonParse scalar",
+      "kind": "ops",
+      "min_rate": 850000
+    },
+    {
+      "label": "perf jsonParse object",
+      "kind": "ops",
+      "min_rate": 250000
+    },
+    {
+      "label": "perf jsonStringify",
+      "kind": "ops",
+      "min_rate": 500000
+    },
+    {
+      "label": "perf jsonStringify scalar",
+      "kind": "ops",
+      "min_rate": 900000
+    },
+    {
+      "label": "perf jsonStringify object",
+      "kind": "ops",
+      "min_rate": 300000
+    },
+    {
+      "label": "perf map<string,int> build+get",
+      "kind": "ops",
+      "min_rate": 500000
+    },
+    {
+      "label": "perf map<string,int> set+has+get",
+      "kind": "ops",
+      "min_rate": 480000
+    },
+    {
+      "label": "perf map<string,int> fast-string set+has+get",
+      "kind": "ops",
+      "min_rate": 500000
+    },
+    {
+      "label": "perf map<string,int> read-heavy has+get",
+      "kind": "ops",
+      "min_rate": 5200000
+    },
+    {
+      "label": "perf map<string,int> fast-string read-heavy has+get",
+      "kind": "ops",
+      "min_rate": 4800000
+    },
+    {
+      "label": "perf set<string> add+has",
+      "kind": "ops",
+      "min_rate": 530000
+    },
+    {
+      "label": "perf set<string> fast-string add+has",
+      "kind": "ops",
+      "min_rate": 530000
+    },
+    {
+      "label": "perf map/set churn del+add+probe",
+      "kind": "ops",
+      "min_rate": 1700000
+    },
+    {
+      "label": "perf map/set churn fast-string del+add+probe",
+      "kind": "ops",
+      "min_rate": 1700000
+    },
+    {
+      "label": "perf map<int> highbit set+get",
+      "kind": "ops",
+      "min_rate": 4500000
+    },
+    {
+      "program": "tools/benchmark_vm_globals.py",
+      "label": "perf vm globals get",
+      "kind": "ops",
+      "min_rate": 4000000
+    },
+    {
+      "program": "tools/benchmark_vm_globals.py",
+      "label": "perf vm globals set",
+      "kind": "ops",
+      "min_rate": 4000000
+    },
+    {
+      "program": "tools/benchmark_vm_globals.py",
+      "label": "perf vm stringPool intern",
+      "kind": "ops",
+      "min_rate": 4000000
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpClientGet+headers",
+      "kind": "ops",
+      "min_rate": 750
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpRequest buffered",
+      "kind": "ops",
+      "min_rate": 500
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpRequestHead+tcpReceive",
+      "kind": "ops",
+      "min_rate": 500
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpClientRequestStream+readAll",
+      "kind": "ops",
+      "min_rate": 360
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpClientRequestStream+readAllBytes",
+      "kind": "ops",
+      "min_rate": 360
+    },
+    {
+      "program": "tests/benchmark_http_streaming.tblo",
+      "label": "perf httpClientRequestStream+readAllBytes large",
+      "kind": "ops",
+      "min_rate": 35
+    },
+    {
+      "program": "tests/benchmark_http_server.tblo",
+      "label": "perf httpServerServeMany+rawTcp",
+      "kind": "ops",
+      "min_rate": 700
+    },
+    {
+      "program": "tests/benchmark_http_server.tblo",
+      "label": "perf httpServerServeThreadPool+rawTcp",
+      "kind": "ops",
+      "min_rate": 700
+    },
+    {
+      "program": "tests/benchmark_http_server.tblo",
+      "label": "perf httpServerServeThreadPoolWithDeadline+rawTcp",
+      "kind": "ops",
+      "min_rate": 700
+    },
+    {
+      "program": "tests/benchmark_http_server.tblo",
+      "label": "perf httpServerServeMany+queryHelpers",
+      "kind": "ops",
+      "min_rate": 850
+    },
+    {
+      "program": "tests/benchmark_io_buffered.tblo",
+      "label": "perf ioBufferedWriteAll small chunks",
+      "kind": "ops",
+      "min_rate": 500000
+    },
+    {
+      "program": "tests/benchmark_io_buffered.tblo",
+      "label": "perf ioWriteBytesAll small chunks",
+      "kind": "ops",
+      "min_rate": 2000000
+    },
+    {
+      "program": "tests/benchmark_io_buffered.tblo",
+      "label": "perf ioReadChunk file",
+      "kind": "ops",
+      "min_rate": 3000
+    },
+    {
+      "program": "tests/benchmark_io_buffered.tblo",
+      "label": "perf ioReadChunkBytes file",
+      "kind": "ops",
+      "min_rate": 2800
+    },
+    {
+      "program": "tests/benchmark_io_buffered.tblo",
+      "label": "perf ioBufferedReadChunk file",
+      "kind": "ops",
+      "min_rate": 1500
+    },
+    {
+      "program": "tests/benchmark_observability_stdlib.tblo",
+      "label": "perf metricsInc",
+      "kind": "ops",
+      "min_rate": 8000
+    },
+    {
+      "program": "tests/benchmark_observability_stdlib.tblo",
+      "label": "perf metricsObserveMs",
+      "kind": "ops",
+      "min_rate": 3000
+    },
+    {
+      "program": "tests/benchmark_observability_stdlib.tblo",
+      "label": "perf metricsSnapshotJson",
+      "kind": "ops",
+      "min_rate": 3500
+    },
+    {
+      "program": "tests/benchmark_url_query.tblo",
+      "label": "perf urlEncode",
+      "kind": "ops",
+      "min_rate": 1700000
+    },
+    {
+      "program": "tests/benchmark_url_query.tblo",
+      "label": "perf urlDecode",
+      "kind": "ops",
+      "min_rate": 1900000
+    },
+    {
+      "program": "tests/benchmark_url_query.tblo",
+      "label": "perf queryParse",
+      "kind": "ops",
+      "min_rate": 4000
+    },
+    {
+      "program": "tests/benchmark_url_query.tblo",
+      "label": "perf queryStringify",
+      "kind": "ops",
+      "min_rate": 1800
+    },
+    {
+      "program": "tests/benchmark_csv_stdlib.tblo",
+      "label": "perf csvParseLine",
+      "kind": "ops",
+      "min_rate": 40000
+    },
+    {
+      "program": "tests/benchmark_csv_stdlib.tblo",
+      "label": "perf csvParse",
+      "kind": "ops",
+      "min_rate": 11000
+    },
+    {
+      "program": "tests/benchmark_csv_stdlib.tblo",
+      "label": "perf csvStringify",
+      "kind": "ops",
+      "min_rate": 35000
+    },
+    {
+      "program": "tests/benchmark_path_stdlib.tblo",
+      "label": "perf pathClean",
+      "kind": "ops",
+      "min_rate": 120000
+    },
+    {
+      "program": "tests/benchmark_path_stdlib.tblo",
+      "label": "perf pathJoin",
+      "kind": "ops",
+      "min_rate": 42000
+    },
+    {
+      "program": "tests/benchmark_path_stdlib.tblo",
+      "label": "perf pathBaseDirExt",
+      "kind": "ops",
+      "min_rate": 10000
+    },
+    {
+      "program": "tests/benchmark_fs_stdlib.tblo",
+      "label": "perf fsReadLines",
+      "kind": "ops",
+      "min_rate": 9000
+    },
+    {
+      "program": "tests/benchmark_fs_stdlib.tblo",
+      "label": "perf fsReadJsonAs",
+      "kind": "ops",
+      "min_rate": 10000
+    },
+    {
+      "program": "tests/benchmark_fs_stdlib.tblo",
+      "label": "perf fsCopyFile",
+      "kind": "ops",
+      "min_rate": 150
+    },
+    {
+      "program": "tests/benchmark_uuid_stdlib.tblo",
+      "label": "perf uuidNormalize",
+      "kind": "ops",
+      "min_rate": 20000
+    },
+    {
+      "program": "tests/benchmark_uuid_stdlib.tblo",
+      "label": "perf uuidRoundTripBytes",
+      "kind": "ops",
+      "min_rate": 18000
+    },
+    {
+      "program": "tests/benchmark_uuid_stdlib.tblo",
+      "label": "perf uuidIsValid",
+      "kind": "ops",
+      "min_rate": 8000
+    },
+    {
+      "program": "tests/benchmark_netip_stdlib.tblo",
+      "label": "perf netipParseIpv4",
+      "kind": "ops",
+      "min_rate": 130000
+    },
+    {
+      "program": "tests/benchmark_netip_stdlib.tblo",
+      "label": "perf netipNormalizeIpv4",
+      "kind": "ops",
+      "min_rate": 95000
+    },
+    {
+      "program": "tests/benchmark_netip_stdlib.tblo",
+      "label": "perf netipCidrContains",
+      "kind": "ops",
+      "min_rate": 130000
+    },
+    {
+      "program": "tests/benchmark_semver_stdlib.tblo",
+      "label": "perf semverParse",
+      "kind": "ops",
+      "min_rate": 55000
+    },
+    {
+      "program": "tests/benchmark_semver_stdlib.tblo",
+      "label": "perf semverCompare",
+      "kind": "ops",
+      "min_rate": 25000
+    },
+    {
+      "program": "tests/benchmark_semver_stdlib.tblo",
+      "label": "perf semverSatisfies",
+      "kind": "ops",
+      "min_rate": 18000
+    },
+    {
+      "program": "tests/benchmark_regexp_stdlib.tblo",
+      "label": "perf regexpCompile",
+      "kind": "ops",
+      "min_rate": 50000
+    },
+    {
+      "program": "tests/benchmark_regexp_stdlib.tblo",
+      "label": "perf regexpIsMatch",
+      "kind": "ops",
+      "min_rate": 38000
+    },
+    {
+      "program": "tests/benchmark_regexp_stdlib.tblo",
+      "label": "perf regexpReplaceAll",
+      "kind": "ops",
+      "min_rate": 14000
+    },
+    {
+      "program": "tests/benchmark_toml_stdlib.tblo",
+      "label": "perf tomlParse",
+      "kind": "ops",
+      "min_rate": 3300
+    },
+    {
+      "program": "tests/benchmark_toml_stdlib.tblo",
+      "label": "perf tomlStringify",
+      "kind": "ops",
+      "min_rate": 11000
+    },
+    {
+      "program": "tests/benchmark_yaml_stdlib.tblo",
+      "label": "perf yamlParse",
+      "kind": "ops",
+      "min_rate": 2000
+    },
+    {
+      "program": "tests/benchmark_yaml_stdlib.tblo",
+      "label": "perf yamlStringify",
+      "kind": "ops",
+      "min_rate": 4200
+    },
+    {
+      "program": "tests/benchmark_ini_stdlib.tblo",
+      "label": "perf iniParse",
+      "kind": "ops",
+      "min_rate": 6000
+    },
+    {
+      "program": "tests/benchmark_ini_stdlib.tblo",
+      "label": "perf iniStringify",
+      "kind": "ops",
+      "min_rate": 9000
+    },
+    {
+      "program": "tests/benchmark_msgpack_stdlib.tblo",
+      "label": "perf msgpackEncode",
+      "kind": "ops",
+      "min_rate": 8500
+    },
+    {
+      "program": "tests/benchmark_msgpack_stdlib.tblo",
+      "label": "perf msgpackDecode",
+      "kind": "ops",
+      "min_rate": 4500
+    },
+    {
+      "program": "tests/benchmark_glob_stdlib.tblo",
+      "label": "perf globMatch",
+      "kind": "ops",
+      "min_rate": 42000
+    },
+    {
+      "program": "tests/benchmark_glob_stdlib.tblo",
+      "label": "perf globFilter",
+      "kind": "ops",
+      "min_rate": 120
+    },
+    {
+      "program": "tests/benchmark_config_stdlib.tblo",
+      "label": "perf configParseDotEnv",
+      "kind": "ops",
+      "min_rate": 28000
+    },
+    {
+      "program": "tests/benchmark_config_stdlib.tblo",
+      "label": "perf configTypedGets",
+      "kind": "ops",
+      "min_rate": 120000
+    },
+    {
+      "program": "tests/benchmark_cli_stdlib.tblo",
+      "label": "perf cliParse",
+      "kind": "ops",
+      "min_rate": 60000
+    },
+    {
+      "program": "tests/benchmark_cli_stdlib.tblo",
+      "label": "perf cliTypedGets",
+      "kind": "ops",
+      "min_rate": 80000
+    },
+    {
+      "program": "tests/benchmark_collections_stdlib.tblo",
+      "label": "perf collectionsUniqueStrings",
+      "kind": "ops",
+      "min_rate": 220000
+    },
+    {
+      "program": "tests/benchmark_collections_stdlib.tblo",
+      "label": "perf collectionsCountStrings",
+      "kind": "ops",
+      "min_rate": 130000
+    },
+    {
+      "program": "tests/benchmark_collections_stdlib.tblo",
+      "label": "perf collectionsIntersectUniqueStrings",
+      "kind": "ops",
+      "min_rate": 170000
+    },
+    {
+      "program": "tests/benchmark_time_stdlib.tblo",
+      "label": "perf timeParseDuration",
+      "kind": "ops",
+      "min_rate": 90000
+    },
+    {
+      "program": "tests/benchmark_time_stdlib.tblo",
+      "label": "perf timeFormatDuration",
+      "kind": "ops",
+      "min_rate": 280000
+    },
+    {
+      "program": "tests/benchmark_time_stdlib.tblo",
+      "label": "perf timeDeadlineRemaining",
+      "kind": "ops",
+      "min_rate": 1000000
+    },
+    {
+      "program": "tests/benchmark_encoding_stdlib.tblo",
+      "label": "perf encodingBase64EncodeBytes",
+      "kind": "ops",
+      "min_rate": 38000
+    },
+    {
+      "program": "tests/benchmark_encoding_stdlib.tblo",
+      "label": "perf encodingBase64DecodeToBytes",
+      "kind": "ops",
+      "min_rate": 8500
+    },
+    {
+      "program": "tests/benchmark_encoding_stdlib.tblo",
+      "label": "perf encodingHexEncode",
+      "kind": "ops",
+      "min_rate": 1200000
+    },
+    {
+      "program": "tests/benchmark_text_stdlib.tblo",
+      "label": "perf textSplitWordsAscii",
+      "kind": "ops",
+      "min_rate": 8500
+    },
+    {
+      "program": "tests/benchmark_text_stdlib.tblo",
+      "label": "perf textCamelCaseAscii",
+      "kind": "ops",
+      "min_rate": 11500
+    },
+    {
+      "program": "tests/benchmark_text_stdlib.tblo",
+      "label": "perf textSlugifyAscii",
+      "kind": "ops",
+      "min_rate": 12000
+    },
+    {
+      "program": "tests/benchmark_template_stdlib.tblo",
+      "label": "perf templateExtractKeys",
+      "kind": "ops",
+      "min_rate": 9000
+    },
+    {
+      "program": "tests/benchmark_template_stdlib.tblo",
+      "label": "perf templateRender",
+      "kind": "ops",
+      "min_rate": 7000
+    },
+    {
+      "program": "tests/benchmark_template_stdlib.tblo",
+      "label": "perf templateRenderWithDefault",
+      "kind": "ops",
+      "min_rate": 7000
+    },
+    {
+      "program": "tests/benchmark_context_stdlib.tblo",
+      "label": "perf contextErrBackground",
+      "kind": "ops",
+      "min_rate": 450000
+    },
+    {
+      "program": "tests/benchmark_context_stdlib.tblo",
+      "label": "perf contextErrCanceled",
+      "kind": "ops",
+      "min_rate": 80000
+    },
+    {
+      "program": "tests/benchmark_context_stdlib.tblo",
+      "label": "perf contextTimeoutSliceMs",
+      "kind": "ops",
+      "min_rate": 80000
+    },
+    {
+      "program": "tests/benchmark_log_stdlib.tblo",
+      "label": "perf logNormalizeLevel",
+      "kind": "ops",
+      "min_rate": 200000
+    },
+    {
+      "program": "tests/benchmark_log_stdlib.tblo",
+      "label": "perf logWouldEmit",
+      "kind": "ops",
+      "min_rate": 120000
+    },
+    {
+      "program": "tests/benchmark_log_stdlib.tblo",
+      "label": "perf logWithFields",
+      "kind": "ops",
+      "min_rate": 5000
+    },
+    {
+      "program": "tests/benchmark_validate_stdlib.tblo",
+      "label": "perf validateEmail",
+      "kind": "ops",
+      "min_rate": 30000
+    },
+    {
+      "program": "tests/benchmark_validate_stdlib.tblo",
+      "label": "perf validateUuid",
+      "kind": "ops",
+      "min_rate": 45000
+    },
+    {
+      "program": "tests/benchmark_validate_stdlib.tblo",
+      "label": "perf validateRequiredKeys",
+      "kind": "ops",
+      "min_rate": 450000
+    },
+    {
+      "program": "tests/benchmark_datetime_stdlib.tblo",
+      "label": "perf datetimeParseRfc3339",
+      "kind": "ops",
+      "min_rate": 55000
+    },
+    {
+      "program": "tests/benchmark_datetime_stdlib.tblo",
+      "label": "perf datetimeFormatRfc3339",
+      "kind": "ops",
+      "min_rate": 120000
+    },
+    {
+      "program": "tests/benchmark_datetime_stdlib.tblo",
+      "label": "perf datetimeNowLocalRfc3339",
+      "kind": "ops",
+      "min_rate": 75000
+    },
+    {
+      "program": "tests/benchmark_concurrency_stdlib.tblo",
+      "label": "perf concurrencyChannelRoundTrip",
+      "kind": "ops",
+      "min_rate": 600000
+    },
+    {
+      "program": "tests/benchmark_concurrency_stdlib.tblo",
+      "label": "perf concurrencySharedTypedSetGet",
+      "kind": "ops",
+      "min_rate": 200000
+    },
+    {
+      "program": "tests/benchmark_concurrency_stdlib.tblo",
+      "label": "perf concurrencyArcGuardCycle",
+      "kind": "ops",
+      "min_rate": 20000
+    },
+    {
+      "program": "tests/benchmark_task_group.tblo",
+      "label": "perf taskGroupSpawnWait",
+      "kind": "ops",
+      "min_rate": 1200
+    },
+    {
+      "program": "tests/benchmark_task_group.tblo",
+      "label": "perf taskGroupFailFast",
+      "kind": "ops",
+      "min_rate": 300
+    },
+    {
+      "program": "tests/benchmark_task_group.tblo",
+      "label": "perf taskDecodeResultPayload",
+      "kind": "ops",
+      "min_rate": 350000
+    },
+    {
+      "program": "tests/benchmark_process_stdlib.tblo",
+      "label": "perf processStartWait",
+      "kind": "ops",
+      "min_rate": 10
+    },
+    {
+      "program": "tests/benchmark_process_stdlib.tblo",
+      "label": "perf processRunPipeline",
+      "kind": "ops",
+      "min_rate": 3
+    },
+    {
+      "program": "tests/benchmark_process_stdlib.tblo",
+      "label": "perf processRunPipelineStream",
+      "kind": "ops",
+      "min_rate": 4
+    },
+    {
+      "program": "tests/benchmark_process_stdlib.tblo",
+      "label": "perf processRunWithInput",
+      "kind": "ops",
+      "min_rate": 4
+    },
+    {
+      "program": "tests/benchmark_process_stdlib.tblo",
+      "label": "perf processReadStdoutChunk",
+      "kind": "ops",
+      "min_rate": 8
+    },
+    {
+      "program": "tests/benchmark_retry_stdlib.tblo",
+      "label": "perf retryComputeDelayMs",
+      "kind": "ops",
+      "min_rate": 500000
+    },
+    {
+      "program": "tests/benchmark_retry_stdlib.tblo",
+      "label": "perf retryShouldRetry",
+      "kind": "ops",
+      "min_rate": 380000
+    },
+    {
+      "program": "tests/benchmark_retry_stdlib.tblo",
+      "label": "perf retryCircuitTransitions",
+      "kind": "ops",
+      "min_rate": 320000
+    },
+    {
+      "program": "tests/benchmark_cache_stdlib.tblo",
+      "label": "perf cacheSetGetHot",
+      "kind": "ops",
+      "min_rate": 150000
+    },
+    {
+      "program": "tests/benchmark_cache_stdlib.tblo",
+      "label": "perf cacheGetTypedHit",
+      "kind": "ops",
+      "min_rate": 100000
+    },
+    {
+      "program": "tests/benchmark_cache_stdlib.tblo",
+      "label": "perf cacheEvictLru",
+      "kind": "ops",
+      "min_rate": 3500
+    },
+    {
+      "program": "tests/benchmark_rate_limit_stdlib.tblo",
+      "label": "perf rateLimitTokenBucketTryConsume",
+      "kind": "ops",
+      "min_rate": 950000
+    },
+    {
+      "program": "tests/benchmark_rate_limit_stdlib.tblo",
+      "label": "perf rateLimitTokenBucketRefill",
+      "kind": "ops",
+      "min_rate": 1500000
+    },
+    {
+      "program": "tests/benchmark_rate_limit_stdlib.tblo",
+      "label": "perf rateLimitFixedWindowTryConsume",
+      "kind": "ops",
+      "min_rate": 1150000
+    },
+    {
+      "program": "tests/benchmark_pool_stdlib.tblo",
+      "label": "perf poolAcquireReleaseHot",
+      "kind": "ops",
+      "min_rate": 350000
+    },
+    {
+      "program": "tests/benchmark_pool_stdlib.tblo",
+      "label": "perf poolAcquireExhaust",
+      "kind": "ops",
+      "min_rate": 1000
+    },
+    {
+      "program": "tests/benchmark_pool_stdlib.tblo",
+      "label": "perf poolReleaseTyped",
+      "kind": "ops",
+      "min_rate": 6500
+    },
+    {
+      "program": "tests/benchmark_queue_stdlib.tblo",
+      "label": "perf queueEnqueueDequeueHot",
+      "kind": "ops",
+      "min_rate": 550000
+    },
+    {
+      "program": "tests/benchmark_queue_stdlib.tblo",
+      "label": "perf queueDropOldest",
+      "kind": "ops",
+      "min_rate": 700000
+    },
+    {
+      "program": "tests/benchmark_queue_stdlib.tblo",
+      "label": "perf queueTypedRoundTrip",
+      "kind": "ops",
+      "min_rate": 200000
+    },
+    {
+      "program": "tests/benchmark_heap_stdlib.tblo",
+      "label": "perf heapPushPopHot",
+      "kind": "ops",
+      "min_rate": 650000
+    },
+    {
+      "program": "tests/benchmark_heap_stdlib.tblo",
+      "label": "perf heapKeepHighest",
+      "kind": "ops",
+      "min_rate": 250000
+    },
+    {
+      "program": "tests/benchmark_heap_stdlib.tblo",
+      "label": "perf heapTypedRoundTrip",
+      "kind": "ops",
+      "min_rate": 240000
+    },
+    {
+      "program": "tests/benchmark_graph_stdlib.tblo",
+      "label": "perf graphBfsChain",
+      "kind": "ops",
+      "min_rate": 6500
+    },
+    {
+      "program": "tests/benchmark_graph_stdlib.tblo",
+      "label": "perf graphShortestPathChain",
+      "kind": "ops",
+      "min_rate": 4200
+    },
+    {
+      "program": "tests/benchmark_graph_stdlib.tblo",
+      "label": "perf graphTopologicalSort",
+      "kind": "ops",
+      "min_rate": 1500
+    },
+    {
+      "program": "tests/benchmark_mathx_stdlib.tblo",
+      "label": "perf mathxSummary",
+      "kind": "ops",
+      "min_rate": 16000
+    },
+    {
+      "program": "tests/benchmark_mathx_stdlib.tblo",
+      "label": "perf mathxPercentileP95",
+      "kind": "ops",
+      "min_rate": 4600,
+      "min_samples": 2
+    },
+    {
+      "program": "tests/benchmark_mathx_stdlib.tblo",
+      "label": "perf mathxRollingPushMean",
+      "kind": "ops",
+      "min_rate": 1200000,
+      "min_samples": 3
+    },
+    {
+      "program": "tests/benchmark_random_stdlib.tblo",
+      "label": "perf randomShuffleInts",
+      "kind": "ops",
+      "min_rate": 190000,
+      "min_samples": 3
+    },
+    {
+      "program": "tests/benchmark_random_stdlib.tblo",
+      "label": "perf randomSampleDistinctInts",
+      "kind": "ops",
+      "min_rate": 90000,
+      "min_samples": 3
+    },
+    {
+      "program": "tests/benchmark_random_stdlib.tblo",
+      "label": "perf randomPseudoBytes16",
+      "kind": "ops",
+      "min_rate": 620000,
+      "min_samples": 3
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf sortIntsAsc",
+      "kind": "ops",
+      "min_rate": 32000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf sortBuiltinIntsAsc",
+      "kind": "ops",
+      "min_rate": 55000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf sortPureIntsAsc",
+      "kind": "ops",
+      "min_rate": 9000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf sortBinarySearchInts",
+      "kind": "ops",
+      "min_rate": 430000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf reverseBuiltinInts",
+      "kind": "ops",
+      "min_rate": 85000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf reverseManualInts",
+      "kind": "ops",
+      "min_rate": 70000
+    },
+    {
+      "program": "tests/benchmark_sort_stdlib.tblo",
+      "label": "perf sortTopKLargestInts",
+      "kind": "ops",
+      "min_rate": 15000
+    },
+    {
+      "program": "tests/benchmark_hash_stdlib.tblo",
+      "label": "perf hashStableString",
+      "kind": "ops",
+      "min_rate": 240000
+    },
+    {
+      "program": "tests/benchmark_hash_stdlib.tblo",
+      "label": "perf hashAdler32Bytes",
+      "kind": "ops",
+      "min_rate": 180000
+    },
+    {
+      "program": "tests/benchmark_hash_stdlib.tblo",
+      "label": "perf hashFingerprintStrings",
+      "kind": "ops",
+      "min_rate": 78000,
+      "min_samples": 2
+    },
+    {
+      "program": "tests/benchmark_bitset_stdlib.tblo",
+      "label": "perf bitsetSetHasHot",
+      "kind": "ops",
+      "min_rate": 430000
+    },
+    {
+      "program": "tests/benchmark_bitset_stdlib.tblo",
+      "label": "perf bitsetUnionCount",
+      "kind": "ops",
+      "min_rate": 330
+    },
+    {
+      "program": "tests/benchmark_bitset_stdlib.tblo",
+      "label": "perf bitsetRankSelect",
+      "kind": "ops",
+      "min_rate": 8200,
+      "min_samples": 3
+    },
+    {
+      "program": "tests/benchmark_bloom_stdlib.tblo",
+      "label": "perf bloomAddMaybeHot",
+      "kind": "ops",
+      "min_rate": 32000
+    },
+    {
+      "program": "tests/benchmark_bloom_stdlib.tblo",
+      "label": "perf bloomMaybeHasHot",
+      "kind": "ops",
+      "min_rate": 58000
+    },
+    {
+      "program": "tests/benchmark_bloom_stdlib.tblo",
+      "label": "perf bloomUnionStats",
+      "kind": "ops",
+      "min_rate": 190
+    },
+    {
+      "program": "tests/benchmark_lru_stdlib.tblo",
+      "label": "perf lruSetGetHot",
+      "kind": "ops",
+      "min_rate": 70000
+    },
+    {
+      "program": "tests/benchmark_lru_stdlib.tblo",
+      "label": "perf lruEvictChurn",
+      "kind": "ops",
+      "min_rate": 80000
+    },
+    {
+      "program": "tests/benchmark_lru_stdlib.tblo",
+      "label": "perf lruOrderSnapshot",
+      "kind": "ops",
+      "min_rate": 280
+    },
+    {
+      "program": "tools/benchmark_cold_start.py",
+      "label": "perf coldStart cache",
+      "kind": "ops",
+      "min_rate": 27,
+      "min_samples": 3
+    },
+    {
+      "program": "tools/benchmark_cold_start.py",
+      "label": "perf coldStart artifact",
+      "kind": "ops",
+      "min_rate": 27,
+      "min_samples": 3
+    }
+  ]
+}

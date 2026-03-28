@@ -1,0 +1,124 @@
+// Encoding stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_encoding_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_encoding_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/encoding.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchEncodingBase64EncodeBytes(iters: int): void {
+    var src_r = stringToBytes("tablo benchmark payload 2026 / alpha beta gamma delta");
+    if (src_r.1 != nil) panic("stringToBytes seed failed");
+    var src: bytes = src_r.0;
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = encodingBase64EncodeBytes(src);
+        if (r_w.1 != nil) panic("encodingBase64EncodeBytes warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = encodingBase64EncodeBytes(src);
+        if (r.1 != nil) panic("encodingBase64EncodeBytes failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf encodingBase64EncodeBytes", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchEncodingBase64DecodeToBytes(iters: int): void {
+    var seed = encodingBase64Encode("tablo benchmark payload 2026 / alpha beta gamma delta");
+    if (seed.1 != nil) panic("encodingBase64Encode seed failed");
+    var encoded: string = seed.0;
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = encodingBase64DecodeToBytes(encoded);
+        if (r_w.1 != nil) panic("encodingBase64DecodeToBytes warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = encodingBase64DecodeToBytes(encoded);
+        if (r.1 != nil) panic("encodingBase64DecodeToBytes failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf encodingBase64DecodeToBytes", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchEncodingHexEncode(iters: int): void {
+    var input: string = "tablo benchmark payload 2026 / alpha beta gamma delta";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = encodingHexEncode(input);
+        if (r_w.1 != nil) panic("encodingHexEncode warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = encodingHexEncode(input);
+        if (r.1 != nil) panic("encodingHexEncode failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf encodingHexEncode", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang Encoding Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchEncodingBase64EncodeBytes(160000 * scale);
+    benchEncodingBase64DecodeToBytes(140000 * scale);
+    benchEncodingHexEncode(220000 * scale);
+
+    println("Encoding stdlib benchmark complete!");
+}

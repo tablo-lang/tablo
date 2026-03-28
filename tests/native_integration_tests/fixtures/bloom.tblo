@@ -1,0 +1,467 @@
+import "bitset.tblo";
+
+// Bloom filter helpers built on bitset.tblo.
+// Provides fast approximate membership with configurable bit length and hash count.
+
+record BloomStore {
+    bits: BitsetStore,
+    bitLength: int,
+    hashCount: int,
+    itemCount: int
+};
+
+record BloomStats {
+    bitLength: int,
+    hashCount: int,
+    itemCount: int,
+    setBitCount: int,
+    fillPermille: int,
+    approxFalsePositivePermille: int
+};
+
+var BLOOM_HASH_MOD: int = 1073741789;
+
+func bloomStdError(code: int, message: string, data: any): Error {
+    var err: Error = { code: code, message: message, data: data };
+    return err;
+}
+
+func bloomError(code: int, message: string, context: string, detail: any): Error {
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail
+    };
+    return bloomStdError(code, message, data);
+}
+
+func bloomWrapError(err_any: any, context: string, detail: any): Error {
+    var err: Error = err_any as Error;
+    var data: map<string, any> = {
+        "context": context,
+        "detail": detail,
+        "causeCode": err.code,
+        "causeMessage": err.message,
+        "causeData": err.data
+    };
+    return bloomStdError(err.code, err.message, data);
+}
+
+func bloomDefaultStore(): BloomStore {
+    var store: BloomStore = {
+        bits: bitsetDefaultStore(),
+        bitLength: 0,
+        hashCount: 0,
+        itemCount: 0
+    };
+    return store;
+}
+
+func bloomNormalizeMod(value: int, mod: int): int {
+    var out: int = value % mod;
+    if (out < 0) {
+        out = out + mod;
+    }
+    return out;
+}
+
+func bloomValidateBitLength(bit_length: int): Error? {
+    if (bit_length < 8 || bit_length > 100000000) {
+        return bloomError(ERR_INVALID_ARGUMENT,
+                          "bitLength must be between 8 and 100000000",
+                          "bloom.config.bitLength",
+                          bit_length);
+    }
+    return nil;
+}
+
+func bloomValidateHashCount(hash_count: int): Error? {
+    if (hash_count < 1 || hash_count > 64) {
+        return bloomError(ERR_INVALID_ARGUMENT,
+                          "hashCount must be between 1 and 64",
+                          "bloom.config.hashCount",
+                          hash_count);
+    }
+    return nil;
+}
+
+func bloomValidatePair(left: BloomStore, right: BloomStore, context: string): Error? {
+    if (left.bitLength != right.bitLength || left.hashCount != right.hashCount) {
+        return bloomError(ERR_INVALID_ARGUMENT,
+                          "bloom filters must have matching bitLength/hashCount",
+                          context,
+                          {
+                              "leftBitLength": left.bitLength,
+                              "rightBitLength": right.bitLength,
+                              "leftHashCount": left.hashCount,
+                              "rightHashCount": right.hashCount
+                          } as any);
+    }
+    return nil;
+}
+
+func bloomNormalizePayload(value: any): (bytes, Error?) {
+    var encoded = jsonStringify(value);
+    if (encoded.1 != nil) {
+        return (bytesWithSize(0, 0).0,
+                bloomWrapError(encoded.1,
+                               "bloom.normalizePayload.jsonStringify",
+                               nil));
+    }
+
+    var raw = stringToBytes(encoded.0);
+    if (raw.1 != nil) {
+        return (bytesWithSize(0, 0).0,
+                bloomWrapError(raw.1,
+                               "bloom.normalizePayload.stringToBytes",
+                               nil));
+    }
+    return raw;
+}
+
+func bloomHashA(payload: bytes, seed: int): int {
+    var h: int = bloomNormalizeMod(seed + 97, BLOOM_HASH_MOD);
+    var i: int = 0;
+    foreach (byte_v in payload) {
+        var mix: int = bloomNormalizeMod(byte_v + i + 11, BLOOM_HASH_MOD);
+        h = bloomNormalizeMod(h + mix, BLOOM_HASH_MOD);
+        h = bloomNormalizeMod(h + h + 3, BLOOM_HASH_MOD);
+        h = h ^ mix;
+        h = bloomNormalizeMod(h + 17, BLOOM_HASH_MOD);
+        i = i + 1;
+    }
+    return bloomNormalizeMod(h + len(payload) + 1, BLOOM_HASH_MOD);
+}
+
+func bloomHashB(payload: bytes, seed: int): int {
+    var h: int = bloomNormalizeMod(seed + 131, BLOOM_HASH_MOD);
+    var i: int = 0;
+    foreach (byte_v in payload) {
+        var mix: int = bloomNormalizeMod(byte_v + (i * 3) + 29, BLOOM_HASH_MOD);
+        h = h ^ mix;
+        h = bloomNormalizeMod(h + h + h + 5, BLOOM_HASH_MOD);
+        h = bloomNormalizeMod(h + mix + 13, BLOOM_HASH_MOD);
+        i = i + 1;
+    }
+    return bloomNormalizeMod(h + (len(payload) * 7) + 19, BLOOM_HASH_MOD);
+}
+
+func bloomNew(bit_length: int, hash_count: int): (BloomStore, Error?) {
+    var empty: BloomStore = bloomDefaultStore();
+    var len_err = bloomValidateBitLength(bit_length);
+    if (len_err != nil) {
+        return (empty, len_err);
+    }
+
+    var hash_err = bloomValidateHashCount(hash_count);
+    if (hash_err != nil) {
+        return (empty, hash_err);
+    }
+
+    var bits_r = bitsetNew(bit_length);
+    if (bits_r.1 != nil) {
+        return (empty,
+                bloomWrapError(bits_r.1,
+                               "bloom.new.bitsetNew",
+                               {
+                                   "bitLength": bit_length
+                               } as any));
+    }
+
+    var store: BloomStore = {
+        bits: bits_r.0,
+        bitLength: bit_length,
+        hashCount: hash_count,
+        itemCount: 0
+    };
+    return (store, nil);
+}
+
+func bloomHashLoopInit(store: BloomStore, payload: bytes): (int, int, int) {
+    var h1: int = bloomHashA(payload, 135791113);
+    var h2: int = bloomHashB(payload, 975318642);
+
+    var index: int = bloomNormalizeMod(h1, store.bitLength);
+    var step: int = bloomNormalizeMod(h2, store.bitLength) + 1;
+    if (step >= store.bitLength) {
+        step = step - store.bitLength;
+    }
+    if (step == 0) {
+        step = 1;
+    }
+
+    var delta: int = bloomNormalizeMod(h1 ^ h2, store.bitLength) + 1;
+    if (delta >= store.bitLength) {
+        delta = delta - store.bitLength;
+    }
+    if (delta == 0) {
+        delta = 1;
+    }
+
+    return (index, step, delta);
+}
+
+func bloomHashLoopAdvance(index: int,
+                          step: int,
+                          delta: int,
+                          bit_length: int): (int, int) {
+    var next_index: int = index + step;
+    if (next_index >= bit_length) {
+        next_index = next_index - bit_length;
+    }
+
+    var next_step: int = step + delta;
+    if (next_step >= bit_length) {
+        next_step = next_step - bit_length;
+    }
+    if (next_step == 0) {
+        next_step = 1;
+    }
+
+    return (next_index, next_step);
+}
+
+func bloomBitsetHasFast(bits: BitsetStore, index: int): (bool, Error?) {
+    if (index < 0 || index >= bits.bitLength) {
+        return bitsetHas(bits, index);
+    }
+
+    var word_i: int = index / BITSET_WORD_BITS;
+    if (word_i < 0 || word_i >= len(bits.words)) {
+        return bitsetHas(bits, index);
+    }
+
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var has: bool = (bits.words[word_i] & mask) != 0;
+    return (has, nil);
+}
+
+func bloomBitsetSetFast(bits: BitsetStore,
+                        index: int): (BitsetStore, bool, Error?) {
+    if (index < 0 || index >= bits.bitLength) {
+        return bitsetSet(bits, index);
+    }
+
+    var next: BitsetStore = bits;
+    var word_i: int = index / BITSET_WORD_BITS;
+    if (word_i < 0 || word_i >= len(next.words)) {
+        return bitsetSet(next, index);
+    }
+
+    var bit_i: int = index % BITSET_WORD_BITS;
+    var mask: int = BITSET_BIT_MASKS[bit_i];
+    var word: int = next.words[word_i];
+    if ((word & mask) != 0) {
+        return (next, false, nil);
+    }
+
+    next.words[word_i] = word | mask;
+    next.setCount = next.setCount + 1;
+    return (next, true, nil);
+}
+
+func bloomMaybeHas(store: BloomStore, value: any): (bool, Error?) {
+    var payload = bloomNormalizePayload(value);
+    if (payload.1 != nil) {
+        return (false, payload.1);
+    }
+
+    var loop: (int, int, int) = bloomHashLoopInit(store, payload.0);
+    var index: int = loop.0;
+    var step: int = loop.1;
+    var delta: int = loop.2;
+
+    var i: int = 0;
+    while (i < store.hashCount) {
+        var has_r = bloomBitsetHasFast(store.bits, index);
+        if (has_r.1 != nil) {
+            return (false,
+                    bloomWrapError(has_r.1,
+                                   "bloom.maybeHas.bitsetHasFast",
+                                   {
+                                       "index": index
+                                   } as any));
+        }
+        if (!has_r.0) {
+            return (false, nil);
+        }
+
+        index = index + step;
+        if (index >= store.bitLength) {
+            index = index - store.bitLength;
+        }
+        step = step + delta;
+        if (step >= store.bitLength) {
+            step = step - store.bitLength;
+        }
+        if (step == 0) {
+            step = 1;
+        }
+        i = i + 1;
+    }
+
+    return (true, nil);
+}
+
+func bloomAdd(store: BloomStore, value: any): (BloomStore, bool, Error?) {
+    var next: BloomStore = store;
+    var payload = bloomNormalizePayload(value);
+    if (payload.1 != nil) {
+        return (next, false, payload.1);
+    }
+
+    var loop: (int, int, int) = bloomHashLoopInit(next, payload.0);
+    var index: int = loop.0;
+    var step: int = loop.1;
+    var delta: int = loop.2;
+    var changed_bits: int = 0;
+
+    var i: int = 0;
+    while (i < next.hashCount) {
+        var set_r = bloomBitsetSetFast(next.bits, index);
+        if (set_r.2 != nil) {
+            return (next,
+                    false,
+                    bloomWrapError(set_r.2,
+                                   "bloom.add.bitsetSetFast",
+                                   {
+                                       "index": index
+                                   } as any));
+        }
+
+        next.bits = set_r.0;
+        if (set_r.1) {
+            changed_bits = changed_bits + 1;
+        }
+
+        index = index + step;
+        if (index >= next.bitLength) {
+            index = index - next.bitLength;
+        }
+        step = step + delta;
+        if (step >= next.bitLength) {
+            step = step - next.bitLength;
+        }
+        if (step == 0) {
+            step = 1;
+        }
+        i = i + 1;
+    }
+
+    var maybe_new: bool = changed_bits > 0;
+    if (maybe_new) {
+        next.itemCount = next.itemCount + 1;
+    }
+    return (next, maybe_new, nil);
+}
+
+func bloomAddMany(store: BloomStore, entries: array<any>): (BloomStore, int, Error?) {
+    var next: BloomStore = store;
+    var maybe_new_count: int = 0;
+    foreach (entry in entries) {
+        var add_r = bloomAdd(next, entry);
+        next = add_r.0;
+        if (add_r.2 != nil) {
+            return (next, maybe_new_count, add_r.2);
+        }
+        if (add_r.1) {
+            maybe_new_count = maybe_new_count + 1;
+        }
+    }
+    return (next, maybe_new_count, nil);
+}
+
+func bloomClear(store: BloomStore): (BloomStore, int) {
+    var next: BloomStore = store;
+    var cleared = bitsetClearAll(next.bits);
+    next.bits = cleared.0;
+    next.itemCount = 0;
+    return (next, cleared.1);
+}
+
+func bloomUnion(left: BloomStore, right: BloomStore): (BloomStore, Error?) {
+    var pair_err = bloomValidatePair(left, right, "bloom.union.config");
+    if (pair_err != nil) {
+        return (bloomDefaultStore(), pair_err);
+    }
+
+    var union_bits = bitsetUnion(left.bits, right.bits);
+    if (union_bits.1 != nil) {
+        return (bloomDefaultStore(),
+                bloomWrapError(union_bits.1,
+                               "bloom.union.bitsetUnion",
+                               nil));
+    }
+
+    var item_count: int = left.itemCount + right.itemCount;
+    if (item_count < left.itemCount || item_count < right.itemCount) {
+        item_count = 2147483647;
+    }
+
+    var out: BloomStore = {
+        bits: union_bits.0,
+        bitLength: left.bitLength,
+        hashCount: left.hashCount,
+        itemCount: item_count
+    };
+    return (out, nil);
+}
+
+func bloomSetBitCount(store: BloomStore): int {
+    return bitsetCount(store.bits);
+}
+
+func bloomSetBitIndices(store: BloomStore,
+                        max_items: int): (array<int>, bool, Error?) {
+    var indices_r = bitsetToIndices(store.bits, max_items);
+    if (indices_r.2 != nil) {
+        return (indices_r.0,
+                false,
+                bloomWrapError(indices_r.2,
+                               "bloom.setBitIndices.bitsetToIndices",
+                               {
+                                   "maxItems": max_items
+                               } as any));
+    }
+    return (indices_r.0, indices_r.1, nil);
+}
+
+func bloomApproxFalsePositivePermille(store: BloomStore): int {
+    if (store.bitLength <= 0) {
+        return 0;
+    }
+
+    var set_bits: int = bitsetCount(store.bits);
+    if (set_bits <= 0) {
+        return 0;
+    }
+
+    var fill_ratio: double = (set_bits as double) / (store.bitLength as double);
+    var approx: double = pow(fill_ratio, store.hashCount as double);
+    var permille: int = round(approx * 1000.0) as int;
+    if (permille < 0) {
+        permille = 0;
+    }
+    if (permille > 1000) {
+        permille = 1000;
+    }
+    return permille;
+}
+
+func bloomStats(store: BloomStore): BloomStats {
+    var set_bits: int = bitsetCount(store.bits);
+    var fill_permille: int = 0;
+    if (store.bitLength > 0) {
+        fill_permille = (set_bits * 1000) / store.bitLength;
+    }
+
+    var stats: BloomStats = {
+        bitLength: store.bitLength,
+        hashCount: store.hashCount,
+        itemCount: store.itemCount,
+        setBitCount: set_bits,
+        fillPermille: fill_permille,
+        approxFalsePositivePermille: bloomApproxFalsePositivePermille(store)
+    };
+    return stats;
+}

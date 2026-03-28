@@ -1,0 +1,209 @@
+// FS stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_fs_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_fs_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/fs.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 200) {
+        w = 200;
+    }
+    return w;
+}
+
+func benchFsReadLines(iters: int): void {
+    var path: string = "tmp_bench_fs_lines.txt";
+    var lines: array<string> = [];
+    var i: int = 0;
+    while (i < 12) {
+        push(lines, "line-" + str(i));
+        i = i + 1;
+    }
+
+    var seeded = fsWriteLines(path, lines, true);
+    if (seeded.1 != nil) {
+        panic("benchFsReadLines seed failed: " + seeded.1.message);
+    }
+
+    var sink: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = fsReadLines(path, 0);
+        if (r_w.1 != nil) {
+            panic("benchFsReadLines warmup failed: " + r_w.1.message);
+        }
+        sink = sink + len(r_w.0);
+        sink = sink + len(r_w.0[0]);
+        w = w + 1;
+    }
+
+    i = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = fsReadLines(path, 0);
+        if (r.1 != nil) {
+            panic("benchFsReadLines failed: " + r.1.message);
+        }
+        sink = sink + len(r.0);
+        sink = sink + len(r.0[0]);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf fsReadLines", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+
+    fsEnsureDeleted(path);
+}
+
+func benchFsReadJsonAs(iters: int): void {
+    var path: string = "tmp_bench_fs_payload.json";
+    var payload: string =
+        "{\"name\":\"Ada\",\"age\":37,\"active\":true," +
+        "\"scores\":[7,9,11,13],\"meta\":{\"region\":\"us\",\"tier\":2}}";
+    var seeded = fsWriteText(path, payload);
+    if (seeded.1 != nil) {
+        panic("benchFsReadJsonAs seed failed: " + seeded.1.message);
+    }
+
+    var schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "name": "string",
+            "age": "int",
+            "active": "bool",
+            "scores": { "type": "array", "items": "int" },
+            "meta": {
+                "type": "record",
+                "fields": {
+                    "region": "string",
+                    "tier": "int"
+                }
+            }
+        }
+    };
+
+    var sink: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = fsReadJsonAs(path, schema);
+        if (r_w.1 != nil) {
+            panic("benchFsReadJsonAs warmup failed: " + r_w.1.message);
+        }
+        var obj_w: map<string, any> = r_w.0 as map<string, any>;
+        var scores_w: array<int> = mapGetString(obj_w, "scores") as array<int>;
+        sink = sink + (mapGetString(obj_w, "age") as int);
+        sink = sink + len(scores_w);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = fsReadJsonAs(path, schema);
+        if (r.1 != nil) {
+            panic("benchFsReadJsonAs failed: " + r.1.message);
+        }
+        var obj: map<string, any> = r.0 as map<string, any>;
+        var scores: array<int> = mapGetString(obj, "scores") as array<int>;
+        sink = sink + (mapGetString(obj, "age") as int);
+        sink = sink + len(scores);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf fsReadJsonAs", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+
+    fsEnsureDeleted(path);
+}
+
+func benchFsCopyFile(iters: int): void {
+    var src_path: string = "tmp_bench_fs_copy_src.txt";
+    var dst_path: string = "tmp_bench_fs_copy_dst.txt";
+    var source: string = "";
+    var i: int = 0;
+    while (i < 64) {
+        source = source + "0123456789abcdef0123456789abcdef";
+        i = i + 1;
+    }
+
+    var seeded = fsWriteText(src_path, source);
+    if (seeded.1 != nil) {
+        panic("benchFsCopyFile seed failed: " + seeded.1.message);
+    }
+
+    var source_size: int = len(source);
+    var sink: int = 0;
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var cp_w = fsCopyFile(src_path, dst_path, 4096);
+        if (cp_w.1 != nil) {
+            panic("benchFsCopyFile warmup failed: " + cp_w.1.message);
+        }
+        sink = sink + cp_w.0;
+        if (cp_w.0 != source_size) {
+            panic("benchFsCopyFile warmup copied unexpected byte count");
+        }
+        fsEnsureDeleted(dst_path);
+        w = w + 1;
+    }
+
+    i = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var cp = fsCopyFile(src_path, dst_path, 4096);
+        if (cp.1 != nil) {
+            panic("benchFsCopyFile failed: " + cp.1.message);
+        }
+        sink = sink + cp.0;
+        if (cp.0 != source_size) {
+            panic("benchFsCopyFile copied unexpected byte count");
+        }
+        fsEnsureDeleted(dst_path);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf fsCopyFile", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+
+    fsEnsureDeleted(src_path);
+    fsEnsureDeleted(dst_path);
+}
+
+func main(): void {
+    println("=== TabloLang FS Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchFsReadLines(6000 * scale);
+    benchFsReadJsonAs(5000 * scale);
+    benchFsCopyFile(1200 * scale);
+
+    println("FS stdlib benchmark complete!");
+}

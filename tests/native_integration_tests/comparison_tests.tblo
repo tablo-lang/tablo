@@ -1,0 +1,11 @@
+func main() {
+    var a: int = 2;
+    var b: int = 1;
+    if (a > b) { println(1); } else { println(0); }
+
+    if (2 <= 2) { println(1); } else { println(0); }
+    if (2 >= 3) { println(1); } else { println(0); }
+
+    if (3 >= 3) { println(1); } else { println(0); }
+    if (1 < 0) { println(1); } else { println(0); }
+}

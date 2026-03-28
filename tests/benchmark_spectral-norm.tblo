@@ -1,0 +1,82 @@
+// Spectral norm benchmark (ported from tests/benchmark_spectral-norm.c).
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_spectral-norm.tblo 5500
+//
+// Input:
+//   N is read from argv[0]. If no argument is provided, defaults to 100.
+//
+// Output:
+//   One line with the spectral norm, formatted with 9 decimals.
+
+func evalA(i: int, j: int): double {
+    var ij: int = i + j;
+    var denom: int = ((ij * (ij + 1)) / 2) + i + 1;
+    return 1.0 / (denom as double);
+}
+
+func evalA_times_u(n: int, u: array<double>, out: array<double>): void {
+    var i: int = 0;
+    while (i < n) {
+        var sum: double = 0.0;
+        var j: int = 0;
+        while (j < n) {
+            sum = sum + (evalA(i, j) * u[j]);
+            j = j + 1;
+        }
+        out[i] = sum;
+        i = i + 1;
+    }
+}
+
+func evalAt_times_u(n: int, u: array<double>, out: array<double>): void {
+    var i: int = 0;
+    while (i < n) {
+        var sum: double = 0.0;
+        var j: int = 0;
+        while (j < n) {
+            sum = sum + (evalA(j, i) * u[j]);
+            j = j + 1;
+        }
+        out[i] = sum;
+        i = i + 1;
+    }
+}
+
+func evalAtA_times_u(n: int, u: array<double>, tmp: array<double>, out: array<double>): void {
+    evalA_times_u(n, u, tmp);
+    evalAt_times_u(n, tmp, out);
+}
+
+func main(): void {
+    var n: int = 100;
+    if (len(argv) > 0) {
+        n = toInt(argv[0]);
+    }
+    if (n < 1) {
+        n = 1;
+    }
+
+    var u: array<double> = arrayWithSize(n, 1.0).0;
+    var v: array<double> = arrayWithSize(n, 0.0).0;
+    var tmp: array<double> = arrayWithSize(n, 0.0).0;
+
+    var i: int = 0;
+    while (i < 10) {
+        evalAtA_times_u(n, u, tmp, v);
+        evalAtA_times_u(n, v, tmp, u);
+        i = i + 1;
+    }
+
+    var vBv: double = 0.0;
+    var vv: double = 0.0;
+    i = 0;
+    while (i < n) {
+        vBv = vBv + (u[i] * v[i]);
+        vv = vv + (v[i] * v[i]);
+        i = i + 1;
+    }
+
+    var result: double = sqrt(vBv / vv);
+    println(formatDouble(result, 9));
+}

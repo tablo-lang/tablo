@@ -1,0 +1,25 @@
+// Simple RSA Test
+import "fixtures/rsa.tblo";
+
+func main(): void {
+    println("Starting RSA simple test...");
+
+    // Test basic key pair generation
+    var keyPair: RSAKeyPair = rsaGenerateKeyPair(1024);
+    println("Key pair generated");
+    println(keyPair.public.n);
+    println(keyPair.public.e);
+
+    // Test encryption/decryption
+    var msg: bigint = 42n;
+    var enc: bigint = rsaEncrypt(msg, keyPair.public);
+    var dec: bigint = rsaDecrypt(enc, keyPair.private);
+
+    if (dec == msg) {
+        println("PASS: Basic encryption/decryption works");
+    } else {
+        println("FAIL: Decryption mismatch");
+    }
+
+    println("Done");
+}

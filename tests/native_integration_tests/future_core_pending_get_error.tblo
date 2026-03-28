@@ -1,0 +1,4 @@
+func main(): void {
+    var pending = futurePending<int>();
+    println(futureGet(pending));
+}

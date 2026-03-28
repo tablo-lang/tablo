@@ -1,0 +1,142 @@
+// YAML stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_yaml_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_yaml_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/yaml.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchYamlParse(iters: int): void {
+    var text: string = "name: tablo\n" +
+                       "port: 8080\n" +
+                       "enabled: true\n" +
+                       "tags: [lang, vm, fast]\n" +
+                       "server:\n" +
+                       "  host: 127.0.0.1\n" +
+                       "  workers: 8\n" +
+                       "  tls:\n" +
+                       "    enabled: false\n" +
+                       "routes:\n" +
+                       "  - /health\n" +
+                       "  - /ready\n";
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var p_w = yamlParse(text);
+        if (p_w.1 != nil) {
+            panic("benchYamlParse warmup failed: " + p_w.1.message);
+        }
+
+        var workers_w = yamlGetInt(p_w.0, "server.workers");
+        if (workers_w.1 == nil && workers_w.0 != nil) {
+            sink = sink + (workers_w.0 as int);
+        }
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var p = yamlParse(text);
+        if (p.1 != nil) {
+            panic("benchYamlParse failed: " + p.1.message);
+        }
+
+        var port = yamlGetInt(p.0, "port");
+        if (port.1 == nil && port.0 != nil) {
+            sink = sink + (port.0 as int);
+        }
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf yamlParse", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func benchYamlStringify(iters: int): void {
+    var text: string = "name: tablo\n" +
+                       "port: 8080\n" +
+                       "enabled: true\n" +
+                       "tags: [lang, vm, fast]\n" +
+                       "server:\n" +
+                       "  host: 127.0.0.1\n" +
+                       "  workers: 8\n" +
+                       "  tls:\n" +
+                       "    enabled: false\n" +
+                       "routes:\n" +
+                       "  - /health\n" +
+                       "  - /ready\n";
+
+    var parsed = yamlParse(text);
+    if (parsed.1 != nil) {
+        panic("benchYamlStringify fixture parse failed: " + parsed.1.message);
+    }
+
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var s_w = yamlStringify(parsed.0);
+        if (s_w.1 != nil) {
+            panic("benchYamlStringify warmup failed: " + s_w.1.message);
+        }
+        sink = sink + len(s_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var s = yamlStringify(parsed.0);
+        if (s.1 != nil) {
+            panic("benchYamlStringify failed: " + s.1.message);
+        }
+        sink = sink + len(s.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf yamlStringify", iters, start, end);
+    if (sink == 0) {
+        println("error");
+    }
+}
+
+func main(): void {
+    println("=== TabloLang YAML Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchYamlParse(45000 * scale);
+    benchYamlStringify(55000 * scale);
+
+    println("YAML stdlib benchmark complete!");
+}

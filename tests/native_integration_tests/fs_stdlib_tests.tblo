@@ -1,0 +1,195 @@
+import "fixtures/fs.tblo";
+
+func main(): void {
+    var text_path: string = "tmp_fs_text.txt";
+    var lines_path: string = "tmp_fs_lines.txt";
+    var bytes_path: string = "tmp_fs_bytes.bin";
+    var copied_path: string = "tmp_fs_copy.bin";
+    var moved_src_path: string = "tmp_fs_move_src.txt";
+    var moved_dst_path: string = "tmp_fs_move_dst.txt";
+    var json_path: string = "tmp_fs_payload.json";
+    var json_pretty_path: string = "tmp_fs_payload_pretty.json";
+    var bad_json_path: string = "tmp_fs_bad.json";
+
+    println(fsEnsureDeleted(text_path) == nil);
+    println(fsEnsureDeleted(lines_path) == nil);
+    println(fsEnsureDeleted(bytes_path) == nil);
+    println(fsEnsureDeleted(copied_path) == nil);
+    println(fsEnsureDeleted(moved_src_path) == nil);
+    println(fsEnsureDeleted(moved_dst_path) == nil);
+    println(fsEnsureDeleted(json_path) == nil);
+    println(fsEnsureDeleted(json_pretty_path) == nil);
+    println(fsEnsureDeleted(bad_json_path) == nil);
+
+    var missing = fsFileExists(text_path);
+    println(missing.1 == nil);
+    if (missing.1 == nil) {
+        println(!missing.0);
+    }
+
+    var write_text = fsWriteText(text_path, "alpha");
+    println(write_text.1 == nil);
+    var append_text = fsAppendText(text_path, "\nbeta");
+    println(append_text.1 == nil);
+    var read_text = fsReadText(text_path);
+    println(read_text.1 == nil);
+    if (read_text.1 == nil) {
+        println(read_text.0 == "alpha\nbeta");
+    }
+
+    var write_lines = fsWriteLines(lines_path, ["one", "two", "three"], true);
+    println(write_lines.1 == nil);
+    var read_lines_limited = fsReadLines(lines_path, 2);
+    println(read_lines_limited.1 == nil);
+    if (read_lines_limited.1 == nil) {
+        println(len(read_lines_limited.0) == 2);
+        println(read_lines_limited.0[0] == "one");
+        println(read_lines_limited.0[1] == "two");
+    }
+
+    var read_lines_all = fsReadLines(lines_path, 0);
+    println(read_lines_all.1 == nil);
+    if (read_lines_all.1 == nil) {
+        println(len(read_lines_all.0) == 3);
+        println(read_lines_all.0[2] == "three");
+    }
+
+    var write_lines_no_nl = fsWriteLines(lines_path, ["x", "y"], false);
+    println(write_lines_no_nl.1 == nil);
+    var read_lines_text = fsReadText(lines_path);
+    println(read_lines_text.1 == nil);
+    if (read_lines_text.1 == nil) {
+        println(read_lines_text.0 == "x\ny");
+    }
+
+    var write_bytes = fsWriteBytes(bytes_path, hexToBytes("00 01 02 ff").0);
+    println(write_bytes.1 == nil);
+    var append_bytes = fsAppendBytes(bytes_path, hexToBytes("10 20").0);
+    println(append_bytes.1 == nil);
+    var read_bytes = fsReadBytes(bytes_path);
+    println(read_bytes.1 == nil);
+    if (read_bytes.1 == nil) {
+        println(bytesToHex(read_bytes.0).0 == "000102ff1020");
+    }
+
+    var payload: map<string, any> = {
+        "name": "Ada",
+        "age": 37,
+        "tags": ["vm", "lang"]
+    };
+
+    var write_json = fsWriteJson(json_path, payload as any);
+    println(write_json.1 == nil);
+    var read_json = fsReadJson(json_path);
+    println(read_json.1 == nil);
+    if (read_json.1 == nil) {
+        var obj: map<string, any> = read_json.0 as map<string, any>;
+        println(mapGetString(obj, "name") == "Ada");
+        println(mapGetString(obj, "age") == 37);
+    }
+
+    var schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "name": "string",
+            "age": "int",
+            "tags": {
+                "type": "array",
+                "items": "string"
+            }
+        }
+    };
+    var read_json_typed = fsReadJsonAs(json_path, schema);
+    println(read_json_typed.1 == nil);
+    if (read_json_typed.1 == nil) {
+        var typed_obj: map<string, any> = read_json_typed.0 as map<string, any>;
+        var tags: array<string> = mapGetString(typed_obj, "tags") as array<string>;
+        println(len(tags) == 2);
+        println(tags[0] == "vm");
+    }
+
+    var write_json_pretty = fsWriteJsonPretty(json_pretty_path, payload as any);
+    println(write_json_pretty.1 == nil);
+    var read_json_pretty = fsReadText(json_pretty_path);
+    println(read_json_pretty.1 == nil);
+    if (read_json_pretty.1 == nil) {
+        println(find(read_json_pretty.0, "\n") >= 0);
+    }
+
+    var copy_file = fsCopyFile(bytes_path, copied_path, 4);
+    println(copy_file.1 == nil);
+    if (copy_file.1 == nil) {
+        println(copy_file.0 == 6);
+    }
+    var copied = fsReadBytes(copied_path);
+    println(copied.1 == nil);
+    if (copied.1 == nil) {
+        println(bytesToHex(copied.0).0 == "000102ff1020");
+    }
+
+    var write_move_src = fsWriteText(moved_src_path, "move-me");
+    println(write_move_src.1 == nil);
+    var move_file = fsMoveReplace(moved_src_path, moved_dst_path, 8);
+    println(move_file.1 == nil);
+    if (move_file.1 == nil) {
+        println(move_file.0 == 7);
+    }
+    var moved_src_exists = fsFileExists(moved_src_path);
+    println(moved_src_exists.1 == nil);
+    if (moved_src_exists.1 == nil) {
+        println(!moved_src_exists.0);
+    }
+    var moved_dst_text = fsReadText(moved_dst_path);
+    println(moved_dst_text.1 == nil);
+    if (moved_dst_text.1 == nil) {
+        println(moved_dst_text.0 == "move-me");
+    }
+
+    var bad_copy = fsCopyFile(bytes_path, copied_path, 0);
+    println(bad_copy.1 != nil);
+    if (bad_copy.1 != nil) {
+        println(bad_copy.1.code == ERR_INVALID_ARGUMENT);
+    }
+
+    var write_bad_json = fsWriteText(bad_json_path, "{\"name\":");
+    println(write_bad_json.1 == nil);
+    var bad_json = fsReadJson(bad_json_path);
+    println(bad_json.1 != nil);
+    if (bad_json.1 != nil) {
+        println(bad_json.1.code == ERR_PARSE);
+        println(find(bad_json.1.message, "fsReadJson.jsonParse") >= 0);
+        var bad_data: map<string, any> = bad_json.1.data as map<string, any>;
+        println(mapGetString(bad_data, "filePath") == bad_json_path);
+        println(mapGetString(bad_data, "line") != nil);
+        println(mapGetString(bad_data, "column") != nil);
+    }
+
+    var bad_schema: map<string, any> = {
+        "type": "record",
+        "fields": {
+            "name": "string",
+            "age": "string"
+        }
+    };
+    var bad_typed = fsReadJsonAs(json_path, bad_schema);
+    println(bad_typed.1 != nil);
+    if (bad_typed.1 != nil) {
+        println(bad_typed.1.code == ERR_PARSE);
+        println(find(bad_typed.1.message, "fsReadJsonAs.jsonDecode") >= 0);
+        var bad_typed_data: map<string, any> = bad_typed.1.data as map<string, any>;
+        println(mapGetString(bad_typed_data, "filePath") == json_path);
+        println(mapGetString(bad_typed_data, "path") != nil);
+        println(mapGetString(bad_typed_data, "expectedType") != nil || mapGetString(bad_typed_data, "expected") != nil);
+        println(mapGetString(bad_typed_data, "actualType") != nil || mapGetString(bad_typed_data, "actual") != nil);
+    }
+
+    println(fsEnsureDeleted(text_path) == nil);
+    println(fsEnsureDeleted(lines_path) == nil);
+    println(fsEnsureDeleted(bytes_path) == nil);
+    println(fsEnsureDeleted(copied_path) == nil);
+    println(fsEnsureDeleted(moved_src_path) == nil);
+    println(fsEnsureDeleted(moved_dst_path) == nil);
+    println(fsEnsureDeleted(json_path) == nil);
+    println(fsEnsureDeleted(json_pretty_path) == nil);
+    println(fsEnsureDeleted(bad_json_path) == nil);
+}

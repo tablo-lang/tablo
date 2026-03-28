@@ -1,0 +1,24 @@
+func main(): void {
+    var available: bool = sqliteIsAvailable();
+    println(typeOf(available) == "bool");
+
+    var opened = sqliteOpen(":memory:");
+    if (available) {
+        println(opened.1 == nil);
+        if (opened.1 == nil) {
+            var db_id: int = opened.0;
+            var closed = sqliteClose(db_id);
+            println(closed.1 == nil);
+        } else {
+            println(false);
+        }
+    } else {
+        println(opened.1 != nil);
+        if (opened.1 != nil) {
+            var err: Error = opened.1 as Error;
+            println(err.code == ERR_UNSUPPORTED);
+        } else {
+            println(false);
+        }
+    }
+}

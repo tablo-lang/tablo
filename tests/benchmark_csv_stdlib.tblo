@@ -1,0 +1,133 @@
+// CSV stdlib micro-benchmark.
+//
+// Run:
+//   ./build/Release/tablo run tests/benchmark_csv_stdlib.tblo
+//   ./build/Release/tablo run tests/benchmark_csv_stdlib.tblo 2
+
+import "native_integration_tests/fixtures/csv.tblo";
+
+func report(label: string, iters: int, start_ms: int, end_ms: int): void {
+    var elapsed: int = end_ms - start_ms;
+    if (elapsed <= 0) {
+        elapsed = 1;
+    }
+    var ops_per_sec: int = (iters * 1000) / elapsed;
+    println(label + ": " + str(iters) + " ops in " + str(elapsed) + " ms (" + str(ops_per_sec) + " ops/s)");
+}
+
+func warmup(iters: int): int {
+    var w: int = iters / 20;
+    if (w < 1000) {
+        w = 1000;
+    }
+    return w;
+}
+
+func benchCsvParseLine(iters: int): void {
+    var line: string = "42,\"Alice, Doe\",\"x\"\"y\",2026-02-16,ok";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = csvParseLine(line);
+        if (r_w.1 != nil) panic("csvParseLine warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0[1]);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = csvParseLine(line);
+        if (r.1 != nil) panic("csvParseLine failed: " + r.1.message);
+        sink = sink + len(r.0[2]);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf csvParseLine", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchCsvParse(iters: int): void {
+    var text: string =
+        "id,name,note,active\n" +
+        "1,Alice,\"hello,world\",true\n" +
+        "2,Bob,\"x\"\"y\",false\n" +
+        "3,Charlie,plain,true\n" +
+        "4,Dana,\"line1-line2\",false\n" +
+        "5,Eve,ok,true";
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = csvParse(text);
+        if (r_w.1 != nil) panic("csvParse warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = csvParse(text);
+        if (r.1 != nil) panic("csvParse failed: " + r.1.message);
+        sink = sink + len(r.0[1][2]);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf csvParse", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func benchCsvStringify(iters: int): void {
+    var rows: array<array<string>> = [
+        ["id", "name", "note", "active"],
+        ["1", "Alice", "hello,world", "true"],
+        ["2", "Bob", "x\"y", "false"],
+        ["3", "Charlie", "plain", "true"],
+        ["4", "Dana", "line1-line2", "false"],
+        ["5", "Eve", "ok", "true"]
+    ];
+    var sink: int = 0;
+
+    var w: int = 0;
+    var warm: int = warmup(iters);
+    while (w < warm) {
+        var r_w = csvStringify(rows);
+        if (r_w.1 != nil) panic("csvStringify warmup failed: " + r_w.1.message);
+        sink = sink + len(r_w.0);
+        w = w + 1;
+    }
+
+    var i: int = 0;
+    var start: int = timeMonotonicMillis();
+    while (i < iters) {
+        var r = csvStringify(rows);
+        if (r.1 != nil) panic("csvStringify failed: " + r.1.message);
+        sink = sink + len(r.0);
+        i = i + 1;
+    }
+    var end: int = timeMonotonicMillis();
+    report("perf csvStringify", iters, start, end);
+    if (sink == 0) println("error");
+}
+
+func main(): void {
+    println("=== TabloLang CSV Stdlib Benchmark ===");
+
+    var scale: int = 1;
+    if (len(argv) > 0) {
+        scale = toInt(argv[0]);
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    benchCsvParseLine(140000 * scale);
+    benchCsvParse(90000 * scale);
+    benchCsvStringify(100000 * scale);
+
+    println("CSV stdlib benchmark complete!");
+}

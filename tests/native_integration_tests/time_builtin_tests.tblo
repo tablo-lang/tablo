@@ -1,0 +1,27 @@
+func main(): void {
+    var t1: int = timeNowMillis();
+    var t2: int = timeNowMillis();
+    println(t2 >= t1);
+
+    var n1: int = timeNowNanos();
+    var n2: int = timeNowNanos();
+    println(n2 >= n1);
+
+    var m1: int = timeMonotonicMillis();
+    var m2: int = timeMonotonicMillis();
+    println(m2 >= m1);
+    println(timeSinceMillis(m1) >= 0);
+
+    var utc: array<int> = utcDateTime();
+    var local: array<int> = localDateTime();
+
+    println(len(utc));
+    println(len(local));
+
+    println(utc[1] >= 1 && utc[1] <= 12);
+    println(local[1] >= 1 && local[1] <= 12);
+    println(utc[3] >= 0 && utc[3] <= 23);
+    println(local[3] >= 0 && local[3] <= 23);
+    println(utc[6] >= 0 && utc[6] <= 999);
+    println(local[6] >= 0 && local[6] <= 999);
+}

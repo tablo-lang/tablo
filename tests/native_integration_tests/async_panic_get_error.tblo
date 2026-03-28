@@ -1,0 +1,12 @@
+async func panicNoAwait(): int {
+    defer println("cleanup-get");
+    panic("boom-get");
+    return 0;
+}
+
+func main(): void {
+    var task = panicNoAwait();
+    println(str(futureIsReady(task)));
+    println("before-get");
+    println(futureGet(task));
+}
