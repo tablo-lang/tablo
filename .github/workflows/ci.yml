@@ -38,10 +38,16 @@ jobs:
         path: build/tablo_tests.junit.xml
         if-no-files-found: ignore
 
+    - name: Build Valgrind target
+      run: |
+        cmake -S . -B build-valgrind -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build-valgrind --config Debug --target memory_safety_tests test_vm_direct
+
     - name: Run Valgrind
       run: |
-        cd build
-        valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all ./test_runner
+        cd build-valgrind
+        valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all ./memory_safety_tests
+        valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all ./test_vm_direct
 
   fuzz-smoke:
     runs-on: ubuntu-latest

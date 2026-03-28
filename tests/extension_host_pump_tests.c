@@ -1,13 +1,7 @@
-#include "runtime.h"
-#include "artifact.h"
-#include "safe_alloc.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
 #ifdef _WIN32
+#define TokenType Win32TokenType
 #include <windows.h>
+#undef TokenType
 #include <sys/types.h>
 #include <sys/stat.h>
 #else
@@ -18,6 +12,14 @@
 #include <mach-o/dyld.h>
 #endif
 #endif
+
+#include "runtime.h"
+#include "artifact.h"
+#include "safe_alloc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 static int tests_passed = 0;
 static int tests_failed = 0;
