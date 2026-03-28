@@ -755,6 +755,51 @@ static const char* lsp_source_pointer_from_line_column(const char* source, int l
     return cursor;
 }
 
+static char* lsp_copy_trimmed_source_range(const char* start, const char* end) {
+    while (start && end && start < end && isspace((unsigned char)*start)) start++;
+    while (start && end && end > start && isspace((unsigned char)end[-1])) end--;
+    if (!start || !end || end <= start) return safe_strdup("");
+
+    size_t len = (size_t)(end - start);
+    char* copy = (char*)safe_malloc(len + 1);
+    memcpy(copy, start, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+static char* lsp_build_function_detail_from_source(const char* source, const Stmt* stmt) {
+    int line = 0;
+    int column = 0;
+    const char* start = NULL;
+    const char* cursor = NULL;
+    int paren_depth = 0;
+    int bracket_depth = 0;
+
+    if (!source || !stmt || stmt->kind != STMT_FUNC_DECL) return lsp_build_function_detail(stmt);
+    if (!lsp_find_stmt_start(source, stmt, &line, &column)) return lsp_build_function_detail(stmt);
+
+    start = lsp_source_pointer_from_line_column(source, line, column);
+    if (!start) return lsp_build_function_detail(stmt);
+
+    cursor = start;
+    while (*cursor) {
+        if (*cursor == '(') {
+            paren_depth++;
+        } else if (*cursor == ')') {
+            if (paren_depth > 0) paren_depth--;
+        } else if (*cursor == '[') {
+            bracket_depth++;
+        } else if (*cursor == ']') {
+            if (bracket_depth > 0) bracket_depth--;
+        } else if (*cursor == '{' && paren_depth == 0 && bracket_depth == 0) {
+            return lsp_copy_trimmed_source_range(start, cursor);
+        }
+        cursor++;
+    }
+
+    return lsp_build_function_detail(stmt);
+}
+
 static int lsp_find_identifier_span_at_position(const char* source,
                                                 int target_line,
                                                 int target_column,
@@ -1844,6 +1889,18 @@ static int lsp_named_type_context_matches(const char* source, const char* start,
     return 0;
 }
 
+static int lsp_type_param_context_matches(const Stmt* stmt,
+                                          const char* source,
+                                          const char* start,
+                                          const char* end,
+                                          int target_decl_match) {
+    if (target_decl_match) return 1;
+    if (lsp_named_type_context_matches(source, start, end)) return 1;
+    if (!stmt) return 0;
+
+    return stmt->kind == STMT_RECORD_DECL || stmt->kind == STMT_ENUM_DECL;
+}
+
 static int lsp_find_named_type_reference_result(const char* source,
                                                 const Program* program,
                                                 int target_line,
@@ -1955,7 +2012,7 @@ static int lsp_find_type_param_reference_result(const char* source,
             if (!lsp_make_type_param_binding(source, stmt, type_param_index, NULL, &binding)) continue;
 
             target_decl_match = binding.line == token_line && binding.column == token_column;
-            if (!target_decl_match && !lsp_named_type_context_matches(source, start, end)) {
+            if (!lsp_type_param_context_matches(stmt, source, start, end, target_decl_match)) {
                 continue;
             }
 
@@ -2230,7 +2287,9 @@ static int lsp_find_hover_in_stmt(const char* source,
     if (stmt_name &&
         lsp_find_stmt_name_location(source, stmt, &name_line, &name_column) &&
         lsp_position_in_name_span(target_line, target_column, name_line, name_column, stmt_name)) {
-        detail = lsp_build_stmt_detail(stmt);
+        detail = stmt->kind == STMT_FUNC_DECL
+            ? lsp_build_function_detail_from_source(source, stmt)
+            : lsp_build_stmt_detail(stmt);
         *out_json = lsp_build_hover_payload(detail, name_line, name_column, stmt_name);
         free(detail);
         return *out_json != NULL;

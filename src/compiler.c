@@ -223,10 +223,12 @@ static void ir_apply_local_cse_range(IRStatementList* ir,
                                      int* io_alias_count,
                                      int* io_alias_capacity,
                                      bool preserve_outgoing_state,
-                                     bool structured_cfg_exit);
+                                     bool structured_cfg_exit,
+                                     bool preserve_expr_fallthrough);
 static void ir_simulate_local_cse_block(const IRBasicBlock* block,
                                         const IRCseFlowState* in_state,
-                                        IRCseFlowState* out_state);
+                                        IRCseFlowState* out_state,
+                                        bool preserve_expr_fallthrough);
 static void ir_apply_local_copy_propagation_range(IRStatementList* ir,
                                                   int start_index,
                                                   int end_index,
@@ -246,7 +248,8 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
                                     int* io_alias_count,
                                     int* io_alias_capacity,
                                     bool preserve_outgoing_state,
-                                    bool structured_cfg_exit);
+                                    bool structured_cfg_exit,
+                                    bool preserve_expr_fallthrough);
 static void ir_apply_local_copy_propagation_stmt(Stmt* stmt,
                                                  IRCopyAlias** io_aliases,
                                                  int* io_alias_count,
@@ -3597,7 +3600,8 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                    IRCseCandidate* candidates,
                                                    int* candidate_count,
                                                    IRCopyAlias* aliases,
-                                                   int* alias_count);
+                                                   int* alias_count,
+                                                   bool preserve_expr_fallthrough);
 
 static bool ir_cse_expr_eligible(Expr* expr) {
     return expr_inline_eligible(expr);
@@ -3804,6 +3808,65 @@ static void ir_collect_expr_identifiers(Expr* expr, char*** io_names, int* io_co
             for (int i = 0; i < expr->set_literal.element_count; i++) {
                 ir_collect_expr_identifiers(expr->set_literal.elements[i], io_names, io_count, io_capacity);
             }
+            break;
+        default:
+            break;
+    }
+}
+
+static void ir_collect_stmt_binding_names(Stmt* stmt,
+                                          char*** io_names,
+                                          int* io_count,
+                                          int* io_capacity) {
+    if (!stmt || !io_names || !io_count || !io_capacity) return;
+
+    switch (stmt->kind) {
+        case STMT_VAR_DECL:
+            if (stmt->var_decl.name) {
+                ir_string_list_add_unique_owned(io_names, io_count, io_capacity, stmt->var_decl.name);
+            }
+            break;
+        case STMT_VAR_TUPLE_DECL:
+            if (stmt->var_tuple_decl.names) {
+                for (int i = 0; i < stmt->var_tuple_decl.name_count; i++) {
+                    const char* name = stmt->var_tuple_decl.names[i];
+                    if (name) {
+                        ir_string_list_add_unique_owned(io_names, io_count, io_capacity, name);
+                    }
+                }
+            }
+            break;
+        case STMT_BLOCK:
+            for (int i = 0; i < stmt->block.stmt_count; i++) {
+                ir_collect_stmt_binding_names(stmt->block.statements[i], io_names, io_count, io_capacity);
+            }
+            break;
+        case STMT_IF:
+            ir_collect_stmt_binding_names(stmt->if_stmt.then_branch, io_names, io_count, io_capacity);
+            ir_collect_stmt_binding_names(stmt->if_stmt.else_branch, io_names, io_count, io_capacity);
+            break;
+        case STMT_MATCH:
+            for (int i = 0; i < stmt->match_stmt.arm_count; i++) {
+                if (stmt->match_stmt.bodies) {
+                    ir_collect_stmt_binding_names(stmt->match_stmt.bodies[i], io_names, io_count, io_capacity);
+                }
+            }
+            ir_collect_stmt_binding_names(stmt->match_stmt.else_branch, io_names, io_count, io_capacity);
+            break;
+        case STMT_WHILE:
+            ir_collect_stmt_binding_names(stmt->while_stmt.body, io_names, io_count, io_capacity);
+            break;
+        case STMT_FOREACH:
+            if (stmt->foreach.var_name) {
+                ir_string_list_add_unique_owned(io_names, io_count, io_capacity, stmt->foreach.var_name);
+            }
+            ir_collect_stmt_binding_names(stmt->foreach.body, io_names, io_count, io_capacity);
+            break;
+        case STMT_FOR_RANGE:
+            if (stmt->for_range.var_name) {
+                ir_string_list_add_unique_owned(io_names, io_count, io_capacity, stmt->for_range.var_name);
+            }
+            ir_collect_stmt_binding_names(stmt->for_range.body, io_names, io_count, io_capacity);
             break;
         default:
             break;
@@ -4071,6 +4134,7 @@ static void ir_cse_merge_if_fallthrough(Stmt* then_branch,
                             &then_alias_count,
                             &then_alias_capacity,
                             true,
+                            false,
                             false);
     if (else_branch) {
         ir_apply_local_cse_stmt(else_branch,
@@ -4081,6 +4145,7 @@ static void ir_cse_merge_if_fallthrough(Stmt* then_branch,
                                 &else_alias_count,
                                 &else_alias_capacity,
                                 true,
+                                false,
                                 false);
     }
 
@@ -4154,6 +4219,7 @@ static void ir_cse_merge_match_fallthrough(Stmt* stmt,
                                     &branch_alias_count,
                                     &branch_alias_capacity,
                                     true,
+                                    false,
                                     false);
         }
 
@@ -4205,6 +4271,7 @@ static void ir_cse_merge_match_fallthrough(Stmt* stmt,
                                     &else_alias_count,
                                     &else_alias_capacity,
                                     true,
+                                    false,
                                     false);
         }
 
@@ -4281,8 +4348,11 @@ static void ir_cse_merge_loop_fallthrough(Stmt* stmt,
     seed_state.alias_count = incoming_alias_count;
     seed_state.alias_capacity = incoming_alias_count;
 
+    IRCseFlowState* in_states =
+        (IRCseFlowState*)safe_calloc((size_t)blocks.count, sizeof(IRCseFlowState));
     IRCseFlowState* out_states =
         (IRCseFlowState*)safe_calloc((size_t)blocks.count, sizeof(IRCseFlowState));
+    bool* in_reachable = (bool*)safe_calloc((size_t)blocks.count, sizeof(bool));
     bool* out_reachable = (bool*)safe_calloc((size_t)blocks.count, sizeof(bool));
     int worklist_capacity = blocks.count > 0 ? blocks.count : 1;
     int* worklist = (int*)safe_calloc((size_t)worklist_capacity, sizeof(int));
@@ -4291,6 +4361,7 @@ static void ir_cse_merge_loop_fallthrough(Stmt* stmt,
     int worklist_tail = 0;
 
     for (int i = 0; i < blocks.count; i++) {
+        ir_cse_flow_state_init(&in_states[i]);
         ir_cse_flow_state_init(&out_states[i]);
     }
 
@@ -4317,26 +4388,70 @@ static void ir_cse_merge_loop_fallthrough(Stmt* stmt,
                                                    body_result.entry_block,
                                                    &seed_state,
                                                    &merged_in);
-        if (block_reachable) {
-            ir_simulate_local_cse_block(&blocks.blocks[block_index], &merged_in, &new_out);
-            if (!out_reachable[block_index] ||
-                !ir_cse_flow_state_equals(&out_states[block_index], &new_out)) {
-                ir_cse_flow_state_replace_with_clone(&out_states[block_index], &new_out);
-                out_reachable[block_index] = true;
-                for (int i = 0; i < blocks.blocks[block_index].successor_count; i++) {
-                    int succ_index = blocks.blocks[block_index].successors[i];
-                    if (succ_index < 0 || succ_index >= blocks.count) continue;
-                    ir_worklist_enqueue(&worklist,
-                                        &worklist_tail,
-                                        &worklist_capacity,
-                                        queued,
-                                        succ_index);
-                }
+        if (!block_reachable) {
+            ir_cse_flow_state_free(&in_states[block_index]);
+            ir_cse_flow_state_free(&out_states[block_index]);
+            in_reachable[block_index] = false;
+            out_reachable[block_index] = false;
+            ir_cse_flow_state_free(&merged_in);
+            ir_cse_flow_state_free(&new_out);
+            continue;
+        }
+
+        bool in_changed =
+            !in_reachable[block_index] ||
+            !ir_cse_flow_state_equals(&in_states[block_index], &merged_in);
+        if (in_changed) {
+            ir_cse_flow_state_replace_with_clone(&in_states[block_index], &merged_in);
+            in_reachable[block_index] = true;
+        }
+
+        ir_simulate_local_cse_block(&blocks.blocks[block_index],
+                                    &merged_in,
+                                    &new_out,
+                                    true);
+        if (!out_reachable[block_index] ||
+            !ir_cse_flow_state_equals(&out_states[block_index], &new_out)) {
+            ir_cse_flow_state_replace_with_clone(&out_states[block_index], &new_out);
+            out_reachable[block_index] = true;
+            for (int i = 0; i < blocks.blocks[block_index].successor_count; i++) {
+                int succ_index = blocks.blocks[block_index].successors[i];
+                if (succ_index < 0 || succ_index >= blocks.count) continue;
+                ir_worklist_enqueue(&worklist,
+                                    &worklist_tail,
+                                    &worklist_capacity,
+                                    queued,
+                                    succ_index);
             }
         }
 
         ir_cse_flow_state_free(&merged_in);
         ir_cse_flow_state_free(&new_out);
+    }
+
+    for (int i = 0; i < blocks.count; i++) {
+        if (!in_reachable[i]) continue;
+        IRCseFlowState block_state;
+        ir_cse_flow_state_init(&block_state);
+        ir_cse_flow_state_replace_with_clone(&block_state, &in_states[i]);
+        IRStatementList block_ir = {
+            blocks.blocks[i].statements,
+            blocks.blocks[i].statement_count,
+            blocks.blocks[i].statement_count
+        };
+        ir_apply_local_cse_range(&block_ir,
+                                 blocks.blocks[i].start_index,
+                                 blocks.blocks[i].end_index,
+                                 &block_state.candidates,
+                                 &block_state.candidate_count,
+                                 &block_state.candidate_capacity,
+                                 &block_state.aliases,
+                                 &block_state.alias_count,
+                                 &block_state.alias_capacity,
+                                 blocks.blocks[i].successor_count > 0,
+                                 true,
+                                 true);
+        ir_cse_flow_state_free(&block_state);
     }
 
     IRCseFlowState merged_exits;
@@ -4396,12 +4511,15 @@ static void ir_cse_merge_loop_fallthrough(Stmt* stmt,
 
     ir_cse_flow_state_free(&merged_exits);
     for (int i = 0; i < blocks.count; i++) {
+        ir_cse_flow_state_free(&in_states[i]);
         ir_cse_flow_state_free(&out_states[i]);
     }
     ir_cse_flow_state_free(&seed_state);
     ir_structured_block_result_free(&body_result);
     ir_basic_block_list_free(&blocks);
+    free(in_states);
     free(out_states);
+    free(in_reachable);
     free(out_reachable);
     free(worklist);
     free(queued);
@@ -4411,7 +4529,8 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                    IRCseCandidate* candidates,
                                                    int* candidate_count,
                                                    IRCopyAlias* aliases,
-                                                   int* alias_count) {
+                                                   int* alias_count,
+                                                   bool preserve_expr_fallthrough) {
     if (!stmt) return;
 
     switch (stmt->kind) {
@@ -4446,7 +4565,8 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                        candidates,
                                                        candidate_count,
                                                        aliases,
-                                                       alias_count);
+                                                       alias_count,
+                                                       preserve_expr_fallthrough);
             }
             break;
         case STMT_IF:
@@ -4454,12 +4574,14 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             ir_cse_invalidate_for_stmt_fallthrough(stmt->if_stmt.else_branch,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             break;
         case STMT_MATCH:
             for (int i = 0; i < stmt->match_stmt.arm_count; i++) {
@@ -4468,21 +4590,24 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                            candidates,
                                                            candidate_count,
                                                            aliases,
-                                                           alias_count);
+                                                           alias_count,
+                                                           preserve_expr_fallthrough);
                 }
             }
             ir_cse_invalidate_for_stmt_fallthrough(stmt->match_stmt.else_branch,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             break;
         case STMT_WHILE:
             ir_cse_invalidate_for_stmt_fallthrough(stmt->while_stmt.body,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             break;
         case STMT_FOREACH:
             if (stmt->foreach.var_name) {
@@ -4493,7 +4618,8 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             break;
         case STMT_FOR_RANGE:
             if (stmt->for_range.var_name) {
@@ -4504,9 +4630,13 @@ static void ir_cse_invalidate_for_stmt_fallthrough(Stmt* stmt,
                                                    candidates,
                                                    candidate_count,
                                                    aliases,
-                                                   alias_count);
+                                                   alias_count,
+                                                   preserve_expr_fallthrough);
             break;
         case STMT_EXPR:
+            if (preserve_expr_fallthrough) {
+                break;
+            }
         case STMT_ASSIGN_INDEX:
         case STMT_ASSIGN_FIELD:
         case STMT_DEFER:
@@ -4528,7 +4658,8 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
                                     int* io_alias_count,
                                     int* io_alias_capacity,
                                     bool preserve_outgoing_state,
-                                    bool structured_cfg_exit) {
+                                    bool structured_cfg_exit,
+                                    bool preserve_expr_fallthrough) {
     IRCseCandidate* candidates = io_candidates ? *io_candidates : NULL;
     int candidate_count = io_candidate_count ? *io_candidate_count : 0;
     int candidate_capacity = io_candidate_capacity ? *io_candidate_capacity : 0;
@@ -4715,7 +4846,22 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
                                  &alias_count,
                                  &alias_capacity,
                                  true,
-                                 false);
+                                 false,
+                                 preserve_expr_fallthrough);
+        char** block_bindings = NULL;
+        int block_binding_count = 0;
+        int block_binding_capacity = 0;
+        ir_collect_stmt_binding_names(stmt,
+                                      &block_bindings,
+                                      &block_binding_count,
+                                      &block_binding_capacity);
+        for (int i = 0; i < block_binding_count; i++) {
+            if (!block_bindings[i]) continue;
+            ir_cse_invalidate_by_name(candidates, &candidate_count, block_bindings[i]);
+            ir_copy_aliases_invalidate_by_name(aliases, &alias_count, block_bindings[i]);
+        }
+        ir_string_list_free_owned(block_bindings, block_binding_count);
+        if (block_bindings) free(block_bindings);
         if (io_candidates) *io_candidates = candidates;
         if (io_candidate_count) *io_candidate_count = candidate_count;
         if (io_candidate_capacity) *io_candidate_capacity = candidate_capacity;
@@ -4790,7 +4936,6 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
     }
 
     if (preserve_outgoing_state &&
-        structured_cfg_exit &&
         (stmt->kind == STMT_WHILE ||
          stmt->kind == STMT_FOREACH ||
          stmt->kind == STMT_FOR_RANGE)) {
@@ -4816,7 +4961,8 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
                                                    candidates,
                                                    &candidate_count,
                                                    aliases,
-                                                   &alias_count);
+                                                   &alias_count,
+                                                   preserve_expr_fallthrough);
         } else {
             for (int n = 0; n < stmt->var_tuple_decl.name_count; n++) {
                 const char* name = stmt->var_tuple_decl.names[n];
@@ -4833,7 +4979,8 @@ static void ir_apply_local_cse_stmt(Stmt* stmt,
                                                candidates,
                                                &candidate_count,
                                                aliases,
-                                               &alias_count);
+                                               &alias_count,
+                                               preserve_expr_fallthrough);
     } else {
         ir_cse_candidates_clear(candidates, &candidate_count);
         ir_copy_aliases_clear(aliases, &alias_count);
@@ -4857,7 +5004,8 @@ static void ir_apply_local_cse_range(IRStatementList* ir,
                                      int* io_alias_count,
                                      int* io_alias_capacity,
                                      bool preserve_outgoing_state,
-                                     bool structured_cfg_exit) {
+                                     bool structured_cfg_exit,
+                                     bool preserve_expr_fallthrough) {
     IRCseCandidate* candidates = io_candidates ? *io_candidates : NULL;
     int candidate_count = io_candidate_count ? *io_candidate_count : 0;
     int candidate_capacity = io_candidate_capacity ? *io_candidate_capacity : 0;
@@ -4868,6 +5016,8 @@ static void ir_apply_local_cse_range(IRStatementList* ir,
     for (int i = start_index; i <= end_index; i++) {
         Stmt* stmt = ir->statements[i];
         bool is_final_stmt = (i == end_index);
+        bool preserve_through_stmt = !is_final_stmt || preserve_outgoing_state;
+        bool stmt_structured_cfg_exit = is_final_stmt && structured_cfg_exit;
         if (!stmt) continue;
         ir_apply_local_cse_stmt(stmt,
                                 &candidates,
@@ -4876,8 +5026,9 @@ static void ir_apply_local_cse_range(IRStatementList* ir,
                                 &aliases,
                                 &alias_count,
                                 &alias_capacity,
-                                is_final_stmt && preserve_outgoing_state,
-                                is_final_stmt && structured_cfg_exit);
+                                preserve_through_stmt,
+                                stmt_structured_cfg_exit,
+                                preserve_expr_fallthrough);
     }
 
     if (io_candidates) *io_candidates = candidates;
@@ -4890,7 +5041,8 @@ static void ir_apply_local_cse_range(IRStatementList* ir,
 
 static void ir_simulate_local_cse_block(const IRBasicBlock* block,
                                         const IRCseFlowState* in_state,
-                                        IRCseFlowState* out_state) {
+                                        IRCseFlowState* out_state,
+                                        bool preserve_expr_fallthrough) {
     if (!block || !out_state) return;
 
     bool preserve_outgoing_state =
@@ -4917,7 +5069,8 @@ static void ir_simulate_local_cse_block(const IRBasicBlock* block,
                                  &out_state->alias_count,
                                  &out_state->alias_capacity,
                                  preserve_outgoing_state,
-                                 true);
+                                 true,
+                                 preserve_expr_fallthrough);
     }
     ir_free_cloned_statement_range(&cloned_ir);
 }
@@ -5041,7 +5194,10 @@ static void ir_apply_local_cse(IRStatementList* ir) {
             in_reachable[block_index] = true;
         }
 
-        ir_simulate_local_cse_block(&blocks.blocks[block_index], &merged_in, &new_out);
+        ir_simulate_local_cse_block(&blocks.blocks[block_index],
+                                    &merged_in,
+                                    &new_out,
+                                    false);
         bool out_changed =
             !out_reachable[block_index] ||
             !ir_cse_flow_state_equals(&out_states[block_index], &new_out);
@@ -5084,7 +5240,8 @@ static void ir_apply_local_cse(IRStatementList* ir) {
                                  &block_state.alias_count,
                                  &block_state.alias_capacity,
                                  blocks.blocks[i].successor_count > 0,
-                                 true);
+                                 true,
+                                 false);
         ir_cse_flow_state_free(&block_state);
     }
 
@@ -5717,6 +5874,47 @@ static void ir_collect_stmt_identifiers(Stmt* stmt, char*** io_names, int* io_co
     }
 }
 
+static void ir_collect_stmt_assignment_targets(Stmt* stmt,
+                                               char*** io_names,
+                                               int* io_count,
+                                               int* io_capacity) {
+    if (!stmt || !io_names || !io_count || !io_capacity) return;
+
+    switch (stmt->kind) {
+        case STMT_ASSIGN:
+            ir_string_list_add_unique_owned(io_names, io_count, io_capacity, stmt->assign.name);
+            break;
+        case STMT_IF:
+            ir_collect_stmt_assignment_targets(stmt->if_stmt.then_branch, io_names, io_count, io_capacity);
+            ir_collect_stmt_assignment_targets(stmt->if_stmt.else_branch, io_names, io_count, io_capacity);
+            break;
+        case STMT_MATCH:
+            for (int i = 0; i < stmt->match_stmt.arm_count; i++) {
+                if (stmt->match_stmt.bodies) {
+                    ir_collect_stmt_assignment_targets(stmt->match_stmt.bodies[i], io_names, io_count, io_capacity);
+                }
+            }
+            ir_collect_stmt_assignment_targets(stmt->match_stmt.else_branch, io_names, io_count, io_capacity);
+            break;
+        case STMT_WHILE:
+            ir_collect_stmt_assignment_targets(stmt->while_stmt.body, io_names, io_count, io_capacity);
+            break;
+        case STMT_FOREACH:
+            ir_collect_stmt_assignment_targets(stmt->foreach.body, io_names, io_count, io_capacity);
+            break;
+        case STMT_FOR_RANGE:
+            ir_collect_stmt_assignment_targets(stmt->for_range.body, io_names, io_count, io_capacity);
+            break;
+        case STMT_BLOCK:
+            for (int i = 0; i < stmt->block.stmt_count; i++) {
+                ir_collect_stmt_assignment_targets(stmt->block.statements[i], io_names, io_count, io_capacity);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 static bool ir_expr_dead_store_safe(Expr* expr) {
     if (!expr) return false;
     switch (expr->kind) {
@@ -5834,6 +6032,19 @@ static void ir_apply_local_copy_propagation_stmt(Stmt* stmt,
                                                       &alias_capacity,
                                                       true,
                                                       false);
+                char** block_bindings = NULL;
+                int block_binding_count = 0;
+                int block_binding_capacity = 0;
+                ir_collect_stmt_binding_names(stmt,
+                                              &block_bindings,
+                                              &block_binding_count,
+                                              &block_binding_capacity);
+                for (int i = 0; i < block_binding_count; i++) {
+                    if (!block_bindings[i]) continue;
+                    ir_copy_aliases_invalidate_by_name(aliases, &alias_count, block_bindings[i]);
+                }
+                ir_string_list_free_owned(block_bindings, block_binding_count);
+                if (block_bindings) free(block_bindings);
             } else if (preserve_outgoing_aliases) {
                 ir_copy_aliases_invalidate_for_stmt_fallthrough(stmt, aliases, &alias_count);
             } else {
@@ -6003,12 +6214,14 @@ static void ir_apply_local_copy_propagation_range(IRStatementList* ir,
         Stmt* stmt = ir->statements[i];
         if (!stmt) continue;
         bool is_final_stmt = (i == end_index);
+        bool preserve_through_stmt = !is_final_stmt || preserve_outgoing_aliases;
+        bool stmt_structured_cfg_exit = is_final_stmt && structured_cfg_exit;
         ir_apply_local_copy_propagation_stmt(stmt,
                                              &aliases,
                                              &alias_count,
                                              &alias_capacity,
-                                             is_final_stmt && preserve_outgoing_aliases,
-                                             is_final_stmt && structured_cfg_exit);
+                                             preserve_through_stmt,
+                                             stmt_structured_cfg_exit);
     }
 
     if (io_aliases) *io_aliases = aliases;
@@ -6235,6 +6448,9 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
     char** live_names = NULL;
     int live_count = 0;
     int live_capacity = 0;
+    char** binding_names = NULL;
+    int binding_count = 0;
+    int binding_capacity = 0;
 
     for (int i = ir->stmt_count - 1; i >= 0; i--) {
         Stmt* stmt = ir->statements[i];
@@ -6246,6 +6462,9 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
         char** used_names = NULL;
         int used_count = 0;
         int used_capacity = 0;
+        char** used_binding_names = NULL;
+        int used_binding_count = 0;
+        int used_binding_capacity = 0;
         bool removed = false;
         bool is_local_def = false;
 
@@ -6257,12 +6476,14 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
                 is_local_def &&
                 stmt->var_decl.initializer &&
                 ir_expr_dead_store_safe(stmt->var_decl.initializer) &&
-                !ir_string_list_contains(live_names, live_count, stmt->var_decl.name);
+                !ir_string_list_contains(live_names, live_count, stmt->var_decl.name) &&
+                !ir_string_list_contains(binding_names, binding_count, stmt->var_decl.name);
             if (removable_candidate) {
                 keep_stmt[i] = false;
                 removed = true;
             } else if (is_local_def) {
                 ir_string_list_remove_owned(live_names, &live_count, stmt->var_decl.name);
+                ir_string_list_remove_owned(binding_names, &binding_count, stmt->var_decl.name);
             }
         } else if (stmt->kind == STMT_ASSIGN) {
             ir_collect_expr_identifiers(stmt->assign.value, &used_names, &used_count, &used_capacity);
@@ -6283,6 +6504,10 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
                 removed = true;
             } else if (is_local_def) {
                 ir_string_list_remove_owned(live_names, &live_count, stmt->assign.name);
+                ir_string_list_add_unique_owned(&used_binding_names,
+                                                &used_binding_count,
+                                                &used_binding_capacity,
+                                                stmt->assign.name);
             }
         } else if (stmt->kind == STMT_VAR_TUPLE_DECL) {
             ir_collect_expr_identifiers(stmt->var_tuple_decl.initializer, &used_names, &used_count, &used_capacity);
@@ -6291,11 +6516,16 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
                     const char* name = stmt->var_tuple_decl.names[n];
                     if (name) {
                         ir_string_list_remove_owned(live_names, &live_count, name);
+                        ir_string_list_remove_owned(binding_names, &binding_count, name);
                     }
                 }
             }
         } else {
             ir_collect_stmt_identifiers(stmt, &used_names, &used_count, &used_capacity);
+            ir_collect_stmt_assignment_targets(stmt,
+                                               &used_binding_names,
+                                               &used_binding_count,
+                                               &used_binding_capacity);
         }
 
         if (!removed) {
@@ -6307,10 +6537,20 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
                                                     used_names[u]);
                 }
             }
+            for (int u = 0; u < used_binding_count; u++) {
+                if (used_binding_names[u]) {
+                    ir_string_list_add_unique_owned(&binding_names,
+                                                    &binding_count,
+                                                    &binding_capacity,
+                                                    used_binding_names[u]);
+                }
+            }
         }
 
         ir_string_list_free_owned(used_names, used_count);
         if (used_names) free(used_names);
+        ir_string_list_free_owned(used_binding_names, used_binding_count);
+        if (used_binding_names) free(used_binding_names);
     }
 
     int write = 0;
@@ -6322,6 +6562,8 @@ static void ir_apply_local_dead_store_elimination(Compiler* comp,
 
     ir_string_list_free_owned(live_names, live_count);
     if (live_names) free(live_names);
+    ir_string_list_free_owned(binding_names, binding_count);
+    if (binding_names) free(binding_names);
     if (assign_is_local) free(assign_is_local);
     if (keep_stmt) free(keep_stmt);
 }

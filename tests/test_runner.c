@@ -235,8 +235,8 @@ static bool chunk_contains_add_locals_int_operands(const Chunk* chunk, uint8_t a
         uint8_t op = chunk->code[i];
         if (op == OP_ADD_LOCALS_INT &&
             i + 4 < chunk->code_count &&
-            chunk->code[i + 2] == a &&
-            chunk->code[i + 3] == b) {
+            chunk->code[i + 1] == a &&
+            chunk->code[i + 2] == b) {
             return true;
         }
         i += test_instruction_len(op);
@@ -281,8 +281,56 @@ static void reset_function_for_jit_queue_test(ObjFunction* function) {
     function->jit_compiled_plan.kind = JIT_COMPILED_KIND_NONE;
 }
 
+typedef struct {
+    ObjFunction* function;
+    uint8_t support_mask;
+    uint8_t native_family_mask;
+    JitFunctionSummary summary;
+    JitCompiledPlan hint_plan;
+} ExactJitMatchBaseline;
+
+static ExactJitMatchBaseline* exact_jit_match_baseline_for(ObjFunction* function) {
+    static ExactJitMatchBaseline* baselines = NULL;
+    static int baseline_count = 0;
+    static int baseline_capacity = 0;
+
+    if (!function) return NULL;
+    for (int i = 0; i < baseline_count; i++) {
+        if (baselines[i].function == function) return &baselines[i];
+    }
+
+    if (baseline_count >= baseline_capacity) {
+        int next_capacity = baseline_capacity > 0 ? baseline_capacity * 2 : 8;
+        ExactJitMatchBaseline* resized =
+            (ExactJitMatchBaseline*)realloc(baselines,
+                                            (size_t)next_capacity * sizeof(ExactJitMatchBaseline));
+        if (!resized) {
+            fprintf(stderr, "Out of memory while caching JIT test baselines\n");
+            exit(1);
+        }
+        baselines = resized;
+        baseline_capacity = next_capacity;
+    }
+
+    ExactJitMatchBaseline* baseline = &baselines[baseline_count++];
+    baseline->function = function;
+    baseline->support_mask = function->jit_profile.support_mask;
+    baseline->native_family_mask = function->jit_profile.native_family_mask;
+    baseline->summary = function->jit_profile.summary;
+    baseline->hint_plan = function->jit_hint_plan;
+    return baseline;
+}
+
 static void reset_function_for_exact_jit_match_test(ObjFunction* function) {
     reset_function_for_jit_queue_test(function);
+    if (!function) return;
+    ExactJitMatchBaseline* baseline = exact_jit_match_baseline_for(function);
+    if (baseline) {
+        function->jit_profile.support_mask = baseline->support_mask;
+        function->jit_profile.native_family_mask = baseline->native_family_mask;
+        function->jit_profile.summary = baseline->summary;
+        function->jit_hint_plan = baseline->hint_plan;
+    }
     memset(&function->jit_profile.summary, 0, sizeof(function->jit_profile.summary));
     function->jit_profile.summary.kind = JIT_SUMMARY_KIND_NONE;
     memset(&function->jit_hint_plan, 0, sizeof(function->jit_hint_plan));
@@ -7980,23 +8028,27 @@ static void test_constant_folding(void) {
         "}\n"
         "func valueFlowLoopBackedge(a: int, b: int, remaining: int): int {\n"
         "    var first: int = a + b;\n"
-        "    while (remaining > 0) {\n"
+        "    var current: int = remaining;\n"
+        "    var last: int = first;\n"
+        "    while (current > 0) {\n"
         "        var second: int = b + a;\n"
-        "        println(second);\n"
-        "        remaining = remaining - 1;\n"
+        "        last = second;\n"
+        "        current = current - 1;\n"
         "    }\n"
-        "    return first;\n"
+        "    return last;\n"
         "}\n"
         "func valueFlowLoopBackedgeClobber(a: int, b: int, remaining: int): int {\n"
         "    var right: int = b;\n"
         "    var first: int = a + right;\n"
-        "    while (remaining > 0) {\n"
-        "        right = remaining;\n"
+        "    var current: int = remaining;\n"
+        "    var last: int = first;\n"
+        "    while (current > 0) {\n"
+        "        right = current;\n"
         "        var second: int = right + a;\n"
-        "        println(second);\n"
-        "        remaining = remaining - 1;\n"
+        "        last = second;\n"
+        "        current = current - 1;\n"
         "    }\n"
-        "    return first;\n"
+        "    return last;\n"
         "}\n"
         "func valueFlowLoopIfBackedge(a: int, b: int, cond: bool, remaining: int): int {\n"
         "    var first: int = a + b;\n"

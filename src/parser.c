@@ -3754,7 +3754,9 @@ static ParseResult parser_parse_internal(const char* source, const char* file, b
         if (stmt) {
             program_add_stmt(program, stmt);
         }
-        parser_synchronize(&parser, false);
+        if (parser.panic_mode) {
+            parser_synchronize(&parser, false);
+        }
     }
     
     ParseResult result;
