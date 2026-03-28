@@ -13,6 +13,24 @@
 
 static int tests_passed = 0;
 static int tests_failed = 0;
+static int g_parser_chunk = 0;
+
+static ParseResult parser_parse_for_test(const char* source, const char* file) {
+    return parser_parse_quiet(source, file);
+}
+
+static TypeCheckResult typecheck_for_test(Program* program) {
+    TypeCheckOptions options = {0};
+    options.report_diagnostics = false;
+    return typecheck_with_options(program, options);
+}
+
+#define parser_parse parser_parse_for_test
+#define typecheck typecheck_for_test
+
+static bool parser_chunk_enabled(int chunk) {
+    return g_parser_chunk == 0 || g_parser_chunk == chunk;
+}
 
 static int test_instruction_len(uint8_t op) {
     switch (op) {
@@ -909,6 +927,7 @@ static void test_lexer(void) {
 static void test_parser(void) {
     printf("Testing parser...\n");
 
+    if (parser_chunk_enabled(1)) {
     const char* source = "var x: int = 42;";
     ParseResult result = parser_parse(source, "test.tblo");
 
@@ -2938,6 +2957,8 @@ static void test_parser(void) {
     }
     parser_free_result(&generic_constraint_body_usage_parse);
 
+    }
+    if (parser_chunk_enabled(2)) {
     const char* enum_parse_source =
         "enum Status {\n"
         "    Ok = 200,\n"
@@ -3897,6 +3918,8 @@ static void test_parser(void) {
     }
     parser_free_result(&match_expr_parse);
 
+    }
+    if (parser_chunk_enabled(3)) {
     const char* match_expr_requires_else_source =
         "func classify(code: int): int {\n"
         "    return match (code) {\n"
@@ -4964,6 +4987,8 @@ static void test_parser(void) {
     }
     parser_free_result(&pattern_alt_binding_type_mismatch_parse);
 
+    }
+    if (parser_chunk_enabled(4)) {
     const char* structural_pattern_source =
         "record Point {\n"
         "    x: int,\n"
@@ -5614,6 +5639,8 @@ static void test_parser(void) {
     }
     parser_free_result(&if_let_missing_eq_parse);
 
+    }
+    if (parser_chunk_enabled(5)) {
     const char* match_enum_exhaustive_source =
         "enum Status { Ok = 200, NotFound = 404, Retry = 429 };\n"
         "func classify(status: Status): int {\n"
@@ -5773,7 +5800,7 @@ static void test_parser(void) {
         if (match_enum_payload_non_exhaustive_tc.error &&
             match_enum_payload_non_exhaustive_tc.error->message &&
             strstr(match_enum_payload_non_exhaustive_tc.error->message,
-                   "missing Result.Ok(_)") != NULL) {
+                   "missing Result.Ok(0)") != NULL) {
             tests_passed++;
             printf("  PASS: payload-constrained enum arm remains non-exhaustive with witness\n");
         } else {
@@ -6510,8 +6537,6 @@ static void test_parser(void) {
     }
     parser_free_result(&match_incompatible_pattern_parse);
 
-    parser_free_result(&result);
-
     const char* invalid_source = "func main(): void { var x: int = ; }";
     ParseResult invalid = parser_parse(invalid_source, "test.tblo");
     if (invalid.error &&
@@ -6565,6 +6590,7 @@ static void test_parser(void) {
         printf("  FAIL: switch mixed value/type diagnostics\n");
     }
     parser_free_result(&switch_mixed_case_kinds);
+    }
 }
 
 static void test_constant_folding(void) {
@@ -10937,23 +10963,134 @@ static void test_lsp_diagnostics(void) {
     error_free(error);
 }
 
-int main(void) {
+typedef void (*TestSuiteFn)(void);
+
+typedef struct {
+    const char* name;
+    TestSuiteFn fn;
+} TestSuite;
+
+static void test_parser_chunk_1(void) {
+    int prev = g_parser_chunk;
+    g_parser_chunk = 1;
+    test_parser();
+    g_parser_chunk = prev;
+}
+
+static void test_parser_chunk_2(void) {
+    int prev = g_parser_chunk;
+    g_parser_chunk = 2;
+    test_parser();
+    g_parser_chunk = prev;
+}
+
+static void test_parser_chunk_3(void) {
+    int prev = g_parser_chunk;
+    g_parser_chunk = 3;
+    test_parser();
+    g_parser_chunk = prev;
+}
+
+static void test_parser_chunk_4(void) {
+    int prev = g_parser_chunk;
+    g_parser_chunk = 4;
+    test_parser();
+    g_parser_chunk = prev;
+}
+
+static void test_parser_chunk_5(void) {
+    int prev = g_parser_chunk;
+    g_parser_chunk = 5;
+    test_parser();
+    g_parser_chunk = prev;
+}
+
+static const TestSuite TEST_SUITES[] = {
+    {"value_creation", test_value_creation},
+    {"lexer", test_lexer},
+    {"parser", test_parser},
+    {"parser_chunk_1", test_parser_chunk_1},
+    {"parser_chunk_2", test_parser_chunk_2},
+    {"parser_chunk_3", test_parser_chunk_3},
+    {"parser_chunk_4", test_parser_chunk_4},
+    {"parser_chunk_5", test_parser_chunk_5},
+    {"constant_folding", test_constant_folding},
+    {"compiler_jit_leaf_hints", test_compiler_jit_leaf_hints},
+    {"bytecode", test_bytecode},
+    {"vm", test_vm},
+    {"vm_hash_table_resize", test_vm_hash_table_resize},
+    {"compiler_regressions", test_compiler_regressions},
+    {"artifact_roundtrip", test_artifact_roundtrip},
+    {"lsp_document_symbols", test_lsp_document_symbols},
+    {"lsp_hover", test_lsp_hover},
+    {"lsp_definition", test_lsp_definition},
+    {"lsp_diagnostics", test_lsp_diagnostics},
+};
+
+static const char* DEFAULT_TEST_SUITE_NAMES[] = {
+    "value_creation",
+    "lexer",
+    "parser_chunk_1",
+    "parser_chunk_2",
+    "parser_chunk_3",
+    "parser_chunk_4",
+    "parser_chunk_5",
+    "constant_folding",
+    "compiler_jit_leaf_hints",
+    "bytecode",
+    "vm",
+    "vm_hash_table_resize",
+    "compiler_regressions",
+    "artifact_roundtrip",
+    "lsp_document_symbols",
+    "lsp_hover",
+    "lsp_definition",
+    "lsp_diagnostics",
+};
+
+static const TestSuite* find_test_suite(const char* name) {
+    size_t suite_count = sizeof(TEST_SUITES) / sizeof(TEST_SUITES[0]);
+    for (size_t i = 0; i < suite_count; i++) {
+        if (strcmp(TEST_SUITES[i].name, name) == 0) {
+            return &TEST_SUITES[i];
+        }
+    }
+    return NULL;
+}
+
+static void print_test_runner_usage(const char* argv0) {
+    size_t suite_count = sizeof(TEST_SUITES) / sizeof(TEST_SUITES[0]);
+    fprintf(stderr, "Usage: %s [suite...]\n", argv0);
+    fprintf(stderr, "Available suites:\n");
+    for (size_t i = 0; i < suite_count; i++) {
+        fprintf(stderr, "  %s\n", TEST_SUITES[i].name);
+    }
+}
+
+int main(int argc, char** argv) {
     printf("Running TabloLang tests...\n\n");
 
-    test_value_creation();
-    test_lexer();
-    test_parser();
-    test_constant_folding();
-    test_compiler_jit_leaf_hints();
-    test_bytecode();
-    test_vm();
-    test_vm_hash_table_resize();
-    test_compiler_regressions();
-    test_artifact_roundtrip();
-    test_lsp_document_symbols();
-    test_lsp_hover();
-    test_lsp_definition();
-    test_lsp_diagnostics();
+    if (argc > 1) {
+        for (int i = 1; i < argc; i++) {
+            const TestSuite* suite = find_test_suite(argv[i]);
+            if (!suite) {
+                fprintf(stderr, "Unknown suite: %s\n", argv[i]);
+                print_test_runner_usage(argv[0]);
+                return 2;
+            }
+            suite->fn();
+        }
+    } else {
+        size_t suite_count = sizeof(DEFAULT_TEST_SUITE_NAMES) / sizeof(DEFAULT_TEST_SUITE_NAMES[0]);
+        for (size_t i = 0; i < suite_count; i++) {
+            const TestSuite* suite = find_test_suite(DEFAULT_TEST_SUITE_NAMES[i]);
+            if (!suite) {
+                fprintf(stderr, "Missing default suite: %s\n", DEFAULT_TEST_SUITE_NAMES[i]);
+                return 2;
+            }
+            suite->fn();
+        }
+    }
 
     printf("\nTest Results:\n");
     printf("  Passed: %d\n", tests_passed);

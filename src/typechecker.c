@@ -1743,6 +1743,9 @@ static void typechecker_warn(TypeChecker* tc, const char* message, const char* f
         typechecker_error(tc, message, file, line, column);
         return;
     }
+    if (!tc->options.report_diagnostics) {
+        return;
+    }
 
     fprintf(stderr, "Warning: %s:%d:%d: %s\n",
             file ? file : "<unknown>",

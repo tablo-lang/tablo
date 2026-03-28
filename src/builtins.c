@@ -15701,7 +15701,7 @@ static bool httpx_execute_head(VM* vm,
 }
 
 static Value httpx_make_head_response_value(VM* vm,
-                                            const HttpxResponse* response,
+                                            HttpxResponse* response,
                                             ObjSocket* socket_obj,
                                             int64_t content_length) {
     ObjMap* resp = obj_map_create(vm);
@@ -15719,6 +15719,9 @@ static Value httpx_make_head_response_value(VM* vm,
     }
     obj_map_set_cstr(resp, "headers", val);
     value_free(&val);
+    if (response) {
+        response->headers = NULL;
+    }
 
     value_init_int(&val, content_length);
     obj_map_set_cstr(resp, "contentLength", val);
@@ -15737,7 +15740,7 @@ static Value httpx_make_head_response_value(VM* vm,
     return out;
 }
 
-static Value httpx_make_response_value(VM* vm, const HttpxResponse* response) {
+static Value httpx_make_response_value(VM* vm, HttpxResponse* response) {
     ObjMap* resp = obj_map_create(vm);
     Value val;
 
@@ -15761,6 +15764,9 @@ static Value httpx_make_response_value(VM* vm, const HttpxResponse* response) {
     }
     obj_map_set_cstr(resp, "headers", val);
     value_free(&val);
+    if (response) {
+        response->headers = NULL;
+    }
 
     Value out;
     value_init_map(&out, resp);

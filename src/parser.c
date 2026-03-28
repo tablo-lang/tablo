@@ -1517,6 +1517,16 @@ static Expr* parse_pattern_primary(Parser* parser) {
             return result;
         }
 
+        while (parser_match(parser, TOKEN_BIT_OR)) {
+            Expr* right = parse_pattern_or(parser);
+            first_expr = expr_create_binary(TOKEN_BIT_OR,
+                                            first_expr,
+                                            right,
+                                            parser->lexer.file,
+                                            parser->previous.line,
+                                            parser->previous.column);
+        }
+
         parser_consume(parser, TOKEN_RPAREN, "Expected ')' after grouped pattern");
         PARSER_LEAVE(parser);
         return first_expr;
