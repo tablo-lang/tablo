@@ -13791,6 +13791,7 @@ static void httpx_response_init(HttpxResponse* out) {
 static void httpx_response_free(HttpxResponse* out) {
     if (!out) return;
     if (out->body) free(out->body);
+    if (out->headers) obj_map_free(out->headers);
     out->body = NULL;
     out->body_length = 0;
     out->headers = NULL;
