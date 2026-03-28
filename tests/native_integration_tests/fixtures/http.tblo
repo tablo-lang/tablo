@@ -1321,7 +1321,10 @@ func httpServerServeThreadPoolControlledWithDeadline(server: HttpServer,
 
             if (httpServerIsTimeout(ar.1)) {
                 if (in_flight_count == 0 && !limit_enabled) {
-                    idle_stop = true;
+                    idle_timeout_streak = idle_timeout_streak + 1;
+                    if (idle_timeout_streak >= max_idle_timeouts) {
+                        idle_stop = true;
+                    }
                 } else if (in_flight_count == 0 && limit_enabled) {
                     idle_timeout_streak = idle_timeout_streak + 1;
                 }
