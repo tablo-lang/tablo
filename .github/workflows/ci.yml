@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [ main, master, develop ]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v4
@@ -51,6 +56,7 @@ jobs:
 
   fuzz-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -78,6 +84,7 @@ jobs:
 
   build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
 
     strategy:
       matrix:
@@ -92,12 +99,6 @@ jobs:
         mkdir build
         cd build
         cmake -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ..
-
-    - name: Enable perf + fast-string gates (Ubuntu Release)
-      if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
-      run: |
-        cd build
-        cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_PERF_GATES=ON -DENABLE_FAST_STRING_BASELINE_GATE=ON -DFAST_STRING_BASELINE_FILE=tools/baselines/fast_string_release.json -DFAST_STRING_BASELINE_SAMPLES=5 ..
 
     - name: Build
       run: |

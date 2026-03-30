@@ -1,0 +1,53 @@
+name: Extended CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Extended suite to run
+        required: true
+        default: perf
+        type: choice
+        options:
+          - perf
+  schedule:
+    - cron: "0 3 * * 1"
+
+concurrency:
+  group: extended-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf-gates:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'perf'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure CMake (Release perf)
+      run: |
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_PERF_GATES=ON -DENABLE_FAST_STRING_BASELINE_GATE=ON -DFAST_STRING_BASELINE_FILE=tools/baselines/fast_string_release.json -DFAST_STRING_BASELINE_SAMPLES=5 ..
+
+    - name: Build perf prerequisites
+      run: |
+        cd build
+        cmake --build . --config Release --target tablo benchmark_global_lookup
+
+    - name: Run perf gates
+      run: |
+        cd build
+        ctest --test-dir . -C Release -R "PerfGates|FastStringBaselineGate" --output-on-failure
+
+    - name: Upload perf artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: perf-gate-artifacts
+        path: |
+          build/fast_string_candidate_Release.json
+          build/fast_string_compare_Release.json
+        if-no-files-found: ignore
