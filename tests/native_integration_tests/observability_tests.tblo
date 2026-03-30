@@ -20,6 +20,20 @@ func obsRouteOk(_req: map<string, any>): map<string, any> {
 }
 
 func obsDelay(ms: int): void {
+    if (ms <= 0) {
+        return;
+    }
+
+    // Use a blocking timeout so the deadline-serving thread still gets CPU
+    // time on slower debug schedulers and can turn late responses into 504s.
+    var sleeper = syncChannelCreate(1);
+    if (sleeper.1 == nil) {
+        var sleeper_id: int = sleeper.0;
+        var _wait = syncChannelRecv(sleeper_id, ms);
+        var _close = syncChannelClose(sleeper_id);
+        return;
+    }
+
     var start: int = timeMonotonicMillis();
     while (timeSinceMillis(start) < ms) {
     }
