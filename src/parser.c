@@ -14,6 +14,7 @@ static void parser_type_root_list_add(ParserTypeRootList* list, Type* type);
 static void parser_collect_expr_type_roots(ParserTypeRootList* list, Expr* expr);
 static void parser_collect_stmt_type_roots(ParserTypeRootList* list, Stmt* stmt);
 static void parser_collect_program_type_roots(ParserTypeRootList* list, Program* program);
+static void parser_free_type_array(Type** types, int count);
 static void parser_release_parse_only_expr_type_arrays(Expr* expr);
 static void parser_release_parse_only_stmt_type_arrays(Stmt* stmt);
 static void parser_release_parse_only_program_type_arrays(Program* program);
@@ -156,6 +157,17 @@ static void parser_discard_parse_only_stmt(Stmt* stmt) {
         type_free(type_roots.items[i]);
     }
     free(type_roots.items);
+}
+
+static void parser_free_type_array(Type** types, int count) {
+    if (!types) return;
+
+    for (int i = 0; i < count; i++) {
+        if (types[i]) {
+            type_free(types[i]);
+        }
+    }
+    free(types);
 }
 
 static void parser_advance(Parser* parser) {
@@ -695,7 +707,12 @@ static Type* parse_type(Parser* parser) {
             }
             
             parser_consume(parser, TOKEN_RPAREN, "Expected ')' after tuple type");
+            if (parser->panic_mode) {
+                parser_free_type_array(element_types, element_count);
+                return type_any();
+            }
             Type* t = type_tuple(element_types, element_count);
+            parser_free_type_array(element_types, element_count);
             if (parser_match(parser, TOKEN_QUESTION) && t) {
                 t->nullable = true;
             }

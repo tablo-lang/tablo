@@ -1,6 +1,20 @@
 import "fixtures/http.tblo";
 
 func loopDelay(ms: int): void {
+    if (ms <= 0) {
+        return;
+    }
+
+    // Use a blocking timeout so "slow" workers don't busy-spin and starve the
+    // serve-loop thread on schedulers that are less eager to preempt.
+    var sleeper = syncChannelCreate(1);
+    if (sleeper.1 == nil) {
+        var sleeper_id: int = sleeper.0;
+        var _wait = syncChannelRecv(sleeper_id, ms);
+        var _close = syncChannelClose(sleeper_id);
+        return;
+    }
+
     var start: int = timeMonotonicMillis();
     while (timeSinceMillis(start) < ms) {
     }
