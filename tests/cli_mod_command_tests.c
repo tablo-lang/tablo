@@ -564,7 +564,18 @@ static int to_absolute_path(const char* path, char* out, size_t out_size) {
 #ifdef _WIN32
     return _fullpath(out, path, out_size) != NULL;
 #else
-    return realpath(path, out) != NULL;
+    char* resolved = realpath(path, NULL);
+    if (!resolved) return 0;
+
+    size_t resolved_len = strlen(resolved);
+    if (resolved_len >= out_size) {
+        free(resolved);
+        return 0;
+    }
+
+    memcpy(out, resolved, resolved_len + 1);
+    free(resolved);
+    return 1;
 #endif
 }
 
