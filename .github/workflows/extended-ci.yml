@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Configure CMake (Release perf)
       run: |
@@ -44,7 +44,7 @@ jobs:
 
     - name: Upload perf artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: perf-gate-artifacts
         path: |
