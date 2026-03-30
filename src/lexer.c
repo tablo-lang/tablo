@@ -61,10 +61,19 @@ static KeywordRule keywords[] = {
 };
 
 static char lexer_peek(Lexer* lexer) {
+    if (!lexer || lexer->position >= lexer->length) {
+        return '\0';
+    }
     return lexer->source[lexer->position];
 }
 
 static char lexer_advance(Lexer* lexer) {
+    if (!lexer || lexer->position >= lexer->length) {
+        if (lexer && lexer->position > lexer->length) {
+            lexer->position = lexer->length;
+        }
+        return '\0';
+    }
     char c = lexer->source[lexer->position];
     lexer->position++;
     lexer->column++;
@@ -464,6 +473,9 @@ Token lexer_next_token(Lexer* lexer) {
     }
     
     int start_pos = lexer->position;
+    if (lexer->position >= lexer->length) {
+        return lexer_make_token(TOKEN_EOF, lexer, start_pos);
+    }
     char c = lexer_advance(lexer);
     
     if (c == '\0') {
